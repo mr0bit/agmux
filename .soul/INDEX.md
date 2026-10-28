@@ -17,6 +17,7 @@ flowchart TD
 
     subgraph Process["1. Engineering Process (.soul/process/)"]
         VCycle["v-cycle.md (5-Level V-Model)"]
+        TraceCheck["traceability-verification.md (Automated V-Cycle Checker)"]
         Backlog["backlog-workflow.md (Backlog.md Task Lifecycle)"]
         ExecRules["agent-execution-rules.md (The 3-Step Execution Rhythm)"]
     end
@@ -63,6 +64,7 @@ flowchart TD
 
 ### 1. Engineering Process ([`.soul/process/`](./process/))
 * [`process/v-cycle.md`](./process/v-cycle.md): The 5-level V-Model mapping Software Specs down to Verification Tests.
+* [`process/traceability-verification.md`](./process/traceability-verification.md): Automated V-Cycle verification, matrix generation, and CI gates ([`tools/v-cycle-checker.mjs`](./tools/v-cycle-checker.mjs)).
 * [`process/backlog-workflow.md`](./process/backlog-workflow.md): Managing tasks via `npx backlog.md`, acceptance criteria, and Definition of Done.
 * [`process/agent-execution-rules.md`](./process/agent-execution-rules.md): The non-negotiable 3-step rhythm for autonomous agents (Inspect ➔ Implement & Trace ➔ Verify Gates).
 
