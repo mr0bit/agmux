@@ -8,8 +8,8 @@ The **interface is the test surface**. Tests assert on observable outcomes throu
 ## 2. Invariants
 
 1. **Test Observable External Behavior:** If an internal refactor changes your test, your test was coupled to implementation details rather than external behavior. Tests must survive deep internal optimizations.
-2. **Primary System Seam:** For Agmux, the primary integration testing seam is the **Framed IPC Boundary** (`agmux-proto`). Integration tests instantiate the daemon with virtual/loopback adapters and assert on protocol request/response streams.
+2. **Primary System Seam:** Every project architecture must designate its **primary external seam** (such as a framed IPC protocol, an API gateway, or a top-level facade). Integration tests instantiate the system with in-memory or loopback adapters and assert strictly on observable request/response and event streams.
 3. **No Mocking Frameworks for Domain Logic:** 
-   * Avoid complex mocking libraries (`mockall`) for internal domain structs.
-   * Prefer in-memory test stand-ins (e.g. SQLite `:memory:`, loopback PTYs, temp directories).
-   * Reserve injected ports strictly for external third-party services that cannot run locally.
+   * Avoid complex mocking libraries for internal domain structs.
+   * Prefer real, lightweight in-memory test stand-ins (e.g. SQLite `:memory:`, loopback transports, temporary directories).
+   * Reserve injected mock ports strictly for third-party external services that cannot execute locally.
