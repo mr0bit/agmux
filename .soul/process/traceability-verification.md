@@ -10,15 +10,28 @@ It scans all specification files, parses requirement attributes, checks componen
 ## 2. Running the Traceability Checker
 
 ```bash
-# 1. Run Standard Traceability & Gap Audit
+# 1. Run Standard Terminal Audit
 node .soul/tools/v-cycle-checker.mjs
 
-# 2. Run and Auto-Generate the Master Traceability Matrix
-node .soul/tools/v-cycle-checker.mjs --generate-matrix
+# 2. Generate Interactive Self-Contained HTML Dashboard
+node .soul/tools/v-cycle-checker.mjs --html
 
-# 3. Strict Mode for CI / Pre-Push Gates (fails if any gap exists)
+# 3. Generate Both Markdown Matrix and Interactive HTML Dashboard
+node .soul/tools/v-cycle-checker.mjs --html --generate-matrix
+
+# 4. Strict Mode for CI / Pre-Push Gates (fails if any gap exists)
 node .soul/tools/v-cycle-checker.mjs --strict
 ```
+
+---
+
+## 3. Interactive HTML Dashboard Capabilities (`--html`)
+When executed with `--html`, the checker compiles a self-contained, offline-ready single-file dashboard (`docs/specs/traceability_report.html`) featuring:
+* **Real-Time KPI Cards:** Visual animated progress bars for Implementation, Verification, and Test Pass rates.
+* **Instant Multi-Factor Filtering:** Live search input coupled with dropdown filters for Criticality, Implementation Status, Test Status, and Specification Domain.
+* **Gap Inspector Mode:** One-click *"Show Only Gaps"* toggle filtering immediately to unverified or failed requirements.
+* **Collapsible Row Drawers:** Click any requirement row to expand and inspect its complete user-story text, verification criteria, and component ownership.
+* **Offline Portability & Export:** Zero external CDNs or network dependencies; includes 1-click **Export CSV** and print/PDF media stylesheets.
 
 ---
 

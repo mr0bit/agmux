@@ -13,3 +13,4 @@ This ledger permanently records all evolutionary milestones, codified lessons, a
 | `EVO-003` | 2026-10-29 | Architectural review of module boundaries | Established the Module Root of Trust and Deep Module Seam discipline | [`.soul/architecture/`](../architecture/) |
 | `EVO-004` | 2026-10-29 | Portability mandate & anti-customization | Established the Portability Firewall and Self-Evolving Learning Protocol | [`.soul/evolution/`](./) |
 | `EVO-005` | 2026-10-29 | Automated V-Cycle verification mandate | Created zero-dependency portable traceability checker script and matrix generator | [`.soul/tools/v-cycle-checker.mjs`](../tools/v-cycle-checker.mjs) |
+| `EVO-006` | 2026-10-29 | Stakeholder interactivity requirement | Built zero-dependency, self-contained offline interactive HTML dashboard with live filtering, gap inspector, and CSV export | [`.soul/tools/v-cycle-checker.mjs`](../tools/v-cycle-checker.mjs) |
