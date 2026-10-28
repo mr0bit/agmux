@@ -16,7 +16,7 @@ Guidelines and constraints for AI agents (Codex, Antigravity/AGY, and orchestrat
   * Software Architecture (SAD): [`docs/archi/software-architecture.md`](docs/archi/software-architecture.md)
   * Module Root of Trust: [`docs/archi/module-list.md`](docs/archi/module-list.md)
   * Specifications: [`docs/specs/`](docs/specs/)
-  * Backlog & Tasks: [`backlog/`](backlog/)
+  * Backlog & Tasks: [`.backlog/`](.backlog/)
   * Fleet Delegation Policy: [`.agents/rules/delegation.md`](.agents/rules/delegation.md)
 
 ---

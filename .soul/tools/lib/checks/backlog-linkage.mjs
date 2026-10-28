@@ -1,7 +1,7 @@
 export const backlogLinkageCheck = {
   id: 'CHECK-05-BACKLOG-LINKAGE',
   name: 'Backlog Task Allocation Check',
-  description: 'Audits whether requirements are allocated to active tasks in backlog/tasks/.',
+  description: 'Audits whether requirements are allocated to active tasks in .backlog/tasks/ (or backlog/tasks/).',
   run({ requirements, backlogReferences }) {
     let unlinkedCount = 0;
     const unlinkedReqs = [];

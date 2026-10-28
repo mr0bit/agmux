@@ -65,7 +65,7 @@ flowchart TD
    * Marking a requirement `Verified` when `Test Status` is still `Failed`.
    * Marking a requirement `Not implemented` when `Test Status` is `Passed`.
 4. **Coverage Metrics:** Computes the exact Implementation Rate, Verification Rate, and Test Pass Rate across the project.
-5. **Backlog Coverage:** Validates that specifications are linked to active tasks in `backlog/tasks/`.
+5. **Backlog Coverage:** Validates that specifications are linked to active tasks in `.backlog/tasks/` (or `backlog/tasks/`).
 
 ## 4. Modular Extensibility Architecture
 

@@ -34,7 +34,7 @@ export function parseBacklogTaskReferences(backlogTasksDir) {
   const files = fs.readdirSync(backlogTasksDir).filter(f => f.endsWith('.md'));
   for (const file of files) {
     const content = fs.readFileSync(path.join(backlogTasksDir, file), 'utf8');
-    const matches = content.matchAll(/(?:REQ-[A-Z0-9-]+|0[1-9]_[a-z0-9_]+_spec\.md)/g);
+    const matches = content.matchAll(/(?:SWRS-[A-Z0-9-]+|REQ-[A-Z0-9-]+|[0-9]{2}_[a-z0-9_]+_spec\.md)/g);
     for (const m of matches) {
       referencedSpecs.add(m[0]);
     }

@@ -8,6 +8,7 @@
  * - Pluggable reporters in .soul/tools/lib/reporter-*.mjs
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { parseRequirements, parseModuleList, parseBacklogTaskReferences } from './lib/parser.mjs';
 import { runAllChecks } from './lib/checks/index.mjs';
@@ -18,7 +19,9 @@ import { generateInteractiveHtmlReport } from './lib/reporter-html.mjs';
 const PROJECT_ROOT = process.cwd();
 const SPECS_DIR = path.join(PROJECT_ROOT, 'docs', 'specs');
 const MODULE_LIST_PATH = path.join(PROJECT_ROOT, 'docs', 'archi', 'module-list.md');
-const BACKLOG_TASKS_DIR = path.join(PROJECT_ROOT, 'backlog', 'tasks');
+const BACKLOG_TASKS_DIR = fs.existsSync(path.join(PROJECT_ROOT, '.backlog', 'tasks'))
+  ? path.join(PROJECT_ROOT, '.backlog', 'tasks')
+  : path.join(PROJECT_ROOT, 'backlog', 'tasks');
 
 function main() {
   const { requirements, specFilesCount } = parseRequirements(SPECS_DIR);

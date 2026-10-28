@@ -1,11 +1,26 @@
 # Process: Task Workflow & Backlog.md Discipline
 
 ## 1. Overview
-All work in this project is planned and executed through markdown-native tasks located in `backlog/` using the **Backlog.md** system (`npx backlog.md`).
+All work in this project is planned and executed through markdown-native tasks located in `.backlog/` using the **Backlog.md** system (`npx backlog.md`).
 
 ---
 
-## 2. CLI-First Task Operations
+## 2. Planning Discipline: Mandatory Vertical Tracer Slicing (`to-tickets`)
+Before any task markdown file is generated or modified in `.backlog/`, agents must decompose work using the **`to-tickets` vertical slicing discipline**:
+
+1. **Vertical Tracer Bullets:** Every ticket must cut a narrow, complete vertical path through all relevant layers (schema/types, daemon/API, UI/TUI, and tests). Avoid horizontal layer-by-layer chores that cannot be independently demonstrated or verified.
+2. **Explicit Blocking Edges:** Every ticket must declare its explicit dependencies (`Blocked by: [Ticket IDs/Titles]` or `None (can start immediately)`).
+3. **Context-Window Sized:** Each ticket must be scoped to complete within a single fresh context window without spilling over.
+4. **Mandatory User Quiz:** Propose the ticket breakdown to the user first:
+   * Title
+   * Blocked by (dependencies)
+   * What it delivers (end-to-end user-observable behavior)
+   Ask the user to validate granularity and dependency edges. Only after the user confirms or adjusts the breakdown may the agent proceed to persist the tasks using `npx backlog.md`.
+5. **Wide Refactor Expand-Contract:** Wide mechanical refactors must follow expand-contract sequencing (expand $\rightarrow$ migrate in batches $\rightarrow$ contract) rather than breaking changes across green slices.
+
+---
+
+## 3. CLI-First Task Operations
 Agents must interact with tasks using the `backlog` CLI commands rather than manually editing task headers to prevent schema desynchronization:
 
 ```bash

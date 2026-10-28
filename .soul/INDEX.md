@@ -20,6 +20,7 @@ flowchart TD
         TraceCheck["traceability-verification.md (Automated V-Cycle Checker)"]
         Backlog["backlog-workflow.md (Backlog.md Task Lifecycle)"]
         ExecRules["agent-execution-rules.md (The 3-Step Execution Rhythm)"]
+        Delegation["delegation-discipline.md (Multi-Agent Fleet & Setup)"]
     end
     
     subgraph Requirements["2. Requirements Management (.soul/requirements/)"]
@@ -67,6 +68,7 @@ flowchart TD
 * [`process/traceability-verification.md`](./process/traceability-verification.md): Automated V-Cycle verification, matrix generation, and CI gates ([`tools/v-cycle-checker.mjs`](./tools/v-cycle-checker.mjs)).
 * [`process/backlog-workflow.md`](./process/backlog-workflow.md): Managing tasks via `npx backlog.md`, acceptance criteria, and Definition of Done.
 * [`process/agent-execution-rules.md`](./process/agent-execution-rules.md): The non-negotiable 3-step rhythm for autonomous agents (Inspect ➔ Implement & Trace ➔ Verify Gates).
+* [`process/delegation-discipline.md`](./process/delegation-discipline.md): Multi-agent delegation architecture via `delegate-skills`, first-run `delegate-setup` prerequisite, and `.delegate/config.json` lane discipline.
 
 ### 2. Requirements Management ([`.soul/requirements/`](./requirements/))
 * [`requirements/attributes-schema.md`](./requirements/attributes-schema.md): The 9 mandatory attributes required for every atomic specification.

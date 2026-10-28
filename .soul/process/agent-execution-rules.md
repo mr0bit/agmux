@@ -8,10 +8,11 @@ Whenever an AI agent (Codex, Antigravity, or orchestrator) is tasked with implem
 ## 2. The 3 Steps
 
 ### Step 1: Inspect & Align (Look Before You Leap)
-1. **Read the Task:** View the task in `backlog/` (`npx backlog.md task view <taskId>`).
-2. **Review Upstream Requirements:** Read the corresponding specification file in `docs/specs/` and architecture in `docs/archi/`.
-3. **Verify Module Ownership:** Check `docs/archi/module-list.md` to confirm the exact crate and module responsible for this change.
-4. **Transition Task:** Run `npx backlog.md task edit <taskId> -s "In Progress"`.
+1. **Vertical Tracer Validation:** If creating new tasks, ensure they follow the `to-tickets` vertical tracer slicing discipline with explicit blocking edges and user quiz before publishing to `.backlog/`.
+2. **Read the Task:** View the task in `.backlog/` (`npx backlog.md task view <taskId>`).
+3. **Review Upstream Requirements:** Read the corresponding specification file in `docs/specs/` and architecture in `docs/archi/`.
+4. **Verify Module Ownership:** Check `docs/archi/module-list.md` to confirm the exact crate and module responsible for this change.
+5. **Transition Task:** Run `npx backlog.md task edit <taskId> -s "In Progress"`.
 
 ### Step 2: Implement & Trace (Code with Proof)
 1. **Write LLD:** Document the low-level design in `crates/<crate>/docs/<module>_lld.md`.

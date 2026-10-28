@@ -39,7 +39,7 @@ export function renderTerminalReport({
   }
 
   if (backlogAudit.unlinkedCount > 0) {
-    console.log(`⚠️  Backlog Linkage: ${backlogAudit.linked}/${totalReqs} requirements traced in backlog/tasks (${backlogAudit.unlinkedCount} pending task assignment)`);
+    console.log(`⚠️  Backlog Linkage: ${backlogAudit.linked}/${totalReqs} requirements traced in tasks (${backlogAudit.unlinkedCount} pending task assignment)`);
   } else {
     console.log(`✅ Backlog Linkage: 100% of requirements referenced in backlog tasks.`);
   }
