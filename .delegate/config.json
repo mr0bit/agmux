@@ -1,0 +1,55 @@
+{
+  "version": "delegate-fleet.v1",
+  "lanes": {
+    "feature1": {
+      "implementer": "codex",
+      "model": "gpt-6.1-terra",
+      "effort": "medium"
+    },
+    "feature2": {
+      "implementer": "agy",
+      "model": "gemini-3.8-flash-medium",
+      "effort": "medium"
+    },
+    "tests1": {
+      "implementer": "codex",
+      "model": "gpt-6.1-terra",
+      "effort": "medium"
+    },
+    "tests2": {
+      "implementer": "agy",
+      "model": "gemini-3.8-flash-medium",
+      "effort": "medium"
+    },
+    "refactor1": {
+      "implementer": "codex",
+      "model": "gpt-6.1-terra",
+      "effort": "medium"
+    },
+    "refactor2": {
+      "implementer": "agy",
+      "model": "gemini-3.8-flash-medium",
+      "effort": "medium"
+    },
+    "complex1": {
+      "implementer": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+    },
+    "complex2": {
+      "implementer": "agy",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+    },
+    "debate1": {
+      "implementer": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+    },
+    "debate2": {
+      "implementer": "agy",
+      "model": "gemini-4-argon-high",
+      "effort": "high"
+    }
+  }
+}
