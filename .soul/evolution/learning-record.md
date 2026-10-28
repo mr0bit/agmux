@@ -14,3 +14,4 @@ This ledger permanently records all evolutionary milestones, codified lessons, a
 | `EVO-004` | 2026-10-29 | Portability mandate & anti-customization | Established the Portability Firewall and Self-Evolving Learning Protocol | [`.soul/evolution/`](./) |
 | `EVO-005` | 2026-10-29 | Automated V-Cycle verification mandate | Created zero-dependency portable traceability checker script and matrix generator | [`.soul/tools/v-cycle-checker.mjs`](../tools/v-cycle-checker.mjs) |
 | `EVO-006` | 2026-10-29 | Stakeholder interactivity requirement | Built zero-dependency, self-contained offline interactive HTML dashboard with live filtering, gap inspector, and CSV export | [`.soul/tools/v-cycle-checker.mjs`](../tools/v-cycle-checker.mjs) |
+| `EVO-007` | 2026-10-29 | Scalability & modularity mandate | Refactored V-Cycle checker into a pluggable engine (`lib/checks/` rules and `FilterRegistry`) for zero-friction future extensions | [`.soul/tools/lib/`](../tools/lib/) |

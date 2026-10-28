@@ -67,9 +67,58 @@ flowchart TD
 4. **Coverage Metrics:** Computes the exact Implementation Rate, Verification Rate, and Test Pass Rate across the project.
 5. **Backlog Coverage:** Validates that specifications are linked to active tasks in `backlog/tasks/`.
 
+## 4. Modular Extensibility Architecture
+
+The `.soul` checker is structured as a modular plugin pipeline under `.soul/tools/`:
+
+```
+.soul/tools/
+├── v-cycle-checker.mjs             # Main CLI entrypoint
+└── lib/
+    ├── parser.mjs                  # Parser for specs, module list, and backlog tasks
+    ├── reporter-terminal.mjs       # Terminal dashboard & progress bars
+    ├── reporter-markdown.mjs       # Markdown matrix generator (TRACEABILITY_MATRIX.md)
+    ├── reporter-html.mjs           # Interactive self-contained HTML dashboard generator
+    └── checks/                     # Pluggable rule checkers
+        ├── index.mjs               # Check runner & active registry
+        ├── mandatory-attributes.mjs# Rule: 9 mandatory attributes presence
+        ├── allowed-values.mjs      # Rule: Criticality and status enums
+        ├── state-machine-logic.mjs # Rule: State combination consistency
+        ├── component-registry.mjs  # Rule: SW Component verification against module-list.md
+        └── backlog-linkage.mjs     # Rule: Backlog task allocation audit
+```
+
+### Adding a New Verification Check
+To add a new custom check (e.g. security level check, ADR compliance check, or copyright check), simply create a new file in `.soul/tools/lib/checks/my-check.mjs`:
+```javascript
+export const myCustomCheck = {
+  id: 'CHECK-06-MY-CUSTOM-CHECK',
+  name: 'My Custom Rule',
+  description: 'Validates custom project invariant',
+  run({ requirements, registeredComponents, backlogReferences }) {
+    const errors = [];
+    // Perform audit and push to errors array
+    return errors;
+  }
+};
+```
+Then register it in `.soul/tools/lib/checks/index.mjs`.
+
+### Adding a New Interactive Filter
+In `.soul/tools/lib/reporter-html.mjs`, add a filter definition to `FilterRegistry`:
+```javascript
+{
+  id: 'myCustomFilter',
+  label: 'Custom Dimension',
+  getValues: (items) => [...new Set(items.map(r => r.attributes['Custom Attribute']))].sort(),
+  matches: (item, val) => val === 'ALL' || item.attributes['Custom Attribute'] === val
+}
+```
+The HTML dashboard will dynamically render the new dropdown filter, bind real-time event listeners, and include it in CSV exports automatically with zero UI rewrites.
+
 ---
 
-## 4. CI / CD Quality Gate
+## 5. CI / CD Quality Gate
 In production projects, `node .soul/tools/v-cycle-checker.mjs --strict` should be configured as a pre-commit or CI workflow step:
 * If an agent marks a requirement `Verified` without a passing test, the build is blocked.
 * If an agent invents an unregistered component, the build is blocked.
