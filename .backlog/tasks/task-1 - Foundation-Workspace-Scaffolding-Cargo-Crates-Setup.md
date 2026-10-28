@@ -1,9 +1,10 @@
 ---
 id: TASK-1
 title: 'Foundation: Workspace Scaffolding & Cargo Crates Setup'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-10-28T23:40:00Z'
+updated_date: '2026-10-28T23:59:00Z'
 labels:
   - workspace
   - setup
