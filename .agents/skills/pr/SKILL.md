@@ -16,10 +16,32 @@ Use this template for writing the PR body:
 
 <diagram, diff-sketch, or tree>
 
+## Per-Task Implementation Report & Visual Proof
+
+For each task included in this PR:
+
+### TASK-XX: <Task Title>
+* **Implementation Steps:** <Summary of implementation, key modules modified, algorithms, and design choices>
+* **Visual Proof:**
+  ![TASK-XX](docs/assets/screenshots/<task>_verification.png)
+
+## Requirement Traceability & PR Delta
+
+### Global V-Cycle Metrics
+* **Total Atomic Requirements:** <count>
+* **Verified / Passed:** <count> (<percentage>%)
+* **Implementation Rate:** <percentage>%
+* **Verification Rate:** <percentage>%
+
+### Requirements Implemented / Verified in this PR
+| Requirement ID | SW Component | Test Case | Status | Impact / Summary |
+| :--- | :--- | :--- | :--- | :--- |
+| `REQ-...` | `...` | `TEST-...` | Passed | ... |
+
 ## Evidence
 
-- **Before:** <screenshot/output/failing test run>
-  **After:** <screenshot/output/passing test run>
+- **Test Suite:** <cargo test output summary>
+- **Lint & Format:** <cargo fmt / clippy status>
 
 ## Merge Danger
 

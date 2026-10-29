@@ -32,3 +32,33 @@ All verification and unit test suites generate or maintain structured markdown t
 <Relevant test logs or terminal captures>
 \`\`\`
 ```
+
+---
+
+## 4. Pull Request Verification & Visual Evidence Standards
+
+Every Pull Request generated in this repository must provide irrefutable, visual proof that each implemented task functions end-to-end. Reviewers must be able to visually inspect and verify the behavior directly within the PR body.
+
+### Mandatory PR Body Structure
+
+For every task included in the PR, the PR description must contain:
+
+1. **Task Implementation Summary:**
+   * A concise technical summary of *how* the task was implemented across architectural layers (data models, IPC messages, state machines, CLI/TUI routers).
+   * Exact files modified and key design decisions.
+2. **Visual Proof Screenshot:**
+   * An authentic, high-resolution terminal or TUI capture showing the feature executed live by a real user session.
+   * Stored in `docs/assets/screenshots/<task>_verification.png` and embedded directly in markdown (`![<Task Name>](docs/assets/screenshots/<task>_verification.png)`).
+
+---
+
+## 5. Requirement Traceability Matrix & PR Delta
+
+Every PR body must include the V-Cycle Traceability Matrix generated from the current specifications, detailing:
+
+1. **Global Traceability Metrics:**
+   * Total atomic requirements in repository.
+   * Global Implementation Rate, Verification Rate, and Test Pass Rate before and after the PR.
+2. **PR Traceability Delta:**
+   * Explicit list of atomic requirements transitioned to `Verified` / `Passed` as a direct result of this PR.
+   * Traceability chain for each requirement: `Upstream SRS` $\rightarrow$ `Downstream LLD` $\rightarrow$ `Verification Test` $\rightarrow$ `Backlog Task`.
