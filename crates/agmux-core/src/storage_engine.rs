@@ -1,5 +1,5 @@
 //! SQLite session metadata repository.
-use agmux_proto::SessionInfo;
+use agmux_proto::{SearchMatch, SessionInfo};
 use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 
@@ -25,8 +25,75 @@ impl StorageEngine {
         } else if version > 1 {
             return Err(StorageError::UnsupportedVersion(version));
         }
+        tx.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS terminal_logs_fts USING fts5(session_id UNINDEXED, line_no UNINDEXED, timestamp UNINDEXED, content, tokenize='trigram');")?;
         tx.commit()?;
         Ok(Self { connection })
+    }
+    /// Insert one clean terminal line.
+    pub fn index_terminal_line(
+        &self,
+        session_id: &str,
+        line_no: u64,
+        timestamp: u64,
+        content: &str,
+    ) -> Result<(), StorageError> {
+        self.connection.execute("INSERT INTO terminal_logs_fts (session_id,line_no,timestamp,content) VALUES (?1,?2,?3,?4)", params![session_id,line_no,timestamp,content])?;
+        Ok(())
+    }
+    /// Atomically insert a batch of consecutive terminal lines.
+    pub fn index_terminal_lines(
+        &mut self,
+        session_id: &str,
+        first_line: u64,
+        timestamp: u64,
+        lines: &[String],
+    ) -> Result<(), StorageError> {
+        let tx = self.connection.transaction()?;
+        for (offset, line) in lines.iter().enumerate() {
+            tx.execute("INSERT INTO terminal_logs_fts (session_id,line_no,timestamp,content) VALUES (?1,?2,?3,?4)", params![session_id, first_line + offset as u64, timestamp, line])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    /// Search terminal lines for a literal substring, optionally within a session.
+    pub fn search_terminal_logs(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<SearchMatch>, StorageError> {
+        self.search_terminal_logs_for_session(query, None, limit)
+    }
+    /// Search terminal lines within an optional session.
+    pub fn search_terminal_logs_for_session(
+        &self,
+        query: &str,
+        session_id: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<SearchMatch>, StorageError> {
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (sql, pattern) = if query.chars().count() >= 3 {
+            (
+                "SELECT session_id,line_no,timestamp,content FROM terminal_logs_fts WHERE terminal_logs_fts MATCH ?1 AND (?2 IS NULL OR session_id=?2) ORDER BY rowid DESC LIMIT ?3",
+                format!("\"{}\"", query.replace('"', "\"\"")),
+            )
+        } else {
+            (
+                "SELECT session_id,line_no,timestamp,content FROM terminal_logs_fts WHERE instr(lower(content),lower(?1)) > 0 AND (?2 IS NULL OR session_id=?2) ORDER BY rowid DESC LIMIT ?3",
+                query.to_string(),
+            )
+        };
+        let mut stmt = self.connection.prepare(sql)?;
+        let rows = stmt.query_map(params![pattern, session_id, limit], |r| {
+            Ok(SearchMatch {
+                session_id: r.get(0)?,
+                line_no: r.get(1)?,
+                timestamp: r.get(2)?,
+                snippet: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
     pub fn insert_session(&self, s: &SessionInfo) -> Result<(), StorageError> {
         self.connection.execute(
@@ -91,6 +158,22 @@ pub fn default_database_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn search_literal_and_session_filter() {
+        let db = StorageEngine::open(Path::new(":memory:")).expect("open");
+        db.index_terminal_line("one", 1, 42, "CRITICAL_AGMUX_TOKEN_XYZ123")
+            .expect("index");
+        db.index_terminal_line("two", 2, 43, "TOKEN-XYZ")
+            .expect("index");
+        let matches = db.search_terminal_logs("TOKEN_XYZ", 10).expect("search");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].session_id, "one");
+        assert!(
+            db.search_terminal_logs_for_session("TOKEN", Some("missing"), 10)
+                .expect("search")
+                .is_empty()
+        );
+    }
     #[test]
     fn session_lifecycle() {
         let db = StorageEngine::open(Path::new(":memory:")).expect("open database");

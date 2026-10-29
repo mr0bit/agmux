@@ -38,11 +38,11 @@ This specification details the single-writer SQLite WAL database, embedded atomi
 * **Text:** As terminal output is generated, the reader task shall strip ANSI escapes and batch lines every 250ms into the `terminal_logs_fts` FTS5 virtual table (`tokenize = 'trigram'`), enforcing a configurable rolling retention limit (default 50,000 lines per session) loaded from `config.toml`.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-core::fts_indexer`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Feed 100,000 terminal lines into a session; verify that lines exceeding the 50,000-line cap are pruned in FIFO order, keeping trigram search fast and disk growth bounded.
 * **Downstream Req:** `LLD-STORAGE-FTS5-RETENTION-003`
 * **Downstream Test:** `TEST-VER-STORAGE-003`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

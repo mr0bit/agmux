@@ -10,8 +10,8 @@ use tokio::net::{UnixListener, UnixStream};
 
 use agmux_core::pty_manager::PtyManager;
 use agmux_proto::{
-    HandshakeResponse, IpcMessage, ListSessionsResponse, SessionExitEvent, SessionInfo,
-    SpawnSessionResponse, TerminalOutputFrame, new_framed,
+    HandshakeResponse, IpcMessage, ListSessionsResponse, SearchLogsResponse, SessionExitEvent,
+    SessionInfo, SpawnSessionResponse, TerminalOutputFrame, new_framed,
 };
 
 pub use agmux_core::default_socket_path;
@@ -235,41 +235,76 @@ async fn handle_client(
                             success: true,
                             error: None,
                         });
-                        if out_tx.send(resp).await.is_err() {
-                            break;
-                        }
+                        let _ = out_tx.send(resp).await;
 
                         // Attach streaming forwarder
                         let out_tx_fwd = out_tx.clone();
+                        let output_db = storage.clone();
                         let fwd_session_id = session_id.clone();
                         tokio::spawn(async move {
                             let mut output_rx = session.subscribe_output();
                             let mut exit_rx = session.subscribe_exit();
 
+                            let mut history =
+                                agmux_core::fts_indexer::TerminalHistory::new(1024 * 1024);
+                            let mut line_no = 0u64;
                             loop {
-                                tokio::select! {
-                                    Ok(data) = output_rx.recv() => {
-                                        let out_frame = IpcMessage::TerminalOutputFrame(TerminalOutputFrame {
+                                let finished = if exit_rx.borrow().is_some() {
+                                    true
+                                } else {
+                                    tokio::select! {
+                                        result = output_rx.recv() => {
+                                            match result {
+                                                Ok(data) => {
+                                                    let lines = history.ingest(&data);
+                                                    index_lines(output_db.clone(), &fwd_session_id, &mut line_no, lines).await;
+                                                    let _ = out_tx_fwd.send(IpcMessage::TerminalOutputFrame(TerminalOutputFrame { session_id: fwd_session_id.clone(), data })).await;
+                                                    false
+                                                }
+                                                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => { tracing::warn!("Lost {n} terminal output frames"); false }
+                                                Err(_) => true,
+                                            }
+                                        }
+                                        _ = exit_rx.changed() => true,
+                                    }
+                                };
+                                if finished {
+                                    // The reader has stopped before exit is signaled; drain queued frames first.
+                                    while let Ok(data) = output_rx.try_recv() {
+                                        let lines = history.ingest(&data);
+                                        index_lines(
+                                            output_db.clone(),
+                                            &fwd_session_id,
+                                            &mut line_no,
+                                            lines,
+                                        )
+                                        .await;
+                                        let _ = out_tx_fwd
+                                            .send(IpcMessage::TerminalOutputFrame(
+                                                TerminalOutputFrame {
+                                                    session_id: fwd_session_id.clone(),
+                                                    data,
+                                                },
+                                            ))
+                                            .await;
+                                    }
+                                    if let Some(line) = history.finish() {
+                                        index_lines(
+                                            output_db.clone(),
+                                            &fwd_session_id,
+                                            &mut line_no,
+                                            vec![line],
+                                        )
+                                        .await;
+                                    }
+                                    let code = *exit_rx.borrow();
+                                    let _ = out_tx_fwd
+                                        .send(IpcMessage::SessionExitEvent(SessionExitEvent {
                                             session_id: fwd_session_id.clone(),
-                                            data,
-                                        });
-                                        if out_tx_fwd.send(out_frame).await.is_err() {
-                                            break;
-                                        }
-                                    }
-                                    _ = exit_rx.changed() => {
-                                        let code_opt = {
-                                            *exit_rx.borrow()
-                                        };
-                                        if let Some(code) = code_opt {
-                                            let exit_event = IpcMessage::SessionExitEvent(SessionExitEvent {
-                                                session_id: fwd_session_id.clone(),
-                                                exit_code: Some(code),
-                                            });
-                                            let _ = out_tx_fwd.send(exit_event).await;
-                                            break;
-                                        }
-                                    }
+                                            exit_code: code,
+                                        }))
+                                        .await;
+                                    break;
                                 }
                             }
                         });
@@ -283,6 +318,26 @@ async fn handle_client(
                         let _ = out_tx.send(resp).await;
                     }
                 }
+            }
+            IpcMessage::SearchLogsRequest(req) => {
+                let db = storage.clone();
+                let matches = tokio::task::spawn_blocking(move || {
+                    db.lock()
+                        .map_err(|e| e.to_string())?
+                        .search_terminal_logs_for_session(
+                            &req.query,
+                            req.session_id.as_deref(),
+                            req.limit,
+                        )
+                        .map_err(|e| e.to_string())
+                })
+                .await?
+                .map_err(anyhow::Error::msg)?;
+                out_tx
+                    .send(IpcMessage::SearchLogsResponse(SearchLogsResponse {
+                        matches,
+                    }))
+                    .await?;
             }
             IpcMessage::ListSessionsRequest(_) => {
                 let db = storage.clone();
@@ -312,6 +367,7 @@ async fn handle_client(
             }
             IpcMessage::HandshakeRequest(_)
             | IpcMessage::HandshakeResponse(_)
+            | IpcMessage::SearchLogsResponse(_)
             | IpcMessage::ListSessionsResponse(_)
             | IpcMessage::SpawnSessionResponse(_)
             | IpcMessage::TerminalOutputFrame(_)
@@ -323,4 +379,32 @@ async fn handle_client(
 
     writer_task.abort();
     Ok(())
+}
+
+async fn index_lines(
+    db: Arc<std::sync::Mutex<agmux_core::storage_engine::StorageEngine>>,
+    id: &str,
+    line_no: &mut u64,
+    lines: Vec<String>,
+) {
+    if lines.is_empty() {
+        return;
+    }
+    let first = *line_no + 1;
+    *line_no += lines.len() as u64;
+    let id = id.to_owned();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let result = tokio::task::spawn_blocking(move || {
+        db.lock()
+            .map_err(|e| e.to_string())?
+            .index_terminal_lines(&id, first, timestamp, &lines)
+            .map_err(|e| e.to_string())
+    })
+    .await;
+    if !matches!(result, Ok(Ok(()))) {
+        tracing::error!("Failed to index terminal lines: {result:?}");
+    }
 }

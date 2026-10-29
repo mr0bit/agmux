@@ -153,3 +153,48 @@ pub async fn list_sessions(
         other => bail!("Unexpected list response: {other:?}"),
     }
 }
+
+/// Search stored terminal output over authenticated IPC.
+pub async fn search_logs(
+    socket_path: &Path,
+    token: &str,
+    query: String,
+    session_id: Option<String>,
+    limit: u32,
+) -> Result<Vec<agmux_proto::SearchMatch>> {
+    let stream = UnixStream::connect(socket_path)
+        .await
+        .context("Failed to connect to daemon")?;
+    let mut framed = new_framed(stream);
+    framed
+        .send(IpcMessage::HandshakeRequest(HandshakeRequest {
+            client_version: env!("CARGO_PKG_VERSION").into(),
+            token: token.into(),
+        }))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during handshake")??
+    {
+        IpcMessage::HandshakeResponse(response) if response.success => {}
+        other => bail!("Authentication failed: {other:?}"),
+    }
+    framed
+        .send(IpcMessage::SearchLogsRequest(
+            agmux_proto::SearchLogsRequest {
+                query,
+                session_id,
+                limit,
+            },
+        ))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during search")??
+    {
+        IpcMessage::SearchLogsResponse(response) => Ok(response.matches),
+        other => bail!("Unexpected search response: {other:?}"),
+    }
+}

@@ -29,6 +29,16 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Search terminal history.
+    Search {
+        query: String,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        session_id: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: u32,
+    },
     /// List active sessions.
     List {
         /// Output a JSON array.
@@ -70,6 +80,31 @@ async fn main() -> Result<()> {
 
     // 3. Dispatch subcommand
     match cli.command {
+        Commands::Search {
+            query,
+            json,
+            session_id,
+            limit,
+        } => {
+            let matches = agmux_cli::ipc_client::search_logs(
+                &socket_path,
+                &token,
+                query.clone(),
+                session_id,
+                limit,
+            )
+            .await?;
+            if json {
+                println!("{}", serde_json::to_string(&matches)?);
+            } else {
+                for item in matches {
+                    let snippet = item
+                        .snippet
+                        .replace(&query, &format!("\x1b[1;31m{query}\x1b[0m"));
+                    println!("{}:{}: {}", item.session_id, item.line_no, snippet);
+                }
+            }
+        }
         Commands::List { json } => {
             let sessions = agmux_cli::ipc_client::list_sessions(&socket_path, &token).await?;
             if json {

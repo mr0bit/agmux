@@ -95,10 +95,33 @@ pub struct ListSessionsResponse {
     pub sessions: Vec<SessionInfo>,
 }
 
+/// Search request, optionally restricted to one session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchLogsRequest {
+    pub query: String,
+    pub session_id: Option<String>,
+    pub limit: u32,
+}
+/// A matching terminal line.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchMatch {
+    pub session_id: String,
+    pub line_no: u64,
+    pub timestamp: u64,
+    pub snippet: String,
+}
+/// Search results.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchLogsResponse {
+    pub matches: Vec<SearchMatch>,
+}
+
 /// Unified framed IPC message envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload")]
 pub enum IpcMessage {
+    SearchLogsRequest(SearchLogsRequest),
+    SearchLogsResponse(SearchLogsResponse),
     ListSessionsRequest(ListSessionsRequest),
     ListSessionsResponse(ListSessionsResponse),
     /// Client initiates connection handshake.

@@ -1,9 +1,10 @@
 ---
 id: TASK-4
 title: 'Tracer Bullet: ANSI History Ingestion & agmux search'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-10-28T23:40:00Z'
+updated_date: '2026-10-29T00:17:00Z'
 labels:
   - tracer-bullet
   - search

@@ -49,3 +49,5 @@ pub enum AgmuxError {
     #[error("PTY error: {0}")]
     Pty(#[from] PtyError),
 }
+
+pub mod fts_indexer;
