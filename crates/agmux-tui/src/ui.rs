@@ -45,22 +45,63 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             .style(style)
         })
         .collect();
+    let sidebar_title = if app.attention_filter {
+        "Sessions [ATTENTION FILTER]"
+    } else {
+        "Sessions"
+    };
     frame.render_widget(
-        List::new(items).block(Block::default().borders(Borders::ALL).title("Sessions")),
+        List::new(items).block(Block::default().borders(Borders::ALL).title(sidebar_title)),
         columns[0],
     );
-    let title = app
-        .sessions
-        .get(app.selected_index)
-        .map_or("Viewport", |s| s.session_id.as_str());
-    frame.render_widget(
-        Paragraph::new(app.active_viewport_lines.join("\n"))
-            .block(Block::default().borders(Borders::ALL).title(title)),
-        columns[1],
-    );
+
+    if app.split_view {
+        let split_panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(columns[1]);
+
+        let pinned_title = app
+            .pinned_session_index
+            .and_then(|i| app.sessions.get(i))
+            .map_or("Pinned Session", |s| s.session_id.as_str());
+
+        frame.render_widget(
+            Paragraph::new(app.pinned_viewport_lines.join("\n")).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!("{pinned_title} [PINNED]")),
+            ),
+            split_panes[0],
+        );
+
+        let live_title = app
+            .sessions
+            .get(app.selected_index)
+            .map_or("Live Session", |s| s.session_id.as_str());
+
+        frame.render_widget(
+            Paragraph::new(app.active_viewport_lines.join("\n")).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!("{live_title} [LIVE]")),
+            ),
+            split_panes[1],
+        );
+    } else {
+        let title = app
+            .sessions
+            .get(app.selected_index)
+            .map_or("Viewport", |s| s.session_id.as_str());
+        frame.render_widget(
+            Paragraph::new(app.active_viewport_lines.join("\n"))
+                .block(Block::default().borders(Borders::ALL).title(title)),
+            columns[1],
+        );
+    }
     frame.render_widget(
         Paragraph::new(
-            "q: quit | j/k or ↑/↓: switch session | Enter: attach | Space: prompt | F1: palette",
+            "q: quit | j/k: nav | Space: prompt | w: filter | .: ack | v: split | m: pin | F1: palette",
         ),
         rows[1],
     );

@@ -154,6 +154,19 @@ pub struct ResumeSessionResponse {
     pub screen_data: Vec<u8>,
 }
 
+/// Request acknowledgment of a completed session, resetting it to IDLE.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AcknowledgeSessionRequest {
+    pub session_id: String,
+}
+
+/// Result of session acknowledgment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AcknowledgeSessionResponse {
+    pub success: bool,
+    pub error: Option<String>,
+}
+
 /// Request removal of a persisted session.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RemoveSessionRequest {
@@ -324,6 +337,8 @@ pub enum IpcMessage {
     /// Daemon signals child process termination.
     SessionExitEvent(SessionExitEvent),
     SessionStateChangedEvent(SessionStateChangedEvent),
+    AcknowledgeSessionRequest(AcknowledgeSessionRequest),
+    AcknowledgeSessionResponse(AcknowledgeSessionResponse),
 }
 
 impl From<HandshakeRequest> for IpcMessage {

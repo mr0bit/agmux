@@ -6,7 +6,8 @@ pub mod transport;
 
 pub use auth::constant_time_eq;
 pub use messages::{
-    AddReviewCommentRequest, AddReviewCommentResponse, DiffHunk, DiffLine, DiffLineType, DiffScope,
+    AcknowledgeSessionRequest, AcknowledgeSessionResponse, AddReviewCommentRequest,
+    AddReviewCommentResponse, DiffHunk, DiffLine, DiffLineType, DiffScope,
     DispatchReviewRoundRequest, DispatchReviewRoundResponse, FileDiff, FreezeSessionRequest,
     FreezeSessionResponse, GetDiffRequest, GetDiffResponse, HandshakeRequest, HandshakeResponse,
     IpcMessage, ListReviewCommentsRequest, ListReviewCommentsResponse, ListSessionsRequest,

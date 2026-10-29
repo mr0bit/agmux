@@ -51,11 +51,11 @@ This specification details the Ratatui terminal user interface (`agmux-tui`), si
 * **Text:** As a user managing 10+ concurrent agents, pressing `w` shall toggle an Attention Filter that hides all `IDLE` and `DEAD` sessions, displaying only sessions in `WAITING`, `FINISHED`, `ERRORED`, or `STUCK` states; pressing `.` shall acknowledge a `FINISHED` session and mark it `IDLE`.
 * **Criticality:** Medium
 * **SW Component:** `crates/agmux-tui::sidebar_filter`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Spawn 5 `IDLE` sessions and 2 `WAITING` sessions; press `w`. Verify that only the 2 `WAITING` sessions are visible in the sidebar tree. Press `w` again to restore the full tree.
 * **Downstream Req:** `LLD-TUI-ATTENTION-FILTER-004`
 * **Downstream Test:** `TEST-VER-TUI-004`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 
@@ -64,11 +64,11 @@ This specification details the Ratatui terminal user interface (`agmux-tui`), si
 * **Text:** As a user comparing two competing agent implementations, pressing `v` on a live session shall split the main viewport into side-by-side panes; pressing `m` shall pin the active session in the left pane while arrow keys cycle through target sessions in the right pane.
 * **Criticality:** Medium
 * **SW Component:** `crates/agmux-tui::split_viewport`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Activate split view via `v`; mark session A via `m`; navigate sidebar down to session B. Verify that session A remains pinned on the left while session B renders live on the right.
 * **Downstream Req:** `LLD-TUI-SPLIT-COMPARE-005`
 * **Downstream Test:** `TEST-VER-TUI-005`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

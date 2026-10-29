@@ -54,6 +54,9 @@ pub struct App {
     pub should_quit: bool,
     pub modal: ModalState,
     pub attention_filter: bool,
+    pub split_view: bool,
+    pub pinned_session_index: Option<usize>,
+    pub pinned_viewport_lines: Vec<String>,
     pub discovered_agents: Vec<DiscoveredAgent>,
     pub config_path: std::path::PathBuf,
     pub onboarding_error: Option<String>,
@@ -153,6 +156,46 @@ impl App {
                         return self.modal = ModalState::QuickPrompt {
                             input: String::new(),
                         };
+                    }
+                    KeyCode::Char('w') => {
+                        self.attention_filter = !self.attention_filter;
+                        if self.attention_filter
+                            && self
+                                .sessions
+                                .get(self.selected_index)
+                                .is_some_and(|s| matches!(s.state.as_str(), "IDLE" | "DEAD"))
+                        {
+                            if let Some(index) = self
+                                .sessions
+                                .iter()
+                                .position(|s| !matches!(s.state.as_str(), "IDLE" | "DEAD"))
+                            {
+                                self.selected_index = index;
+                            }
+                        }
+                    }
+                    KeyCode::Char('.') => {
+                        if let Some(session) = self.sessions.get_mut(self.selected_index) {
+                            if session.state == "FINISHED" {
+                                session.state = "IDLE".into();
+                                self.pending_message = Some(IpcMessage::AcknowledgeSessionRequest(
+                                    agmux_proto::AcknowledgeSessionRequest {
+                                        session_id: session.session_id.clone(),
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                    KeyCode::Char('v') => {
+                        self.split_view = !self.split_view;
+                        if self.split_view && self.pinned_session_index.is_none() {
+                            self.pinned_session_index = Some(self.selected_index);
+                            self.pinned_viewport_lines = self.active_viewport_lines.clone();
+                        }
+                    }
+                    KeyCode::Char('m') => {
+                        self.pinned_session_index = Some(self.selected_index);
+                        self.pinned_viewport_lines = self.active_viewport_lines.clone();
                     }
                     KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
                     KeyCode::Down | KeyCode::Char('j') => self.move_selection(true),

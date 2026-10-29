@@ -885,7 +885,44 @@ async fn handle_client(
                     ))
                     .await?;
             }
+            IpcMessage::AcknowledgeSessionRequest(req) => {
+                let db = storage.clone();
+                let sid = req.session_id.clone();
+                let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+                    let db = db.lock().map_err(|e| e.to_string())?;
+                    db.update_session_state(&sid, "IDLE")
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                })
+                .await;
+                let response = match result {
+                    Ok(Ok(())) => {
+                        let _ = events.send(SessionStateChangedEvent {
+                            session_id: req.session_id,
+                            old_state: "FINISHED".into(),
+                            new_state: "IDLE".into(),
+                            reason: "user acknowledged".into(),
+                        });
+                        agmux_proto::AcknowledgeSessionResponse {
+                            success: true,
+                            error: None,
+                        }
+                    }
+                    Ok(Err(e)) => agmux_proto::AcknowledgeSessionResponse {
+                        success: false,
+                        error: Some(e),
+                    },
+                    Err(e) => agmux_proto::AcknowledgeSessionResponse {
+                        success: false,
+                        error: Some(e.to_string()),
+                    },
+                };
+                out_tx
+                    .send(IpcMessage::AcknowledgeSessionResponse(response))
+                    .await?;
+            }
             IpcMessage::ResolveReviewCommentResponse(_)
+            | IpcMessage::AcknowledgeSessionResponse(_)
             | IpcMessage::AddReviewCommentResponse(_)
             | IpcMessage::ListReviewCommentsResponse(_)
             | IpcMessage::DispatchReviewRoundResponse(_)
