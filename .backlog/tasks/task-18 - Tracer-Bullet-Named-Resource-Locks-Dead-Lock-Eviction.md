@@ -1,7 +1,7 @@
 ---
 id: TASK-18
 title: 'Tracer Bullet: Named Resource Locks & Dead-Lock Auto-Eviction'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-10-29T01:25:00Z'
 labels:
@@ -27,8 +27,8 @@ Implements `REQ-ORCH-DEAD-LOCK-EVICT-002`: manages named resource locks (`agmux 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Named lock acquisition and release supported via CLI and IPC
-- [ ] #2 Lock contention queues callers in FIFO order when `--wait` is requested
-- [ ] #3 Termination or error of lock holder automatically evicts locks and wakes next waiter
-- [ ] #4 Integration test asserts lock mutual exclusion, wait queuing, and dead-lock auto-eviction
+- [x] #1 Named lock acquisition and release supported via CLI and IPC
+- [x] #2 Lock contention queues callers in FIFO order when `--wait` is requested
+- [x] #3 Termination or error of lock holder automatically evicts locks and wakes next waiter
+- [x] #4 Integration test asserts lock mutual exclusion, wait queuing, and dead-lock auto-eviction
 <!-- AC:END -->

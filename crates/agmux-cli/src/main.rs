@@ -30,6 +30,11 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Manage named resource locks.
+    Lock {
+        #[command(subcommand)]
+        command: LockCommand,
+    },
     /// Send a message to another session.
     Send { target_id: String, message: String },
     /// Send raw text input to an active session PTY.
@@ -126,6 +131,35 @@ enum ReviewCommand {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum LockCommand {
+    /// Acquire a named lock.
+    Acquire {
+        /// Name of the resource lock.
+        name: String,
+        /// Session ID holding the lock.
+        #[arg(long)]
+        session: Option<String>,
+        /// Wait until the lock is available.
+        #[arg(long, short)]
+        wait: bool,
+    },
+    /// Release a named lock.
+    Release {
+        /// Name of the resource lock.
+        name: String,
+        /// Session ID holding the lock.
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// List active named locks.
+    List {
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -215,6 +249,79 @@ async fn main() -> Result<()> {
                 ))
                 .await?;
         }
+
+        Some(Commands::Lock { command }) => match command {
+            LockCommand::Acquire {
+                name,
+                session,
+                wait,
+            } => {
+                let sid = session
+                    .or_else(|| std::env::var("AGMUX_SESSION_ID").ok())
+                    .unwrap_or_else(|| format!("cli-{}", std::process::id()));
+                let resp = agmux_cli::ipc_client::acquire_lock(
+                    &socket_path,
+                    &token,
+                    name.clone(),
+                    sid.clone(),
+                    wait,
+                )
+                .await?;
+                if resp.success && resp.acquired {
+                    println!("Lock '{name}' acquired by session '{sid}'");
+                } else if resp.success && !resp.acquired {
+                    let holder = resp.holder_session_id.unwrap_or_else(|| "unknown".into());
+                    eprintln!("Lock '{name}' is currently held by session '{holder}'");
+                    std::process::exit(1);
+                } else {
+                    anyhow::bail!(
+                        "{}",
+                        resp.error
+                            .unwrap_or_else(|| "Failed to acquire lock".into())
+                    );
+                }
+            }
+            LockCommand::Release { name, session } => {
+                let sid = session
+                    .or_else(|| std::env::var("AGMUX_SESSION_ID").ok())
+                    .unwrap_or_else(|| format!("cli-{}", std::process::id()));
+                let resp = agmux_cli::ipc_client::release_lock(
+                    &socket_path,
+                    &token,
+                    name.clone(),
+                    sid.clone(),
+                )
+                .await?;
+                if resp.success {
+                    println!("Lock '{name}' released by session '{sid}'");
+                } else {
+                    anyhow::bail!(
+                        "{}",
+                        resp.error
+                            .unwrap_or_else(|| "Failed to release lock".into())
+                    );
+                }
+            }
+            LockCommand::List { json } => {
+                let resp = agmux_cli::ipc_client::list_locks(&socket_path, &token).await?;
+                if let Some(err) = resp.error {
+                    anyhow::bail!("{err}");
+                }
+                if json {
+                    println!("{}", serde_json::to_string(&resp.locks)?);
+                } else if resp.locks.is_empty() {
+                    println!("No active locks");
+                } else {
+                    println!("{:<24} {:<24} ACQUIRED_AT", "LOCK NAME", "HOLDER SESSION");
+                    for lock in resp.locks {
+                        println!(
+                            "{:<24} {:<24} {}",
+                            lock.name, lock.holder_session_id, lock.acquired_at
+                        );
+                    }
+                }
+            }
+        },
 
         Some(Commands::Review { command }) => {
             use agmux_proto::*;

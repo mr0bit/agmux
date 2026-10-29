@@ -78,6 +78,8 @@ impl DaemonServer {
         let auth_token = Arc::new(self.auth_token);
         let (events, _) = tokio::sync::broadcast::channel::<SessionStateChangedEvent>(256);
 
+        let lock_manager = crate::lock_manager::LockManager::new(storage.clone());
+
         loop {
             match listener.accept().await {
                 Ok((stream, _addr)) => {
@@ -85,9 +87,17 @@ impl DaemonServer {
                     let expected_token = auth_token.clone();
                     let storage = storage.clone();
                     let events = events.clone();
+                    let lock_manager = lock_manager.clone();
                     tokio::spawn(async move {
-                        if let Err(e) =
-                            handle_client(stream, pty_mgr, expected_token, storage, events).await
+                        if let Err(e) = handle_client(
+                            stream,
+                            pty_mgr,
+                            expected_token,
+                            storage,
+                            events,
+                            lock_manager,
+                        )
+                        .await
                         {
                             tracing::debug!("Client session ended: {e:#}");
                         }
@@ -108,6 +118,7 @@ async fn handle_client(
     expected_token: Arc<String>,
     storage: Arc<std::sync::Mutex<agmux_core::storage_engine::StorageEngine>>,
     events: tokio::sync::broadcast::Sender<SessionStateChangedEvent>,
+    lock_manager: crate::lock_manager::LockManager,
 ) -> Result<()> {
     let framed = new_framed(stream);
     let (mut sink, mut reader) = framed.split();
@@ -301,6 +312,7 @@ async fn handle_client(
                         let state_events = events.clone();
                         let pty_fwd = pty_manager.clone();
                         let session_clone = session.clone();
+                        let lock_mgr_fwd = lock_manager.clone();
                         tokio::spawn(async move {
                             let mut output_rx = session.subscribe_output();
                             let mut exit_rx = session.subscribe_exit();
@@ -400,6 +412,9 @@ async fn handle_client(
                                             exit_code: code,
                                         }))
                                         .await;
+
+                                    // Evict named locks held by the session and wake queued waiters
+                                    lock_mgr_fwd.evict_session(&fwd_session_id).await;
 
                                     // Snapshot terminal grid and drop active PTY session memory
                                     let screen = session_clone.capture_screen();
@@ -762,6 +777,7 @@ async fn handle_client(
                     .await;
                 let response = match result {
                     Ok(Ok(stash_created)) => {
+                        lock_manager.evict_session(&req.session_id).await;
                         if let Some(session) = pty_manager.remove_session(&req.session_id).await {
                             session.kill();
                         }
@@ -801,6 +817,89 @@ async fn handle_client(
                         sessions,
                     }))
                     .await?;
+            }
+            IpcMessage::AcquireLockRequest(req) => {
+                let lock_mgr = lock_manager.clone();
+                match lock_mgr
+                    .acquire(&req.lock_name, &req.session_id, req.wait)
+                    .await
+                {
+                    Ok((acquired, holder)) => {
+                        out_tx
+                            .send(IpcMessage::AcquireLockResponse(
+                                agmux_proto::AcquireLockResponse {
+                                    success: true,
+                                    acquired,
+                                    holder_session_id: holder,
+                                    error: None,
+                                },
+                            ))
+                            .await?;
+                    }
+                    Err(error) => {
+                        out_tx
+                            .send(IpcMessage::AcquireLockResponse(
+                                agmux_proto::AcquireLockResponse {
+                                    success: false,
+                                    acquired: false,
+                                    holder_session_id: None,
+                                    error: Some(error),
+                                },
+                            ))
+                            .await?;
+                    }
+                }
+            }
+            IpcMessage::ReleaseLockRequest(req) => {
+                let lock_mgr = lock_manager.clone();
+                match lock_mgr.release(&req.lock_name, &req.session_id).await {
+                    Ok(released) => {
+                        out_tx
+                            .send(IpcMessage::ReleaseLockResponse(
+                                agmux_proto::ReleaseLockResponse {
+                                    success: released,
+                                    error: if released {
+                                        None
+                                    } else {
+                                        Some("Lock was not held by this session".into())
+                                    },
+                                },
+                            ))
+                            .await?;
+                    }
+                    Err(error) => {
+                        out_tx
+                            .send(IpcMessage::ReleaseLockResponse(
+                                agmux_proto::ReleaseLockResponse {
+                                    success: false,
+                                    error: Some(error),
+                                },
+                            ))
+                            .await?;
+                    }
+                }
+            }
+            IpcMessage::ListLocksRequest(_) => {
+                let lock_mgr = lock_manager.clone();
+                match lock_mgr.list_locks().await {
+                    Ok(locks) => {
+                        out_tx
+                            .send(IpcMessage::ListLocksResponse(
+                                agmux_proto::ListLocksResponse { locks, error: None },
+                            ))
+                            .await?;
+                    }
+                    Err(error) => {
+                        out_tx
+                            .send(IpcMessage::ListLocksResponse(
+                                agmux_proto::ListLocksResponse {
+                                    locks: Vec::new(),
+                                    error: Some(error),
+                                },
+                            ))
+                            .await?;
+                    }
+                }
             }
             IpcMessage::SendMessageRequest(req) => {
                 let session = pty_manager.get_session(&req.target_session_id).await;
@@ -979,7 +1078,10 @@ async fn handle_client(
                     .send(IpcMessage::AcknowledgeSessionResponse(response))
                     .await?;
             }
-            IpcMessage::SendMessageResponse(_)
+            IpcMessage::AcquireLockResponse(_)
+            | IpcMessage::ReleaseLockResponse(_)
+            | IpcMessage::ListLocksResponse(_)
+            | IpcMessage::SendMessageResponse(_)
             | IpcMessage::ResolveReviewCommentResponse(_)
             | IpcMessage::AcknowledgeSessionResponse(_)
             | IpcMessage::AddReviewCommentResponse(_)

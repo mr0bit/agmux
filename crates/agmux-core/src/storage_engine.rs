@@ -34,6 +34,7 @@ impl StorageEngine {
         tx.execute_batch("CREATE TABLE IF NOT EXISTS session_snapshots (session_id TEXT PRIMARY KEY, snapshot BLOB, compressed_size INTEGER, uncompressed_size INTEGER, timestamp INTEGER);")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, file_path TEXT NOT NULL, line_number INTEGER NOT NULL, line_hash TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_review_session_status ON review_comments(session_id, status); CREATE TABLE IF NOT EXISTS review_rounds (session_id TEXT NOT NULL, round_number INTEGER NOT NULL, PRIMARY KEY(session_id, round_number));")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS queued_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, target_session_id TEXT NOT NULL, message TEXT NOT NULL, created_at INTEGER NOT NULL, delivered_at INTEGER); CREATE INDEX IF NOT EXISTS idx_queued_messages ON queued_messages(target_session_id, delivered_at);")?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS named_locks (name TEXT PRIMARY KEY, holder_session_id TEXT NOT NULL, acquired_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_named_locks_holder ON named_locks(holder_session_id);")?;
         tx.commit()?;
         Ok(Self { connection })
     }
@@ -78,6 +79,63 @@ impl StorageEngine {
     /// Count pending messages for a session.
     pub fn pending_message_count(&self, target_session_id: &str) -> Result<usize, StorageError> {
         Ok(self.connection.query_row("SELECT count(*) FROM queued_messages WHERE target_session_id=?1 AND delivered_at IS NULL", [target_session_id], |r| r.get(0))?)
+    }
+    /// Atomically acquire a named lock. Returns true if acquired, false if held by another session.
+    pub fn acquire_lock(&self, name: &str, session_id: &str) -> Result<bool, StorageError> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT holder_session_id FROM named_locks WHERE name = ?1")?;
+        let mut rows = stmt.query([name])?;
+        if let Some(row) = rows.next()? {
+            let holder: String = row.get(0)?;
+            return Ok(holder == session_id);
+        }
+        self.connection.execute(
+            "INSERT INTO named_locks (name, holder_session_id, acquired_at) VALUES (?1, ?2, unixepoch())",
+            params![name, session_id],
+        )?;
+        Ok(true)
+    }
+    /// Release a named lock held by session_id.
+    pub fn release_lock(&self, name: &str, session_id: &str) -> Result<bool, StorageError> {
+        let count = self.connection.execute(
+            "DELETE FROM named_locks WHERE name = ?1 AND holder_session_id = ?2",
+            params![name, session_id],
+        )?;
+        Ok(count > 0)
+    }
+    /// Release all named locks held by a session and return their names.
+    pub fn release_session_locks(&self, session_id: &str) -> Result<Vec<String>, StorageError> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT name FROM named_locks WHERE holder_session_id = ?1")?;
+        let rows = stmt.query_map([session_id], |r| r.get(0))?;
+        let names = rows.collect::<Result<Vec<String>, _>>()?;
+        self.connection.execute(
+            "DELETE FROM named_locks WHERE holder_session_id = ?1",
+            [session_id],
+        )?;
+        Ok(names)
+    }
+    /// Query the current holder of a named lock.
+    pub fn get_lock_holder(&self, name: &str) -> Result<Option<String>, StorageError> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT holder_session_id FROM named_locks WHERE name = ?1")?;
+        let mut rows = stmt.query([name])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+    /// List all currently active named locks.
+    pub fn list_locks(&self) -> Result<Vec<(String, String, u64)>, StorageError> {
+        let mut stmt = self.connection.prepare(
+            "SELECT name, holder_session_id, acquired_at FROM named_locks ORDER BY acquired_at ASC",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
     pub fn add_review_comment(&self, comment: &ReviewComment) -> Result<(), StorageError> {
         self.connection.execute(

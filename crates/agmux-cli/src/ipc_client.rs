@@ -419,3 +419,126 @@ pub async fn review_request(
         }
     }
 }
+
+/// Request lock acquisition over authenticated IPC.
+pub async fn acquire_lock(
+    socket_path: &Path,
+    token: &str,
+    lock_name: String,
+    session_id: String,
+    wait: bool,
+) -> Result<agmux_proto::AcquireLockResponse> {
+    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    framed
+        .send(IpcMessage::HandshakeRequest(HandshakeRequest {
+            client_version: env!("CARGO_PKG_VERSION").into(),
+            token: token.into(),
+        }))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during handshake")??
+    {
+        IpcMessage::HandshakeResponse(response) if response.success => {}
+        other => bail!("Authentication failed: {other:?}"),
+    }
+    framed
+        .send(IpcMessage::AcquireLockRequest(
+            agmux_proto::AcquireLockRequest {
+                lock_name,
+                session_id,
+                wait,
+            },
+        ))
+        .await?;
+    loop {
+        match framed
+            .next()
+            .await
+            .context("Connection closed waiting for lock response")??
+        {
+            IpcMessage::AcquireLockResponse(resp) => return Ok(resp),
+            IpcMessage::SessionStateChangedEvent(_) => continue,
+            other => bail!("Unexpected response: {other:?}"),
+        }
+    }
+}
+
+/// Request lock release over authenticated IPC.
+pub async fn release_lock(
+    socket_path: &Path,
+    token: &str,
+    lock_name: String,
+    session_id: String,
+) -> Result<agmux_proto::ReleaseLockResponse> {
+    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    framed
+        .send(IpcMessage::HandshakeRequest(HandshakeRequest {
+            client_version: env!("CARGO_PKG_VERSION").into(),
+            token: token.into(),
+        }))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during handshake")??
+    {
+        IpcMessage::HandshakeResponse(response) if response.success => {}
+        other => bail!("Authentication failed: {other:?}"),
+    }
+    framed
+        .send(IpcMessage::ReleaseLockRequest(
+            agmux_proto::ReleaseLockRequest {
+                lock_name,
+                session_id,
+            },
+        ))
+        .await?;
+    loop {
+        match framed
+            .next()
+            .await
+            .context("Connection closed waiting for lock release response")??
+        {
+            IpcMessage::ReleaseLockResponse(resp) => return Ok(resp),
+            IpcMessage::SessionStateChangedEvent(_) => continue,
+            other => bail!("Unexpected response: {other:?}"),
+        }
+    }
+}
+
+/// Request active lock list over authenticated IPC.
+pub async fn list_locks(socket_path: &Path, token: &str) -> Result<agmux_proto::ListLocksResponse> {
+    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    framed
+        .send(IpcMessage::HandshakeRequest(HandshakeRequest {
+            client_version: env!("CARGO_PKG_VERSION").into(),
+            token: token.into(),
+        }))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during handshake")??
+    {
+        IpcMessage::HandshakeResponse(response) if response.success => {}
+        other => bail!("Authentication failed: {other:?}"),
+    }
+    framed
+        .send(IpcMessage::ListLocksRequest(
+            agmux_proto::ListLocksRequest {},
+        ))
+        .await?;
+    loop {
+        match framed
+            .next()
+            .await
+            .context("Connection closed waiting for lock list response")??
+        {
+            IpcMessage::ListLocksResponse(resp) => return Ok(resp),
+            IpcMessage::SessionStateChangedEvent(_) => continue,
+            other => bail!("Unexpected response: {other:?}"),
+        }
+    }
+}

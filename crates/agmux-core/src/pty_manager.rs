@@ -160,6 +160,7 @@ impl PtyManager {
         if let Some(port) = port {
             cmd.env("PORT", port.to_string());
         }
+        cmd.env("AGMUX_SESSION_ID", &session_id);
 
         let mut child = pair
             .slave

@@ -25,11 +25,11 @@ This specification details the autonomous multi-agent orchestration primitives, 
 * **Text:** As an agent holding named resource locks (`agmux lock`) or file reservations (`reserve_files`) transitions to `DEAD` or `ERRORED`, `agmuxd` shall automatically release all of that session's held locks and reservations and wake the next queued agent in FIFO order.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-daemon::lock_manager`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Agent 1 acquires lock `db_migrate`; Agent 2 calls `agmux lock acquire db_migrate --wait`; kill Agent 1 (`kill -9`). Verify that `agmuxd` evicts Agent 1's lock and Agent 2 immediately acquires the lock without manual intervention.
 * **Downstream Req:** `LLD-ORCH-DEAD-LOCK-EVICT-002`
 * **Downstream Test:** `TEST-VER-ORCH-002`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

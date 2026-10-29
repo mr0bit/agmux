@@ -309,10 +309,66 @@ pub struct SendMessageResponse {
     pub error: Option<String>,
 }
 
+/// Request to acquire a named resource lock.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AcquireLockRequest {
+    pub lock_name: String,
+    pub session_id: String,
+    pub wait: bool,
+}
+
+/// Result of acquiring a named lock.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AcquireLockResponse {
+    pub success: bool,
+    pub acquired: bool,
+    pub holder_session_id: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Request to release a named resource lock.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseLockRequest {
+    pub lock_name: String,
+    pub session_id: String,
+}
+
+/// Result of releasing a named lock.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseLockResponse {
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+/// Request active locks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListLocksRequest {}
+
+/// Information about an active lock.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LockEntry {
+    pub name: String,
+    pub holder_session_id: String,
+    pub acquired_at: u64,
+}
+
+/// List of active named locks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListLocksResponse {
+    pub locks: Vec<LockEntry>,
+    pub error: Option<String>,
+}
+
 /// Unified framed IPC message envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload")]
 pub enum IpcMessage {
+    AcquireLockRequest(AcquireLockRequest),
+    AcquireLockResponse(AcquireLockResponse),
+    ReleaseLockRequest(ReleaseLockRequest),
+    ReleaseLockResponse(ReleaseLockResponse),
+    ListLocksRequest(ListLocksRequest),
+    ListLocksResponse(ListLocksResponse),
     SendMessageRequest(SendMessageRequest),
     SendMessageResponse(SendMessageResponse),
     ResolveReviewCommentRequest(ResolveReviewCommentRequest),

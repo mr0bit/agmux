@@ -1,5 +1,6 @@
 //! Daemon orchestration and server components.
 
+pub mod lock_manager;
 pub mod process_supervisor;
 pub mod server;
 
