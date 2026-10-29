@@ -54,6 +54,16 @@ enum Commands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Freeze an active session, persisting screen to Zstd snapshot
+    Freeze {
+        /// Session identifier to freeze
+        session_id: String,
+    },
+    /// Inspect or restore a persisted session snapshot
+    Inspect {
+        /// Session identifier to inspect
+        session_id: String,
+    },
 }
 
 #[tokio::main]
@@ -130,6 +140,28 @@ async fn main() -> Result<()> {
         Commands::Run { command, args } => {
             let exit_code = run_command(&socket_path, &token, command, args).await?;
             std::process::exit(exit_code);
+        }
+        Commands::Freeze { session_id } => {
+            let resp = agmux_cli::freeze_session(&socket_path, &token, session_id.clone()).await?;
+            if resp.success {
+                println!(
+                    "Frozen session {} ({} bytes compressed)",
+                    session_id, resp.compressed_size
+                );
+            } else {
+                eprintln!("Failed to freeze session {}", session_id);
+                std::process::exit(1);
+            }
+        }
+        Commands::Inspect { session_id } => {
+            let resp = agmux_cli::resume_session(&socket_path, &token, session_id.clone()).await?;
+            if resp.success {
+                let text = String::from_utf8_lossy(&resp.screen_data);
+                print!("{text}");
+            } else {
+                eprintln!("Failed to inspect snapshot for session {}", session_id);
+                std::process::exit(1);
+            }
         }
     }
 

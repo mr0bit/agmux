@@ -6,7 +6,8 @@ pub mod transport;
 
 pub use auth::constant_time_eq;
 pub use messages::{
-    HandshakeRequest, HandshakeResponse, IpcMessage, ListSessionsRequest, ListSessionsResponse,
+    FreezeSessionRequest, FreezeSessionResponse, HandshakeRequest, HandshakeResponse, IpcMessage,
+    ListSessionsRequest, ListSessionsResponse, ResumeSessionRequest, ResumeSessionResponse,
     SearchLogsRequest, SearchLogsResponse, SearchMatch, SessionExitEvent, SessionInfo,
     SessionStateChangedEvent, SpawnSessionRequest, SpawnSessionResponse, TerminalInputFrame,
     TerminalOutputFrame,

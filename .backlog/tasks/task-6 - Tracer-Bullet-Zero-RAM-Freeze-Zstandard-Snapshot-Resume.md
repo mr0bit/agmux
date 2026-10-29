@@ -1,9 +1,10 @@
 ---
 id: TASK-6
 title: 'Tracer Bullet: Zero-RAM Freeze & Zstandard Snapshot Resume'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-10-28T23:40:00Z'
+updated_date: '2026-10-29T00:31:00Z'
 labels:
   - tracer-bullet
   - zstd
@@ -28,8 +29,8 @@ When child process exits or is suspended, daemon serializes VT100 screen grid, c
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Inactive/dead session snapshot compressed via Zstd into SQLite
-- [ ] #2 Dead session holds exactly 0 MB resident RAM (PTY descriptor dropped)
-- [ ] #3 Auto-resume or inspection seamlessly decompresses and renders frozen grid
-- [ ] #4 Memory leak verification test confirms 0 MB heap retention for frozen sessions
+- [x] #1 Inactive/dead session snapshot compressed via Zstd into SQLite
+- [x] #2 Dead session holds exactly 0 MB resident RAM (PTY descriptor dropped)
+- [x] #3 Auto-resume or inspection seamlessly decompresses and renders frozen grid
+- [x] #4 Memory leak verification test confirms 0 MB heap retention for frozen sessions
 <!-- AC:END -->

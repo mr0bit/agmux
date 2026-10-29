@@ -15,6 +15,8 @@ target
 # Contains mutation testing data
 **/mutants.out*/
 
+scratch/
+
 # rustc will dump stack traces when hitting an internal compiler error to PWD
 rustc-ice-*.txt
 

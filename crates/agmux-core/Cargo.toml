@@ -10,4 +10,7 @@ portable-pty.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 rusqlite.workspace = true
+libc.workspace = true
 agmux-proto = { path = "../agmux-proto" }
+zstd = "0.14.3"
+vt100 = "0.18.1"

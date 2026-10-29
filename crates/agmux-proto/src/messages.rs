@@ -125,10 +125,40 @@ pub struct SearchLogsResponse {
     pub matches: Vec<SearchMatch>,
 }
 
+/// Request to persist and stop an active session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FreezeSessionRequest {
+    pub session_id: String,
+}
+
+/// Result of freezing a session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FreezeSessionResponse {
+    pub success: bool,
+    pub compressed_size: usize,
+}
+
+/// Request to inspect a persisted session snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResumeSessionRequest {
+    pub session_id: String,
+}
+
+/// Decompressed terminal data from a persisted session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResumeSessionResponse {
+    pub success: bool,
+    pub screen_data: Vec<u8>,
+}
+
 /// Unified framed IPC message envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload")]
 pub enum IpcMessage {
+    FreezeSessionRequest(FreezeSessionRequest),
+    FreezeSessionResponse(FreezeSessionResponse),
+    ResumeSessionRequest(ResumeSessionRequest),
+    ResumeSessionResponse(ResumeSessionResponse),
     SearchLogsRequest(SearchLogsRequest),
     SearchLogsResponse(SearchLogsResponse),
     ListSessionsRequest(ListSessionsRequest),

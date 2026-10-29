@@ -51,11 +51,11 @@ This specification details the single-writer SQLite WAL database, embedded atomi
 * **Text:** As a user kills a session (`x` -> `DEAD`), the system shall capture the full colored ANSI scrollback from the `vt100::Parser`, compress it with zstd level 3 into `sessions.ansi_snapshot`, and drop the in-memory parser and PTY master, reducing the session's active RAM footprint to 0 bytes.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-core::snapshot_compressor`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Kill a 10,000-line active agent session; verify that the ANSI buffer compresses to under 60 KB in less than 2ms, writes to SQLite, and daemon memory decreases accordingly.
 * **Downstream Req:** `LLD-STORAGE-ZSTD-SNAPSHOT-004`
 * **Downstream Test:** `TEST-VER-STORAGE-004`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

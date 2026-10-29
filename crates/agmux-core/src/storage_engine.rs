@@ -26,6 +26,7 @@ impl StorageEngine {
             return Err(StorageError::UnsupportedVersion(version));
         }
         tx.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS terminal_logs_fts USING fts5(session_id UNINDEXED, line_no UNINDEXED, timestamp UNINDEXED, content, tokenize='trigram');")?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS session_snapshots (session_id TEXT PRIMARY KEY, snapshot BLOB, compressed_size INTEGER, uncompressed_size INTEGER, timestamp INTEGER);")?;
         tx.commit()?;
         Ok(Self { connection })
     }
@@ -127,6 +128,36 @@ impl StorageEngine {
         self.connection
             .execute("DELETE FROM sessions WHERE id=?1", [id])?;
         Ok(())
+    }
+    /// Save a compressed snapshot for a session.
+    pub fn save_snapshot(
+        &self,
+        session_id: &str,
+        compressed_snapshot: &[u8],
+        uncompressed_size: usize,
+    ) -> Result<(), StorageError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.connection.execute(
+            "INSERT OR REPLACE INTO session_snapshots (session_id, snapshot, compressed_size, uncompressed_size, timestamp) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![session_id, compressed_snapshot, compressed_snapshot.len() as u64, uncompressed_size as u64, now],
+        )?;
+        Ok(())
+    }
+    /// Load a compressed snapshot for a session.
+    pub fn load_snapshot(&self, session_id: &str) -> Result<Option<Vec<u8>>, StorageError> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT snapshot FROM session_snapshots WHERE session_id = ?1")?;
+        let mut rows = stmt.query(params![session_id])?;
+        if let Some(row) = rows.next()? {
+            let blob: Vec<u8> = row.get(0)?;
+            Ok(Some(blob))
+        } else {
+            Ok(None)
+        }
     }
 }
 /// Storage failures.

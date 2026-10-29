@@ -247,6 +247,8 @@ async fn handle_client(
                         let output_db = storage.clone();
                         let fwd_session_id = session_id.clone();
                         let state_events = events.clone();
+                        let pty_fwd = pty_manager.clone();
+                        let session_clone = session.clone();
                         tokio::spawn(async move {
                             let mut output_rx = session.subscribe_output();
                             let mut exit_rx = session.subscribe_exit();
@@ -344,6 +346,27 @@ async fn handle_client(
                                             exit_code: code,
                                         }))
                                         .await;
+
+                                    // Snapshot terminal grid and drop active PTY session memory
+                                    let screen = session_clone.capture_screen();
+                                    let uncompressed_size = screen.len();
+                                    if let Ok(compressed) =
+                                        agmux_core::snapshot_compressor::compress_snapshot(&screen)
+                                    {
+                                        let db = output_db.clone();
+                                        let sid = fwd_session_id.clone();
+                                        let _ = tokio::task::spawn_blocking(move || {
+                                            if let Ok(db) = db.lock() {
+                                                let _ = db.save_snapshot(
+                                                    &sid,
+                                                    &compressed,
+                                                    uncompressed_size,
+                                                );
+                                            }
+                                        })
+                                        .await;
+                                    }
+                                    let _ = pty_fwd.remove_session(&fwd_session_id).await;
                                     break;
                                 }
                             }
@@ -405,7 +428,84 @@ async fn handle_client(
                     }
                 }
             }
+            IpcMessage::FreezeSessionRequest(req) => {
+                let session_opt = pty_manager.remove_session(&req.session_id).await;
+                let (success, compressed_size) = if let Some(session) = session_opt {
+                    session.kill();
+                    let screen = session.capture_screen();
+                    let uncompressed_size = screen.len();
+                    match agmux_core::snapshot_compressor::compress_snapshot(&screen) {
+                        Ok(compressed) => {
+                            let size = compressed.len();
+                            let db = storage.clone();
+                            let sid = req.session_id.clone();
+                            let save_res = tokio::task::spawn_blocking(move || {
+                                let db = db.lock().map_err(|e| e.to_string())?;
+                                db.save_snapshot(&sid, &compressed, uncompressed_size)
+                                    .map_err(|e| e.to_string())?;
+                                db.update_session_state(&sid, "DEAD")
+                                    .map_err(|e| e.to_string())?;
+                                Ok::<(), String>(())
+                            })
+                            .await;
+                            match save_res {
+                                Ok(Ok(())) => (true, size),
+                                _ => (false, 0),
+                            }
+                        }
+                        Err(_) => (false, 0),
+                    }
+                } else {
+                    let db = storage.clone();
+                    let sid = req.session_id.clone();
+                    let snap_res = tokio::task::spawn_blocking(move || {
+                        let db = db.lock().map_err(|e| e.to_string())?;
+                        db.load_snapshot(&sid).map_err(|e| e.to_string())
+                    })
+                    .await;
+                    match snap_res {
+                        Ok(Ok(Some(snap))) => (true, snap.len()),
+                        _ => (false, 0),
+                    }
+                };
+                out_tx
+                    .send(IpcMessage::FreezeSessionResponse(
+                        agmux_proto::FreezeSessionResponse {
+                            success,
+                            compressed_size,
+                        },
+                    ))
+                    .await?;
+            }
+            IpcMessage::ResumeSessionRequest(req) => {
+                let db = storage.clone();
+                let sid = req.session_id.clone();
+                let snap_res = tokio::task::spawn_blocking(move || {
+                    let db = db.lock().map_err(|e| e.to_string())?;
+                    db.load_snapshot(&sid).map_err(|e| e.to_string())
+                })
+                .await;
+                let (success, screen_data) = match snap_res {
+                    Ok(Ok(Some(blob))) => {
+                        match agmux_core::snapshot_compressor::decompress_snapshot(&blob) {
+                            Ok(data) => (true, data),
+                            Err(_) => (false, Vec::new()),
+                        }
+                    }
+                    _ => (false, Vec::new()),
+                };
+                out_tx
+                    .send(IpcMessage::ResumeSessionResponse(
+                        agmux_proto::ResumeSessionResponse {
+                            success,
+                            screen_data,
+                        },
+                    ))
+                    .await?;
+            }
             IpcMessage::HandshakeRequest(_)
+            | IpcMessage::FreezeSessionResponse(_)
+            | IpcMessage::ResumeSessionResponse(_)
             | IpcMessage::HandshakeResponse(_)
             | IpcMessage::SearchLogsResponse(_)
             | IpcMessage::ListSessionsResponse(_)

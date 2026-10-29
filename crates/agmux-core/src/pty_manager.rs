@@ -54,6 +54,7 @@ pub struct ActivePtySession {
     exit_rx: watch::Receiver<Option<i32>>,
     input_tx: broadcast::Sender<()>,
     initial_output: std::sync::Mutex<Option<broadcast::Receiver<Vec<u8>>>>,
+    screen_buffer: Arc<std::sync::Mutex<crate::snapshot_compressor::ScreenBuffer>>,
 }
 
 impl ActivePtySession {
@@ -86,6 +87,22 @@ impl ActivePtySession {
     /// Subscribe to the process exit event.
     pub fn subscribe_exit(&self) -> watch::Receiver<Option<i32>> {
         self.exit_rx.clone()
+    }
+
+    /// Capture current ANSI screen grid formatting.
+    pub fn capture_screen(&self) -> Vec<u8> {
+        self.screen_buffer
+            .lock()
+            .map(|sb| sb.capture_formatted())
+            .unwrap_or_default()
+    }
+
+    /// Terminate the underlying child process group.
+    pub fn kill(&self) {
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(self.pid as libc::pid_t, libc::SIGTERM);
+        }
     }
 }
 
@@ -158,6 +175,11 @@ impl PtyManager {
         let (input_tx, _) = broadcast::channel(64);
         let (exit_tx, exit_rx) = watch::channel(None);
 
+        let screen_buffer = Arc::new(std::sync::Mutex::new(
+            crate::snapshot_compressor::ScreenBuffer::new(24, 80),
+        ));
+        let screen_buf_clone = screen_buffer.clone();
+
         let output_tx_clone = output_tx.clone();
         let session_id_clone = session_id.clone();
 
@@ -170,6 +192,9 @@ impl PtyManager {
                     Ok(0) => break, // EOF reached when slave closes
                     Ok(n) => {
                         let chunk = buf[..n].to_vec();
+                        if let Ok(mut sb) = screen_buf_clone.lock() {
+                            sb.process(&chunk);
+                        }
                         if output_tx_clone.send(chunk).is_err() {
                             // No active receivers, continue buffering/reading until EOF
                         }
@@ -215,6 +240,7 @@ impl PtyManager {
             input_tx,
             exit_rx,
             initial_output: std::sync::Mutex::new(Some(output_rx)),
+            screen_buffer,
         });
 
         sessions_lock.insert(session_id, session.clone());
@@ -229,10 +255,10 @@ impl PtyManager {
             .ok_or_else(|| PtyError::SessionNotFound(session_id.to_string()))
     }
 
-    /// Remove a session from active tracking.
-    pub async fn remove_session(&self, session_id: &str) {
+    /// Remove a session from active tracking and return it if present.
+    pub async fn remove_session(&self, session_id: &str) -> Option<Arc<ActivePtySession>> {
         let mut lock = self.sessions.lock().await;
-        lock.remove(session_id);
+        lock.remove(session_id)
     }
 }
 

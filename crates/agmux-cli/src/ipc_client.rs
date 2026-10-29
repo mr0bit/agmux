@@ -213,3 +213,91 @@ pub async fn search_logs(
         other => bail!("Unexpected search response: {other:?}"),
     }
 }
+
+/// Freeze an active or finished session and persist snapshot.
+pub async fn freeze_session(
+    socket_path: &Path,
+    token: &str,
+    session_id: String,
+) -> Result<agmux_proto::FreezeSessionResponse> {
+    let stream = UnixStream::connect(socket_path)
+        .await
+        .context("Failed to connect to daemon")?;
+    let mut framed = new_framed(stream);
+    framed
+        .send(IpcMessage::HandshakeRequest(HandshakeRequest {
+            client_version: env!("CARGO_PKG_VERSION").into(),
+            token: token.into(),
+        }))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during handshake")??
+    {
+        IpcMessage::HandshakeResponse(response) if response.success => {}
+        other => bail!("Authentication failed: {other:?}"),
+    }
+    framed
+        .send(IpcMessage::FreezeSessionRequest(
+            agmux_proto::FreezeSessionRequest { session_id },
+        ))
+        .await?;
+    let response = loop {
+        let message = framed
+            .next()
+            .await
+            .context("Connection closed during freeze request")??;
+        if !matches!(message, IpcMessage::SessionStateChangedEvent(_)) {
+            break message;
+        }
+    };
+    match response {
+        IpcMessage::FreezeSessionResponse(response) => Ok(response),
+        other => bail!("Unexpected freeze response: {other:?}"),
+    }
+}
+
+/// Resume and inspect a persisted session snapshot.
+pub async fn resume_session(
+    socket_path: &Path,
+    token: &str,
+    session_id: String,
+) -> Result<agmux_proto::ResumeSessionResponse> {
+    let stream = UnixStream::connect(socket_path)
+        .await
+        .context("Failed to connect to daemon")?;
+    let mut framed = new_framed(stream);
+    framed
+        .send(IpcMessage::HandshakeRequest(HandshakeRequest {
+            client_version: env!("CARGO_PKG_VERSION").into(),
+            token: token.into(),
+        }))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during handshake")??
+    {
+        IpcMessage::HandshakeResponse(response) if response.success => {}
+        other => bail!("Authentication failed: {other:?}"),
+    }
+    framed
+        .send(IpcMessage::ResumeSessionRequest(
+            agmux_proto::ResumeSessionRequest { session_id },
+        ))
+        .await?;
+    let response = loop {
+        let message = framed
+            .next()
+            .await
+            .context("Connection closed during resume request")??;
+        if !matches!(message, IpcMessage::SessionStateChangedEvent(_)) {
+            break message;
+        }
+    };
+    match response {
+        IpcMessage::ResumeSessionResponse(response) => Ok(response),
+        other => bail!("Unexpected resume response: {other:?}"),
+    }
+}

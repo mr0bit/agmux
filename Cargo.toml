@@ -40,3 +40,5 @@ serde_json.workspace = true
 agmux-proto = { path = "crates/agmux-proto" }
 tokio.workspace = true
 futures-util.workspace = true
+rusqlite.workspace = true
+zstd = "0.14"
