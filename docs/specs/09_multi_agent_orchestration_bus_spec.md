@@ -38,11 +38,11 @@ This specification details the autonomous multi-agent orchestration primitives, 
 * **Text:** As parallel agents work in different worktrees of the same repository, the system shall canonicalize file reservation paths relative to the primary repository root and enforce directory/file prefix exclusion (e.g. reserving `src/` blocks reserving `src/lib.rs` and vice versa), preventing concurrent edits to identical files.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-daemon::file_reservation_table`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Agent A in worktree 1 reserves `crates/core/src/`; Agent B in worktree 2 attempts to reserve `crates/core/src/state.rs`. Verify that Agent B's reservation is rejected with an active reservation conflict error.
 * **Downstream Req:** `LLD-ORCH-FILE-RESERVATION-003`
 * **Downstream Test:** `TEST-VER-ORCH-003`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

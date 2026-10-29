@@ -35,6 +35,23 @@ enum Commands {
         #[command(subcommand)]
         command: LockCommand,
     },
+    /// Reserve files or directories to prevent collision across worktrees.
+    Reserve {
+        paths: Vec<String>,
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// Release reserved files or directories.
+    Release {
+        paths: Vec<String>,
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// List active file reservations.
+    Reservations {
+        #[arg(long)]
+        json: bool,
+    },
     /// Send a message to another session.
     Send { target_id: String, message: String },
     /// Send raw text input to an active session PTY.
@@ -322,6 +339,88 @@ async fn main() -> Result<()> {
                 }
             }
         },
+
+        Some(Commands::Reserve { paths, session }) => {
+            let cwd = std::env::current_dir()?;
+            let canonical_paths: Vec<String> = paths
+                .iter()
+                .map(|p| agmux_cli::ipc_client::canonicalize_repo_path(p, &cwd))
+                .collect();
+            let sid = session
+                .or_else(|| std::env::var("AGMUX_SESSION_ID").ok())
+                .unwrap_or_else(|| format!("cli-{}", std::process::id()));
+            let resp = agmux_cli::ipc_client::reserve_files(
+                &socket_path,
+                &token,
+                sid.clone(),
+                canonical_paths.clone(),
+            )
+            .await?;
+            if resp.success {
+                println!(
+                    "Reserved {} path(s) for session '{}'",
+                    canonical_paths.len(),
+                    sid
+                );
+            } else {
+                anyhow::bail!(
+                    "{}",
+                    resp.error
+                        .unwrap_or_else(|| "Active reservation conflict".into())
+                );
+            }
+        }
+        Some(Commands::Release { paths, session }) => {
+            let cwd = std::env::current_dir()?;
+            let canonical_paths: Vec<String> = paths
+                .iter()
+                .map(|p| agmux_cli::ipc_client::canonicalize_repo_path(p, &cwd))
+                .collect();
+            let sid = session
+                .or_else(|| std::env::var("AGMUX_SESSION_ID").ok())
+                .unwrap_or_else(|| format!("cli-{}", std::process::id()));
+            let resp = agmux_cli::ipc_client::release_files(
+                &socket_path,
+                &token,
+                sid.clone(),
+                canonical_paths,
+            )
+            .await?;
+            if resp.success {
+                println!(
+                    "Released {} reservation(s) for session '{}'",
+                    resp.released_count, sid
+                );
+            } else {
+                anyhow::bail!(
+                    "{}",
+                    resp.error
+                        .unwrap_or_else(|| "Failed to release reservations".into())
+                );
+            }
+        }
+        Some(Commands::Reservations { json }) => {
+            let resp = agmux_cli::ipc_client::list_reservations(&socket_path, &token).await?;
+            if let Some(err) = resp.error {
+                anyhow::bail!("{err}");
+            }
+            if json {
+                println!("{}", serde_json::to_string(&resp.reservations)?);
+            } else if resp.reservations.is_empty() {
+                println!("No active file reservations");
+            } else {
+                println!(
+                    "{:<40} {:<24} ACQUIRED_AT",
+                    "RESERVED PATH", "HOLDER SESSION"
+                );
+                for r in resp.reservations {
+                    println!(
+                        "{:<40} {:<24} {}",
+                        r.path, r.holder_session_id, r.acquired_at
+                    );
+                }
+            }
+        }
 
         Some(Commands::Review { command }) => {
             use agmux_proto::*;

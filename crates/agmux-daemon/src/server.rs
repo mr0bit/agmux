@@ -79,6 +79,8 @@ impl DaemonServer {
         let (events, _) = tokio::sync::broadcast::channel::<SessionStateChangedEvent>(256);
 
         let lock_manager = crate::lock_manager::LockManager::new(storage.clone());
+        let file_reservations =
+            crate::file_reservation_table::FileReservationTable::new(storage.clone());
 
         loop {
             match listener.accept().await {
@@ -88,6 +90,7 @@ impl DaemonServer {
                     let storage = storage.clone();
                     let events = events.clone();
                     let lock_manager = lock_manager.clone();
+                    let file_reservations = file_reservations.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_client(
                             stream,
@@ -96,6 +99,7 @@ impl DaemonServer {
                             storage,
                             events,
                             lock_manager,
+                            file_reservations,
                         )
                         .await
                         {
@@ -119,6 +123,7 @@ async fn handle_client(
     storage: Arc<std::sync::Mutex<agmux_core::storage_engine::StorageEngine>>,
     events: tokio::sync::broadcast::Sender<SessionStateChangedEvent>,
     lock_manager: crate::lock_manager::LockManager,
+    file_reservations: crate::file_reservation_table::FileReservationTable,
 ) -> Result<()> {
     let framed = new_framed(stream);
     let (mut sink, mut reader) = framed.split();
@@ -313,6 +318,7 @@ async fn handle_client(
                         let pty_fwd = pty_manager.clone();
                         let session_clone = session.clone();
                         let lock_mgr_fwd = lock_manager.clone();
+                        let file_res_fwd = file_reservations.clone();
                         tokio::spawn(async move {
                             let mut output_rx = session.subscribe_output();
                             let mut exit_rx = session.subscribe_exit();
@@ -413,8 +419,9 @@ async fn handle_client(
                                         }))
                                         .await;
 
-                                    // Evict named locks held by the session and wake queued waiters
+                                    // Evict named locks and file reservations held by the session
                                     lock_mgr_fwd.evict_session(&fwd_session_id).await;
+                                    file_res_fwd.evict_session(&fwd_session_id).await;
 
                                     // Snapshot terminal grid and drop active PTY session memory
                                     let screen = session_clone.capture_screen();
@@ -778,6 +785,7 @@ async fn handle_client(
                 let response = match result {
                     Ok(Ok(stash_created)) => {
                         lock_manager.evict_session(&req.session_id).await;
+                        file_reservations.evict_session(&req.session_id).await;
                         if let Some(session) = pty_manager.remove_session(&req.session_id).await {
                             session.kill();
                         }
@@ -817,6 +825,101 @@ async fn handle_client(
                         sessions,
                     }))
                     .await?;
+            }
+            IpcMessage::ReserveFilesRequest(req) => {
+                let res_table = file_reservations.clone();
+                match res_table.reserve(&req.session_id, &req.paths).await {
+                    Ok(Ok(())) => {
+                        out_tx
+                            .send(IpcMessage::ReserveFilesResponse(
+                                agmux_proto::ReserveFilesResponse {
+                                    success: true,
+                                    conflicting_path: None,
+                                    holder_session_id: None,
+                                    error: None,
+                                },
+                            ))
+                            .await?;
+                    }
+                    Ok(Err((conflict, holder))) => {
+                        out_tx
+                            .send(IpcMessage::ReserveFilesResponse(
+                                agmux_proto::ReserveFilesResponse {
+                                    success: false,
+                                    conflicting_path: Some(conflict.clone()),
+                                    holder_session_id: Some(holder.clone()),
+                                    error: Some(format!(
+                                        "Active reservation conflict: path overlaps with '{conflict}' held by session '{holder}'"
+                                    )),
+                                },
+                            ))
+                            .await?;
+                    }
+                    Err(error) => {
+                        out_tx
+                            .send(IpcMessage::ReserveFilesResponse(
+                                agmux_proto::ReserveFilesResponse {
+                                    success: false,
+                                    conflicting_path: None,
+                                    holder_session_id: None,
+                                    error: Some(error),
+                                },
+                            ))
+                            .await?;
+                    }
+                }
+            }
+            IpcMessage::ReleaseFilesRequest(req) => {
+                let res_table = file_reservations.clone();
+                match res_table.release(&req.session_id, &req.paths).await {
+                    Ok(released_count) => {
+                        out_tx
+                            .send(IpcMessage::ReleaseFilesResponse(
+                                agmux_proto::ReleaseFilesResponse {
+                                    success: true,
+                                    released_count,
+                                    error: None,
+                                },
+                            ))
+                            .await?;
+                    }
+                    Err(error) => {
+                        out_tx
+                            .send(IpcMessage::ReleaseFilesResponse(
+                                agmux_proto::ReleaseFilesResponse {
+                                    success: false,
+                                    released_count: 0,
+                                    error: Some(error),
+                                },
+                            ))
+                            .await?;
+                    }
+                }
+            }
+            IpcMessage::ListReservationsRequest(_) => {
+                let res_table = file_reservations.clone();
+                match res_table.list().await {
+                    Ok(reservations) => {
+                        out_tx
+                            .send(IpcMessage::ListReservationsResponse(
+                                agmux_proto::ListReservationsResponse {
+                                    reservations,
+                                    error: None,
+                                },
+                            ))
+                            .await?;
+                    }
+                    Err(error) => {
+                        out_tx
+                            .send(IpcMessage::ListReservationsResponse(
+                                agmux_proto::ListReservationsResponse {
+                                    reservations: Vec::new(),
+                                    error: Some(error),
+                                },
+                            ))
+                            .await?;
+                    }
+                }
             }
             IpcMessage::AcquireLockRequest(req) => {
                 let lock_mgr = lock_manager.clone();
@@ -1078,7 +1181,10 @@ async fn handle_client(
                     .send(IpcMessage::AcknowledgeSessionResponse(response))
                     .await?;
             }
-            IpcMessage::AcquireLockResponse(_)
+            IpcMessage::ReserveFilesResponse(_)
+            | IpcMessage::ReleaseFilesResponse(_)
+            | IpcMessage::ListReservationsResponse(_)
+            | IpcMessage::AcquireLockResponse(_)
             | IpcMessage::ReleaseLockResponse(_)
             | IpcMessage::ListLocksResponse(_)
             | IpcMessage::SendMessageResponse(_)

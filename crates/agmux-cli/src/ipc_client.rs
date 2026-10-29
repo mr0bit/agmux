@@ -1,7 +1,7 @@
 //! Framed IPC client routing CLI subcommands and streaming terminal I/O.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
@@ -537,6 +537,180 @@ pub async fn list_locks(socket_path: &Path, token: &str) -> Result<agmux_proto::
             .context("Connection closed waiting for lock list response")??
         {
             IpcMessage::ListLocksResponse(resp) => return Ok(resp),
+            IpcMessage::SessionStateChangedEvent(_) => continue,
+            other => bail!("Unexpected response: {other:?}"),
+        }
+    }
+}
+
+/// Canonicalize a path relative to the primary git repository root, even across worktrees.
+pub fn canonicalize_repo_path(path_str: &str, cwd: &Path) -> String {
+    let trimmed = path_str.trim();
+    if trimmed.is_empty() || trimmed == "." || trimmed == "./" {
+        return String::new();
+    }
+
+    let primary_root = (|| -> Option<PathBuf> {
+        let output = std::process::Command::new("git")
+            .current_dir(cwd)
+            .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let common = String::from_utf8(output.stdout).ok()?;
+            let common_path = PathBuf::from(common.trim());
+            return common_path.parent().map(|p| p.to_path_buf());
+        }
+        let toplevel = std::process::Command::new("git")
+            .current_dir(cwd)
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .ok()?;
+        if toplevel.status.success() {
+            let top = String::from_utf8(toplevel.stdout).ok()?;
+            return Some(PathBuf::from(top.trim()));
+        }
+        None
+    })();
+
+    let path = Path::new(trimmed);
+    let abs_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+
+    if let Some(root) = primary_root {
+        if let Ok(rel) = abs_path.strip_prefix(&root) {
+            let rel_str = rel.to_string_lossy();
+            if let Some(stripped) = rel_str.strip_prefix(".agmux-worktrees/") {
+                if let Some(idx) = stripped.find('/') {
+                    return stripped[idx + 1..].trim_matches('/').to_string();
+                }
+            } else {
+                return rel_str.trim_matches('/').to_string();
+            }
+        }
+    }
+
+    trimmed
+        .trim_start_matches("./")
+        .trim_matches('/')
+        .to_string()
+}
+
+/// Request file reservations over authenticated IPC.
+pub async fn reserve_files(
+    socket_path: &Path,
+    token: &str,
+    session_id: String,
+    paths: Vec<String>,
+) -> Result<agmux_proto::ReserveFilesResponse> {
+    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    framed
+        .send(IpcMessage::HandshakeRequest(HandshakeRequest {
+            client_version: env!("CARGO_PKG_VERSION").into(),
+            token: token.into(),
+        }))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during handshake")??
+    {
+        IpcMessage::HandshakeResponse(response) if response.success => {}
+        other => bail!("Authentication failed: {other:?}"),
+    }
+    framed
+        .send(IpcMessage::ReserveFilesRequest(
+            agmux_proto::ReserveFilesRequest { session_id, paths },
+        ))
+        .await?;
+    loop {
+        match framed
+            .next()
+            .await
+            .context("Connection closed waiting for reserve response")??
+        {
+            IpcMessage::ReserveFilesResponse(resp) => return Ok(resp),
+            IpcMessage::SessionStateChangedEvent(_) => continue,
+            other => bail!("Unexpected response: {other:?}"),
+        }
+    }
+}
+
+/// Request release of file reservations over authenticated IPC.
+pub async fn release_files(
+    socket_path: &Path,
+    token: &str,
+    session_id: String,
+    paths: Vec<String>,
+) -> Result<agmux_proto::ReleaseFilesResponse> {
+    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    framed
+        .send(IpcMessage::HandshakeRequest(HandshakeRequest {
+            client_version: env!("CARGO_PKG_VERSION").into(),
+            token: token.into(),
+        }))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during handshake")??
+    {
+        IpcMessage::HandshakeResponse(response) if response.success => {}
+        other => bail!("Authentication failed: {other:?}"),
+    }
+    framed
+        .send(IpcMessage::ReleaseFilesRequest(
+            agmux_proto::ReleaseFilesRequest { session_id, paths },
+        ))
+        .await?;
+    loop {
+        match framed
+            .next()
+            .await
+            .context("Connection closed waiting for release response")??
+        {
+            IpcMessage::ReleaseFilesResponse(resp) => return Ok(resp),
+            IpcMessage::SessionStateChangedEvent(_) => continue,
+            other => bail!("Unexpected response: {other:?}"),
+        }
+    }
+}
+
+/// Request active file reservations list over authenticated IPC.
+pub async fn list_reservations(
+    socket_path: &Path,
+    token: &str,
+) -> Result<agmux_proto::ListReservationsResponse> {
+    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    framed
+        .send(IpcMessage::HandshakeRequest(HandshakeRequest {
+            client_version: env!("CARGO_PKG_VERSION").into(),
+            token: token.into(),
+        }))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during handshake")??
+    {
+        IpcMessage::HandshakeResponse(response) if response.success => {}
+        other => bail!("Authentication failed: {other:?}"),
+    }
+    framed
+        .send(IpcMessage::ListReservationsRequest(
+            agmux_proto::ListReservationsRequest {},
+        ))
+        .await?;
+    loop {
+        match framed
+            .next()
+            .await
+            .context("Connection closed waiting for reservations list")??
+        {
+            IpcMessage::ListReservationsResponse(resp) => return Ok(resp),
             IpcMessage::SessionStateChangedEvent(_) => continue,
             other => bail!("Unexpected response: {other:?}"),
         }

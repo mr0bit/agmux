@@ -3,6 +3,19 @@ use agmux_proto::{ReviewComment, SearchMatch, SessionInfo};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 
+/// Helper to determine if two relative file paths overlap hierarchically.
+pub fn path_conflicts(a: &str, b: &str) -> bool {
+    let clean_a = a.trim_matches('/');
+    let clean_b = b.trim_matches('/');
+    if clean_a.is_empty() || clean_b.is_empty() {
+        return true;
+    }
+    if clean_a == clean_b {
+        return true;
+    }
+    clean_a.starts_with(&format!("{clean_b}/")) || clean_b.starts_with(&format!("{clean_a}/"))
+}
+
 /// SQLite repository. The daemon owns the connection.
 pub struct StorageEngine {
     connection: Connection,
@@ -35,6 +48,7 @@ impl StorageEngine {
         tx.execute_batch("CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, file_path TEXT NOT NULL, line_number INTEGER NOT NULL, line_hash TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_review_session_status ON review_comments(session_id, status); CREATE TABLE IF NOT EXISTS review_rounds (session_id TEXT NOT NULL, round_number INTEGER NOT NULL, PRIMARY KEY(session_id, round_number));")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS queued_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, target_session_id TEXT NOT NULL, message TEXT NOT NULL, created_at INTEGER NOT NULL, delivered_at INTEGER); CREATE INDEX IF NOT EXISTS idx_queued_messages ON queued_messages(target_session_id, delivered_at);")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS named_locks (name TEXT PRIMARY KEY, holder_session_id TEXT NOT NULL, acquired_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_named_locks_holder ON named_locks(holder_session_id);")?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS file_reservations (path TEXT PRIMARY KEY, holder_session_id TEXT NOT NULL, acquired_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_file_reservations_holder ON file_reservations(holder_session_id);")?;
         tx.commit()?;
         Ok(Self { connection })
     }
@@ -133,6 +147,68 @@ impl StorageEngine {
     pub fn list_locks(&self) -> Result<Vec<(String, String, u64)>, StorageError> {
         let mut stmt = self.connection.prepare(
             "SELECT name, holder_session_id, acquired_at FROM named_locks ORDER BY acquired_at ASC",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+    /// Attempt to reserve a file or directory path. Returns Ok(Ok(())) on success,
+    /// or Ok(Err((conflicting_path, holder_session))) if an active conflicting reservation exists.
+    pub fn reserve_file(
+        &self,
+        path: &str,
+        session_id: &str,
+    ) -> Result<Result<(), (String, String)>, StorageError> {
+        let clean_path = path.trim_matches('/');
+        let mut stmt = self
+            .connection
+            .prepare("SELECT path, holder_session_id FROM file_reservations")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (existing_path, holder) = row?;
+            if path_conflicts(&existing_path, clean_path) {
+                if holder == session_id {
+                    // Already held by this session
+                    return Ok(Ok(()));
+                } else {
+                    return Ok(Err((existing_path, holder)));
+                }
+            }
+        }
+        self.connection.execute(
+            "INSERT INTO file_reservations (path, holder_session_id, acquired_at) VALUES (?1, ?2, unixepoch())",
+            params![clean_path, session_id],
+        )?;
+        Ok(Ok(()))
+    }
+    /// Release a specific reserved path held by session_id.
+    pub fn release_file(&self, path: &str, session_id: &str) -> Result<bool, StorageError> {
+        let clean_path = path.trim_matches('/');
+        let count = self.connection.execute(
+            "DELETE FROM file_reservations WHERE path = ?1 AND holder_session_id = ?2",
+            params![clean_path, session_id],
+        )?;
+        Ok(count > 0)
+    }
+    /// Release all file reservations held by a session.
+    pub fn release_session_reservations(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<String>, StorageError> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT path FROM file_reservations WHERE holder_session_id = ?1")?;
+        let rows = stmt.query_map([session_id], |r| r.get(0))?;
+        let paths = rows.collect::<Result<Vec<String>, _>>()?;
+        self.connection.execute(
+            "DELETE FROM file_reservations WHERE holder_session_id = ?1",
+            [session_id],
+        )?;
+        Ok(paths)
+    }
+    /// List all currently active file reservations.
+    pub fn list_reservations(&self) -> Result<Vec<(String, String, u64)>, StorageError> {
+        let mut stmt = self.connection.prepare(
+            "SELECT path, holder_session_id, acquired_at FROM file_reservations ORDER BY acquired_at ASC",
         )?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)

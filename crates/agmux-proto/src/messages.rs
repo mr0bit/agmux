@@ -359,10 +359,66 @@ pub struct ListLocksResponse {
     pub error: Option<String>,
 }
 
+/// Request to reserve paths.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReserveFilesRequest {
+    pub session_id: String,
+    pub paths: Vec<String>,
+}
+
+/// Result of reserving paths.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReserveFilesResponse {
+    pub success: bool,
+    pub conflicting_path: Option<String>,
+    pub holder_session_id: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Request to release reserved paths.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseFilesRequest {
+    pub session_id: String,
+    pub paths: Vec<String>,
+}
+
+/// Result of releasing paths.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseFilesResponse {
+    pub success: bool,
+    pub released_count: usize,
+    pub error: Option<String>,
+}
+
+/// Request active file reservations.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListReservationsRequest {}
+
+/// Active file reservation entry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileReservationEntry {
+    pub path: String,
+    pub holder_session_id: String,
+    pub acquired_at: u64,
+}
+
+/// List of active file reservations.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListReservationsResponse {
+    pub reservations: Vec<FileReservationEntry>,
+    pub error: Option<String>,
+}
+
 /// Unified framed IPC message envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload")]
 pub enum IpcMessage {
+    ReserveFilesRequest(ReserveFilesRequest),
+    ReserveFilesResponse(ReserveFilesResponse),
+    ReleaseFilesRequest(ReleaseFilesRequest),
+    ReleaseFilesResponse(ReleaseFilesResponse),
+    ListReservationsRequest(ListReservationsRequest),
+    ListReservationsResponse(ListReservationsResponse),
     AcquireLockRequest(AcquireLockRequest),
     AcquireLockResponse(AcquireLockResponse),
     ReleaseLockRequest(ReleaseLockRequest),

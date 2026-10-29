@@ -1,7 +1,7 @@
 ---
 id: TASK-19
 title: 'Tracer Bullet: Hierarchical File Reservations & Prefix Collision Detection'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-10-29T01:25:00Z'
 labels:
@@ -27,8 +27,8 @@ Implements `REQ-ORCH-FILE-RESERVATION-003`: coordinates parallel agents working 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 File reservation commands `agmux reserve <path>...` and release supported via CLI and IPC
-- [ ] #2 Reservation paths canonicalized relative to git repo root regardless of worktree location
-- [ ] #3 Prefix conflict detection rejects overlapping file and directory reservations
-- [ ] #4 Integration test asserts cross-worktree reservation conflict rejection and clean release
+- [x] #1 File reservation commands `agmux reserve <path>...` and release supported via CLI and IPC
+- [x] #2 Reservation paths canonicalized relative to git repo root regardless of worktree location
+- [x] #3 Prefix conflict detection rejects overlapping file and directory reservations
+- [x] #4 Integration test asserts cross-worktree reservation conflict rejection and clean release
 <!-- AC:END -->
