@@ -38,11 +38,11 @@ This specification details the Git worktree provisioning engine (`gix`/`git2`), 
 * **Text:** As a user reviewing agent code changes (`Ctrl+R`), the system shall compute diffs across 5 scopes: `Session Diff` (changes since the session's initial `start_git_sha`), `Full Uncommitted`, `Versus Target Branch`, `Last Commit`, and `Staged`, rendering side-by-side or unified diff views.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-core::diff_calculator`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Create changes in an agent session across 3 commits; enter review mode (`Ctrl+R`); switch between `Session Diff` and `Last Commit`. Verify that diff hunks correctly reflect the chosen comparison base without leaving the TUI.
 * **Downstream Req:** `LLD-GIT-REVIEW-DIFF-ENGINE-003`
 * **Downstream Test:** `TEST-VER-GIT-003`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

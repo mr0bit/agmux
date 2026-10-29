@@ -156,6 +156,115 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             frame.render_widget(Paragraph::new(input.as_str()), rows[0]);
             frame.render_widget(Paragraph::new("[Enter] Submit | [Esc] Cancel"), rows[1]);
         }
+        ModalState::ReviewDiff {
+            scope,
+            selected_hunk,
+            files,
+            ..
+        } => {
+            let area = centered(frame.area(), 90, 22);
+            frame.render_widget(Clear, area);
+            let scope_title = match scope {
+                agmux_proto::DiffScope::SessionDiff => "Session Diff (since start)",
+                agmux_proto::DiffScope::FullUncommitted => "Full Uncommitted",
+                agmux_proto::DiffScope::VersusTarget => "Versus Target Branch",
+                agmux_proto::DiffScope::LastCommit => "Last Commit (HEAD~1)",
+                agmux_proto::DiffScope::Staged => "Staged (Index)",
+            };
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" Review Diff: {scope_title} (Ctrl+R) "));
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ])
+                .split(inner);
+
+            let scopes = [
+                (agmux_proto::DiffScope::SessionDiff, "1:Session"),
+                (agmux_proto::DiffScope::FullUncommitted, "2:Uncommitted"),
+                (agmux_proto::DiffScope::VersusTarget, "3:Target"),
+                (agmux_proto::DiffScope::LastCommit, "4:LastCommit"),
+                (agmux_proto::DiffScope::Staged, "5:Staged"),
+            ];
+            let mut scope_spans = Vec::new();
+            for (s, label) in scopes {
+                let active = s == *scope;
+                scope_spans.push(Span::styled(
+                    format!(" [{label}] "),
+                    if active {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().add_modifier(Modifier::DIM)
+                    },
+                ));
+            }
+            frame.render_widget(Paragraph::new(Line::from(scope_spans)), rows[0]);
+
+            let mut diff_lines = Vec::new();
+            if files.is_empty() {
+                diff_lines.push(Line::styled(
+                    "No changes in this review scope.",
+                    Style::default().add_modifier(Modifier::DIM),
+                ));
+            } else {
+                let mut current_hunk_index = 0;
+                for file in files {
+                    let old = file.old_path.as_deref().unwrap_or("/dev/null");
+                    let new = file.new_path.as_deref().unwrap_or("/dev/null");
+                    diff_lines.push(Line::styled(
+                        format!("diff --git a/{old} b/{new}"),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    for hunk in &file.hunks {
+                        let is_selected = current_hunk_index == *selected_hunk;
+                        diff_lines.push(Line::styled(
+                            format!("{} {}", if is_selected { "▶" } else { " " }, hunk.header),
+                            if is_selected {
+                                Style::default()
+                                    .fg(Color::Magenta)
+                                    .add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default().fg(Color::Blue)
+                            },
+                        ));
+                        for line in &hunk.lines {
+                            let (style, prefix) = match line.kind {
+                                agmux_proto::DiffLineType::Added => {
+                                    (Style::default().fg(Color::Green), "+")
+                                }
+                                agmux_proto::DiffLineType::Removed => {
+                                    (Style::default().fg(Color::Red), "-")
+                                }
+                                agmux_proto::DiffLineType::Context => (Style::default(), " "),
+                                agmux_proto::DiffLineType::NoNewline => {
+                                    (Style::default().add_modifier(Modifier::DIM), "\\")
+                                }
+                            };
+                            diff_lines
+                                .push(Line::styled(format!("{prefix}{}", line.content), style));
+                        }
+                        current_hunk_index += 1;
+                    }
+                }
+            }
+            frame.render_widget(Paragraph::new(diff_lines), rows[1]);
+
+            let footer = Line::from(vec![Span::raw(
+                "[Tab / 1-5] Switch Scope | [↑/↓] Hunk Nav | [Esc] Close",
+            )]);
+            frame.render_widget(Paragraph::new(footer), rows[2]);
+        }
     }
 }
 

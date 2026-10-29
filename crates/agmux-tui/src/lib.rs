@@ -37,6 +37,12 @@ pub enum ModalState {
     QuickPrompt {
         input: String,
     },
+    ReviewDiff {
+        session_id: String,
+        scope: agmux_proto::DiffScope,
+        selected_hunk: usize,
+        files: Vec<agmux_proto::FileDiff>,
+    },
 }
 
 /// State displayed by the interactive viewport.
@@ -93,6 +99,7 @@ impl App {
     pub fn palette_actions(&self, query: &str) -> Vec<String> {
         let mut actions = vec![
             "New Session".to_owned(),
+            "Review Changes (Ctrl+R)".to_owned(),
             "Freeze Session".to_owned(),
             "Toggle Attention Filter".to_owned(),
             "Quit Agmux".to_owned(),
@@ -124,6 +131,23 @@ impl App {
                     KeyCode::F(1) | KeyCode::Char(':') => return self.open_palette(),
                     KeyCode::Char('p') if modifiers.contains(KeyModifiers::CONTROL) => {
                         return self.open_palette();
+                    }
+                    KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        if let Some(session) = self.sessions.get(self.selected_index) {
+                            let session_id = session.session_id.clone();
+                            self.pending_message =
+                                Some(IpcMessage::GetDiffRequest(agmux_proto::GetDiffRequest {
+                                    session_id: session_id.clone(),
+                                    scope: agmux_proto::DiffScope::SessionDiff,
+                                    target: None,
+                                }));
+                            return self.modal = ModalState::ReviewDiff {
+                                session_id,
+                                scope: agmux_proto::DiffScope::SessionDiff,
+                                selected_hunk: 0,
+                                files: Vec::new(),
+                            };
+                        }
                     }
                     KeyCode::Char(' ') => {
                         return self.modal = ModalState::QuickPrompt {
@@ -236,6 +260,104 @@ impl App {
                 }
                 ModalState::QuickPrompt { input }
             }
+            ModalState::ReviewDiff {
+                session_id,
+                mut scope,
+                mut selected_hunk,
+                files,
+            } => {
+                match key {
+                    KeyCode::Esc | KeyCode::Char('q') => return,
+                    KeyCode::Tab => {
+                        scope = match scope {
+                            agmux_proto::DiffScope::SessionDiff => {
+                                agmux_proto::DiffScope::FullUncommitted
+                            }
+                            agmux_proto::DiffScope::FullUncommitted => {
+                                agmux_proto::DiffScope::VersusTarget
+                            }
+                            agmux_proto::DiffScope::VersusTarget => {
+                                agmux_proto::DiffScope::LastCommit
+                            }
+                            agmux_proto::DiffScope::LastCommit => agmux_proto::DiffScope::Staged,
+                            agmux_proto::DiffScope::Staged => agmux_proto::DiffScope::SessionDiff,
+                        };
+                        selected_hunk = 0;
+                        self.pending_message =
+                            Some(IpcMessage::GetDiffRequest(agmux_proto::GetDiffRequest {
+                                session_id: session_id.clone(),
+                                scope,
+                                target: None,
+                            }));
+                    }
+                    KeyCode::Char('1') => {
+                        scope = agmux_proto::DiffScope::SessionDiff;
+                        selected_hunk = 0;
+                        self.pending_message =
+                            Some(IpcMessage::GetDiffRequest(agmux_proto::GetDiffRequest {
+                                session_id: session_id.clone(),
+                                scope,
+                                target: None,
+                            }));
+                    }
+                    KeyCode::Char('2') => {
+                        scope = agmux_proto::DiffScope::FullUncommitted;
+                        selected_hunk = 0;
+                        self.pending_message =
+                            Some(IpcMessage::GetDiffRequest(agmux_proto::GetDiffRequest {
+                                session_id: session_id.clone(),
+                                scope,
+                                target: None,
+                            }));
+                    }
+                    KeyCode::Char('3') => {
+                        scope = agmux_proto::DiffScope::VersusTarget;
+                        selected_hunk = 0;
+                        self.pending_message =
+                            Some(IpcMessage::GetDiffRequest(agmux_proto::GetDiffRequest {
+                                session_id: session_id.clone(),
+                                scope,
+                                target: None,
+                            }));
+                    }
+                    KeyCode::Char('4') => {
+                        scope = agmux_proto::DiffScope::LastCommit;
+                        selected_hunk = 0;
+                        self.pending_message =
+                            Some(IpcMessage::GetDiffRequest(agmux_proto::GetDiffRequest {
+                                session_id: session_id.clone(),
+                                scope,
+                                target: None,
+                            }));
+                    }
+                    KeyCode::Char('5') => {
+                        scope = agmux_proto::DiffScope::Staged;
+                        selected_hunk = 0;
+                        self.pending_message =
+                            Some(IpcMessage::GetDiffRequest(agmux_proto::GetDiffRequest {
+                                session_id: session_id.clone(),
+                                scope,
+                                target: None,
+                            }));
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        let total_hunks: usize = files.iter().map(|f| f.hunks.len()).sum();
+                        if total_hunks > 0 {
+                            selected_hunk = (selected_hunk + 1).min(total_hunks - 1);
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        selected_hunk = selected_hunk.saturating_sub(1);
+                    }
+                    _ => {}
+                }
+                ModalState::ReviewDiff {
+                    session_id,
+                    scope,
+                    selected_hunk,
+                    files,
+                }
+            }
         };
     }
 
@@ -294,6 +416,23 @@ impl App {
                         Some(IpcMessage::FreezeSessionRequest(FreezeSessionRequest {
                             session_id: session.session_id.clone(),
                         }));
+                }
+            }
+            "Review Changes (Ctrl+R)" => {
+                if let Some(session) = self.sessions.get(self.selected_index) {
+                    let session_id = session.session_id.clone();
+                    self.pending_message =
+                        Some(IpcMessage::GetDiffRequest(agmux_proto::GetDiffRequest {
+                            session_id: session_id.clone(),
+                            scope: agmux_proto::DiffScope::SessionDiff,
+                            target: None,
+                        }));
+                    self.modal = ModalState::ReviewDiff {
+                        session_id,
+                        scope: agmux_proto::DiffScope::SessionDiff,
+                        selected_hunk: 0,
+                        files: Vec::new(),
+                    };
                 }
             }
             "New Session" => {
@@ -419,6 +558,11 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                 }
                 IpcMessage::FreezeSessionResponse(_) => {
                     ipc.send(IpcMessage::ListSessionsRequest(ListSessionsRequest {})).await?;
+                }
+                IpcMessage::GetDiffResponse(response) => {
+                    if let ModalState::ReviewDiff { files, .. } = &mut app.modal {
+                        *files = response.files;
+                    }
                 }
                 IpcMessage::ListSessionsResponse(response) => {
                     app.sessions = response.sessions;

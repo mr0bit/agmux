@@ -242,6 +242,17 @@ async fn handle_client(
                     .unwrap_or(std::env::current_dir()?)
                     .display()
                     .to_string();
+                let git_cwd = cwd_text.clone();
+                let start_sha = tokio::task::spawn_blocking(move || {
+                    std::process::Command::new("git")
+                        .current_dir(git_cwd)
+                        .args(["rev-parse", "--verify", "HEAD"])
+                        .output()
+                        .ok()
+                        .filter(|o| o.status.success())
+                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+                })
+                .await?;
                 match pty_manager
                     .spawn(session_id.clone(), req.command, req.args, cwd, port)
                     .await
@@ -259,9 +270,9 @@ async fn handle_client(
                         };
                         let db = storage.clone();
                         let inserted = tokio::task::spawn_blocking(move || {
-                            db.lock()
-                                .map_err(|e| e.to_string())?
-                                .insert_session(&info)
+                            let db = db.lock().map_err(|e| e.to_string())?;
+                            db.insert_session(&info).map_err(|e| e.to_string())?;
+                            db.set_start_git_sha(&info.session_id, start_sha.as_deref())
                                 .map_err(|e| e.to_string())
                         })
                         .await?;
@@ -422,6 +433,38 @@ async fn handle_client(
                         let _ = out_tx.send(resp).await;
                     }
                 }
+            }
+            IpcMessage::GetDiffRequest(req) => {
+                let db = storage.clone();
+                let result = tokio::task::spawn_blocking(move || -> Result<_, String> {
+                    let (session, baseline) = {
+                        let db = db.lock().map_err(|e| e.to_string())?;
+                        let session = db
+                            .get_session(&req.session_id)
+                            .map_err(|e| e.to_string())?
+                            .ok_or_else(|| format!("Session not found: {}", req.session_id))?;
+                        let baseline = db
+                            .start_git_sha(&req.session_id)
+                            .map_err(|e| e.to_string())?;
+                        (session, baseline)
+                    };
+                    agmux_core::diff_calculator::calculate_diff(
+                        std::path::Path::new(&session.cwd),
+                        req.scope,
+                        baseline.as_deref(),
+                        req.target.as_deref(),
+                    )
+                    .map_err(|e| e.to_string())
+                })
+                .await?;
+                let response = match result {
+                    Ok(files) => agmux_proto::GetDiffResponse { files, error: None },
+                    Err(error) => agmux_proto::GetDiffResponse {
+                        files: Vec::new(),
+                        error: Some(error),
+                    },
+                };
+                out_tx.send(IpcMessage::GetDiffResponse(response)).await?;
             }
             IpcMessage::SearchLogsRequest(req) => {
                 let db = storage.clone();
@@ -654,6 +697,7 @@ async fn handle_client(
                     .await?;
             }
             IpcMessage::HandshakeRequest(_)
+            | IpcMessage::GetDiffResponse(_)
             | IpcMessage::RemoveSessionResponse(_)
             | IpcMessage::FreezeSessionResponse(_)
             | IpcMessage::ResumeSessionResponse(_)

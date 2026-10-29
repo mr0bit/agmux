@@ -1,8 +1,10 @@
 ---
 id: TASK-12
 title: 'Tracer Bullet: 5-Scope Review Diff Engine & Hunk Navigation'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@codex'
+  - '@agy'
 created_date: '2026-10-29T00:48:00Z'
 labels:
   - tracer-bullet
@@ -27,8 +29,8 @@ Computes diff hunks across 5 review scopes (Session Diff since start SHA, Full U
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Diff calculator computes file diffs and hunks across specified scope and base commit
-- [ ] #2 CLI and IPC support querying diff for an active session
-- [ ] #3 Correctly parses modified, added, and deleted files with line number mappings
-- [ ] #4 Integration test verifies hunk computation against multi-commit repository fixture
+- [x] #1 Diff calculator computes file diffs and hunks across specified scope and base commit
+- [x] #2 CLI and IPC support querying diff for an active session
+- [x] #3 Correctly parses modified, added, and deleted files with line number mappings
+- [x] #4 Integration test verifies hunk computation against multi-commit repository fixture
 <!-- AC:END -->

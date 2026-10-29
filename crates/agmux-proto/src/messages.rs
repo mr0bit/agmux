@@ -169,10 +169,66 @@ pub struct RemoveSessionResponse {
     pub error: Option<String>,
 }
 
+/// Comparison selected for a review diff.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DiffScope {
+    SessionDiff,
+    FullUncommitted,
+    VersusTarget,
+    LastCommit,
+    Staged,
+}
+
+/// One changed file and its ordered hunks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileDiff {
+    pub old_path: Option<String>,
+    pub new_path: Option<String>,
+    pub hunks: Vec<DiffHunk>,
+}
+/// Unified hunk coordinates and lines.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiffHunk {
+    pub old_start: u64,
+    pub old_count: u64,
+    pub new_start: u64,
+    pub new_count: u64,
+    pub header: String,
+    pub lines: Vec<DiffLine>,
+}
+/// A line and its position on each side of the comparison.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiffLine {
+    pub kind: DiffLineType,
+    pub content: String,
+    pub old_line: Option<u64>,
+    pub new_line: Option<u64>,
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DiffLineType {
+    Context,
+    Added,
+    Removed,
+    NoNewline,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetDiffRequest {
+    pub session_id: String,
+    pub scope: DiffScope,
+    pub target: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetDiffResponse {
+    pub files: Vec<FileDiff>,
+    pub error: Option<String>,
+}
+
 /// Unified framed IPC message envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload")]
 pub enum IpcMessage {
+    GetDiffRequest(GetDiffRequest),
+    GetDiffResponse(GetDiffResponse),
     RemoveSessionRequest(RemoveSessionRequest),
     RemoveSessionResponse(RemoveSessionResponse),
     FreezeSessionRequest(FreezeSessionRequest),

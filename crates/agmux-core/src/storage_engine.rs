@@ -22,8 +22,13 @@ impl StorageEngine {
         let version: u32 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version == 0 {
             tx.execute_batch("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, pid INTEGER, cwd TEXT, command TEXT, created_at INTEGER, state TEXT); PRAGMA user_version=1;")?;
-        } else if version > 1 {
+        } else if version > 2 {
             return Err(StorageError::UnsupportedVersion(version));
+        }
+        if version < 2 {
+            tx.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN start_git_sha TEXT; PRAGMA user_version=2;",
+            )?;
         }
         tx.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS terminal_logs_fts USING fts5(session_id UNINDEXED, line_no UNINDEXED, timestamp UNINDEXED, content, tokenize='trigram');")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS session_snapshots (session_id TEXT PRIMARY KEY, snapshot BLOB, compressed_size INTEGER, uncompressed_size INTEGER, timestamp INTEGER);")?;
@@ -102,6 +107,26 @@ impl StorageEngine {
             params![s.session_id, s.pid, s.cwd, s.command, s.created_at, s.state],
         )?;
         Ok(())
+    }
+    /// Record the Git commit captured at session startup.
+    pub fn set_start_git_sha(&self, id: &str, sha: Option<&str>) -> Result<(), StorageError> {
+        self.connection.execute(
+            "UPDATE sessions SET start_git_sha=?1 WHERE id=?2",
+            params![sha, id],
+        )?;
+        Ok(())
+    }
+    /// Read the initial Git commit for an existing session.
+    pub fn start_git_sha(&self, id: &str) -> Result<Option<String>, StorageError> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT start_git_sha FROM sessions WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten())
     }
     pub fn update_session_state(&self, id: &str, state: &str) -> Result<(), StorageError> {
         self.connection.execute(

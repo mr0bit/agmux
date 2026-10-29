@@ -29,6 +29,16 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Show a session review diff.
+    Diff {
+        session_id: String,
+        #[arg(long, default_value = "session", value_parser = ["session", "uncommitted", "target", "last", "staged"])]
+        scope: String,
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Create a first-run configuration and report discovered agents.
     Init,
     /// Open the interactive terminal interface.
@@ -123,6 +133,55 @@ async fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Init) => unreachable!("init handled before daemon startup"),
         None | Some(Commands::Tui) => agmux_tui::run_tui(&socket_path, &token).await?,
+        Some(Commands::Diff {
+            session_id,
+            scope,
+            target,
+            json,
+        }) => {
+            use agmux_proto::{DiffLineType, DiffScope};
+            let scope = match scope.as_str() {
+                "session" => DiffScope::SessionDiff,
+                "uncommitted" => DiffScope::FullUncommitted,
+                "target" => DiffScope::VersusTarget,
+                "last" => DiffScope::LastCommit,
+                "staged" => DiffScope::Staged,
+                _ => unreachable!(),
+            };
+            let files = agmux_cli::ipc_client::get_diff(
+                &socket_path,
+                &token,
+                agmux_proto::GetDiffRequest {
+                    session_id,
+                    scope,
+                    target,
+                },
+            )
+            .await?;
+            if json {
+                println!("{}", serde_json::to_string(&files)?);
+            } else {
+                for file in files {
+                    println!(
+                        "--- {}\n+++ {}",
+                        file.old_path.as_deref().unwrap_or("/dev/null"),
+                        file.new_path.as_deref().unwrap_or("/dev/null")
+                    );
+                    for hunk in file.hunks {
+                        println!("{}", hunk.header);
+                        for line in hunk.lines {
+                            let prefix = match line.kind {
+                                DiffLineType::Context => ' ',
+                                DiffLineType::Added => '+',
+                                DiffLineType::Removed => '-',
+                                DiffLineType::NoNewline => '\\',
+                            };
+                            println!("{prefix}{}", line.content);
+                        }
+                    }
+                }
+            }
+        }
         Some(Commands::Search {
             query,
             json,

@@ -346,3 +346,43 @@ pub async fn remove_session(
         }
     }
 }
+
+/// Request a structured review diff.
+pub async fn get_diff(
+    socket_path: &Path,
+    token: &str,
+    request: agmux_proto::GetDiffRequest,
+) -> Result<Vec<agmux_proto::FileDiff>> {
+    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    framed
+        .send(IpcMessage::HandshakeRequest(HandshakeRequest {
+            client_version: env!("CARGO_PKG_VERSION").into(),
+            token: token.into(),
+        }))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during handshake")??
+    {
+        IpcMessage::HandshakeResponse(response) if response.success => {}
+        other => bail!("Authentication failed: {other:?}"),
+    }
+    framed.send(IpcMessage::GetDiffRequest(request)).await?;
+    loop {
+        match framed
+            .next()
+            .await
+            .context("Connection closed during diff request")??
+        {
+            IpcMessage::GetDiffResponse(response) => {
+                if let Some(error) = response.error {
+                    bail!("{error}");
+                }
+                return Ok(response.files);
+            }
+            IpcMessage::SessionStateChangedEvent(_) => continue,
+            other => bail!("Unexpected diff response: {other:?}"),
+        }
+    }
+}
