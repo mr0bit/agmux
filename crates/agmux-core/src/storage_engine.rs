@@ -1,5 +1,5 @@
 //! SQLite session metadata repository.
-use agmux_proto::{ReviewComment, SearchMatch, SessionInfo};
+use agmux_proto::{JournalEvent, ReviewComment, SearchMatch, SessionInfo};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 
@@ -49,6 +49,7 @@ impl StorageEngine {
         tx.execute_batch("CREATE TABLE IF NOT EXISTS queued_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, target_session_id TEXT NOT NULL, message TEXT NOT NULL, created_at INTEGER NOT NULL, delivered_at INTEGER); CREATE INDEX IF NOT EXISTS idx_queued_messages ON queued_messages(target_session_id, delivered_at);")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS named_locks (name TEXT PRIMARY KEY, holder_session_id TEXT NOT NULL, acquired_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_named_locks_holder ON named_locks(holder_session_id);")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS file_reservations (path TEXT PRIMARY KEY, holder_session_id TEXT NOT NULL, acquired_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_file_reservations_holder ON file_reservations(holder_session_id);")?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS event_journal (seq INTEGER PRIMARY KEY AUTOINCREMENT, event_type TEXT NOT NULL, session_id TEXT, payload TEXT NOT NULL, timestamp INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_event_journal_seq ON event_journal(seq); CREATE TABLE IF NOT EXISTS event_cursors (cursor_id TEXT PRIMARY KEY, last_seq INTEGER NOT NULL, updated_at INTEGER NOT NULL);")?;
         tx.commit()?;
         Ok(Self { connection })
     }
@@ -212,6 +213,78 @@ impl StorageEngine {
         )?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+    /// Record an event into the monotonic journal and return its sequence ID.
+    pub fn record_event(
+        &self,
+        event_type: &str,
+        session_id: Option<&str>,
+        payload: &str,
+    ) -> Result<JournalEvent, StorageError> {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.connection.execute(
+            "INSERT INTO event_journal (event_type, session_id, payload, timestamp) VALUES (?1, ?2, ?3, ?4)",
+            params![event_type, session_id, payload, timestamp],
+        )?;
+        let seq = self.connection.last_insert_rowid() as u64;
+        Ok(JournalEvent {
+            seq,
+            event_type: event_type.to_string(),
+            session_id: session_id.map(|s| s.to_string()),
+            payload: payload.to_string(),
+            timestamp,
+            replay: false,
+        })
+    }
+    /// Read events with seq > since_seq in exact monotonic sequence order.
+    pub fn read_events_since(
+        &self,
+        since_seq: u64,
+        limit: Option<usize>,
+    ) -> Result<Vec<JournalEvent>, StorageError> {
+        let sql = if let Some(limit) = limit {
+            format!(
+                "SELECT seq, event_type, session_id, payload, timestamp FROM event_journal WHERE seq > ?1 ORDER BY seq ASC LIMIT {limit}"
+            )
+        } else {
+            "SELECT seq, event_type, session_id, payload, timestamp FROM event_journal WHERE seq > ?1 ORDER BY seq ASC".to_string()
+        };
+        let mut stmt = self.connection.prepare(&sql)?;
+        let rows = stmt.query_map([since_seq], |r| {
+            Ok(JournalEvent {
+                seq: r.get(0)?,
+                event_type: r.get(1)?,
+                session_id: r.get(2)?,
+                payload: r.get(3)?,
+                timestamp: r.get(4)?,
+                replay: true,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+    /// Get last sequence position for a cursor.
+    pub fn get_cursor(&self, cursor_id: &str) -> Result<u64, StorageError> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT last_seq FROM event_cursors WHERE cursor_id = ?1")?;
+        let mut rows = stmt.query([cursor_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(row.get(0)?)
+        } else {
+            Ok(0)
+        }
+    }
+    /// Update or create cursor position.
+    pub fn set_cursor(&self, cursor_id: &str, last_seq: u64) -> Result<(), StorageError> {
+        self.connection.execute(
+            "INSERT INTO event_cursors (cursor_id, last_seq, updated_at) VALUES (?1, ?2, unixepoch())
+             ON CONFLICT(cursor_id) DO UPDATE SET last_seq = excluded.last_seq, updated_at = excluded.updated_at",
+            params![cursor_id, last_seq],
+        )?;
+        Ok(())
     }
     pub fn add_review_comment(&self, comment: &ReviewComment) -> Result<(), StorageError> {
         self.connection.execute(

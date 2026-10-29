@@ -716,3 +716,57 @@ pub async fn list_reservations(
         }
     }
 }
+
+/// Stream events from daemon event journal.
+pub async fn watch_events<F>(
+    socket_path: &Path,
+    token: &str,
+    cursor_id: Option<String>,
+    since_seq: Option<u64>,
+    follow: bool,
+    mut on_event: F,
+) -> Result<()>
+where
+    F: FnMut(agmux_proto::WatchEventFrame) -> Result<bool>,
+{
+    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    framed
+        .send(IpcMessage::HandshakeRequest(HandshakeRequest {
+            client_version: env!("CARGO_PKG_VERSION").into(),
+            token: token.into(),
+        }))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during handshake")??
+    {
+        IpcMessage::HandshakeResponse(response) if response.success => {}
+        other => bail!("Authentication failed: {other:?}"),
+    }
+    framed
+        .send(IpcMessage::WatchEventsRequest(
+            agmux_proto::WatchEventsRequest {
+                cursor_id,
+                since_seq,
+                follow,
+            },
+        ))
+        .await?;
+    while let Some(msg) = framed.next().await {
+        match msg? {
+            IpcMessage::WatchEventFrame(frame) => {
+                if frame.is_done {
+                    break;
+                }
+                let keep_going = on_event(frame)?;
+                if !keep_going {
+                    break;
+                }
+            }
+            IpcMessage::SessionStateChangedEvent(_) => continue,
+            other => bail!("Unexpected frame in watch stream: {other:?}"),
+        }
+    }
+    Ok(())
+}

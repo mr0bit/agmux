@@ -52,6 +52,21 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Watch journaled workspace events.
+    Watch {
+        /// Optional named cursor to remember position across reconnections.
+        #[arg(long = "as")]
+        cursor: Option<String>,
+        /// Replay events since this sequence number.
+        #[arg(long)]
+        since: Option<u64>,
+        /// Keep stream open following live events.
+        #[arg(long, short)]
+        follow: bool,
+        /// Format output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Send a message to another session.
     Send { target_id: String, message: String },
     /// Send raw text input to an active session PTY.
@@ -420,6 +435,40 @@ async fn main() -> Result<()> {
                     );
                 }
             }
+        }
+        Some(Commands::Watch {
+            cursor,
+            since,
+            follow,
+            json,
+        }) => {
+            agmux_cli::ipc_client::watch_events(
+                &socket_path,
+                &token,
+                cursor,
+                since,
+                follow,
+                |frame| {
+                    if let Some(ev) = &frame.event {
+                        if json {
+                            println!("{}", serde_json::to_string(&frame)?);
+                        } else {
+                            let tag = if ev.replay {
+                                "\x1b[33m[REPLAY]\x1b[0m"
+                            } else {
+                                "\x1b[32m[LIVE]\x1b[0m"
+                            };
+                            let sid = ev.session_id.as_deref().unwrap_or("-");
+                            println!(
+                                "{:<18} #{:<4} {:<24} {:<16} {}",
+                                tag, ev.seq, ev.event_type, sid, ev.payload
+                            );
+                        }
+                    }
+                    Ok(true)
+                },
+            )
+            .await?;
         }
 
         Some(Commands::Review { command }) => {

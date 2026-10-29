@@ -81,6 +81,7 @@ impl DaemonServer {
         let lock_manager = crate::lock_manager::LockManager::new(storage.clone());
         let file_reservations =
             crate::file_reservation_table::FileReservationTable::new(storage.clone());
+        let journal = crate::journal_watcher::JournalWatcher::new(storage.clone());
 
         loop {
             match listener.accept().await {
@@ -91,6 +92,7 @@ impl DaemonServer {
                     let events = events.clone();
                     let lock_manager = lock_manager.clone();
                     let file_reservations = file_reservations.clone();
+                    let journal = journal.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_client(
                             stream,
@@ -100,6 +102,7 @@ impl DaemonServer {
                             events,
                             lock_manager,
                             file_reservations,
+                            journal,
                         )
                         .await
                         {
@@ -124,6 +127,7 @@ async fn handle_client(
     events: tokio::sync::broadcast::Sender<SessionStateChangedEvent>,
     lock_manager: crate::lock_manager::LockManager,
     file_reservations: crate::file_reservation_table::FileReservationTable,
+    journal: crate::journal_watcher::JournalWatcher,
 ) -> Result<()> {
     let framed = new_framed(stream);
     let (mut sink, mut reader) = framed.split();
@@ -319,6 +323,7 @@ async fn handle_client(
                         let session_clone = session.clone();
                         let lock_mgr_fwd = lock_manager.clone();
                         let file_res_fwd = file_reservations.clone();
+                        let journal_fwd = journal.clone();
                         tokio::spawn(async move {
                             let mut output_rx = session.subscribe_output();
                             let mut exit_rx = session.subscribe_exit();
@@ -343,7 +348,7 @@ async fn handle_client(
                                         result = output_rx.recv() => {
                                             match result {
                                                 Ok(data) => {
-                                                    publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.output(&data), Some(&session_clone)).await;
+                                                    publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.output(&data), Some(&session_clone), Some(&journal_fwd)).await;
                                                     let lines = history.ingest(&data);
                                                     index_lines(output_db.clone(), &fwd_session_id, &mut line_no, lines).await;
                                                     let _ = out_tx_fwd.send(IpcMessage::TerminalOutputFrame(TerminalOutputFrame { session_id: fwd_session_id.clone(), data })).await;
@@ -354,11 +359,11 @@ async fn handle_client(
                                             }
                                         }
                                         _ = input_rx.recv() => {
-                                            publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.input(), Some(&session_clone)).await;
+                                            publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.input(), Some(&session_clone), Some(&journal_fwd)).await;
                                             false
                                         }
                                         _ = tokio::time::sleep_until(classifier.deadline().into()), if classifier.state() == agmux_core::state_machine::SessionState::Running => {
-                                            publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.timeout(), Some(&session_clone)).await;
+                                            publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.timeout(), Some(&session_clone), Some(&journal_fwd)).await;
                                             false
                                         }
                                         _ = exit_rx.changed() => true,
@@ -373,6 +378,7 @@ async fn handle_client(
                                             &fwd_session_id,
                                             classifier.output(&data),
                                             Some(&session_clone),
+                                            Some(&journal_fwd),
                                         )
                                         .await;
                                         let lines = history.ingest(&data);
@@ -409,6 +415,7 @@ async fn handle_client(
                                             &fwd_session_id,
                                             classifier.exit(code),
                                             Some(&session_clone),
+                                            Some(&journal_fwd),
                                         )
                                         .await;
                                     }
@@ -417,6 +424,14 @@ async fn handle_client(
                                             session_id: fwd_session_id.clone(),
                                             exit_code: code,
                                         }))
+                                        .await;
+
+                                    let _ = journal_fwd
+                                        .publish_event(
+                                            "session_exit",
+                                            Some(&fwd_session_id),
+                                            &format!("exit_code: {code:?}"),
+                                        )
                                         .await;
 
                                     // Evict named locks and file reservations held by the session
@@ -826,6 +841,77 @@ async fn handle_client(
                     }))
                     .await?;
             }
+            IpcMessage::WatchEventsRequest(req) => {
+                let j = journal.clone();
+                let start_seq = if let Some(seq) = req.since_seq {
+                    seq
+                } else if let Some(ref cid) = req.cursor_id {
+                    j.get_cursor(cid).await.unwrap_or(0)
+                } else {
+                    0
+                };
+
+                let mut current_seq = start_seq;
+                let missed_events = j.read_since(start_seq).await.unwrap_or_default();
+                let had_missed = !missed_events.is_empty();
+                for event in missed_events {
+                    current_seq = current_seq.max(event.seq);
+                    let frame = IpcMessage::WatchEventFrame(agmux_proto::WatchEventFrame {
+                        event: Some(event),
+                        changed_while_away: had_missed,
+                        is_done: false,
+                    });
+                    if out_tx.send(frame).await.is_err() {
+                        return Ok(());
+                    }
+                }
+
+                if let Some(ref cid) = req.cursor_id {
+                    let _ = j.set_cursor(cid, current_seq).await;
+                }
+
+                if req.follow {
+                    let mut live_rx = j.subscribe();
+                    while let Ok(mut event) = live_rx.recv().await {
+                        if event.seq <= current_seq {
+                            continue;
+                        }
+                        current_seq = event.seq;
+                        event.replay = false;
+                        let frame = IpcMessage::WatchEventFrame(agmux_proto::WatchEventFrame {
+                            event: Some(event),
+                            changed_while_away: false,
+                            is_done: false,
+                        });
+                        if out_tx.send(frame).await.is_err() {
+                            break;
+                        }
+                        if let Some(ref cid) = req.cursor_id {
+                            let _ = j.set_cursor(cid, current_seq).await;
+                        }
+                    }
+                } else {
+                    let _ = out_tx
+                        .send(IpcMessage::WatchEventFrame(agmux_proto::WatchEventFrame {
+                            event: None,
+                            changed_while_away: had_missed,
+                            is_done: true,
+                        }))
+                        .await;
+                }
+            }
+            IpcMessage::AckCursorRequest(req) => {
+                let j = journal.clone();
+                let res = j.set_cursor(&req.cursor_id, req.seq).await;
+                out_tx
+                    .send(IpcMessage::AckCursorResponse(
+                        agmux_proto::AckCursorResponse {
+                            success: res.is_ok(),
+                            error: res.err(),
+                        },
+                    ))
+                    .await?;
+            }
             IpcMessage::ReserveFilesRequest(req) => {
                 let res_table = file_reservations.clone();
                 match res_table.reserve(&req.session_id, &req.paths).await {
@@ -1181,7 +1267,9 @@ async fn handle_client(
                     .send(IpcMessage::AcknowledgeSessionResponse(response))
                     .await?;
             }
-            IpcMessage::ReserveFilesResponse(_)
+            IpcMessage::WatchEventFrame(_)
+            | IpcMessage::AckCursorResponse(_)
+            | IpcMessage::ReserveFilesResponse(_)
             | IpcMessage::ReleaseFilesResponse(_)
             | IpcMessage::ListReservationsResponse(_)
             | IpcMessage::AcquireLockResponse(_)
@@ -1256,6 +1344,7 @@ async fn publish_transition(
         &'static str,
     )>,
     session: Option<&Arc<agmux_core::pty_manager::ActivePtySession>>,
+    journal: Option<&crate::journal_watcher::JournalWatcher>,
 ) {
     if let Some((old, new, reason)) = transition {
         let session_id = id.to_owned();
@@ -1276,6 +1365,16 @@ async fn publish_transition(
                 new_state: new.as_str().into(),
                 reason: reason.into(),
             });
+
+            if let Some(j) = journal {
+                let _ = j
+                    .publish_event(
+                        "session_state_changed",
+                        Some(&session_id),
+                        &format!("{} -> {} ({})", old.as_str(), new.as_str(), reason),
+                    )
+                    .await;
+            }
 
             // Auto-flush queued messages when prompt is resolved or session transitions out of WaitingInput
             if (old == agmux_core::state_machine::SessionState::WaitingInput

@@ -409,10 +409,56 @@ pub struct ListReservationsResponse {
     pub error: Option<String>,
 }
 
+/// Journaled workspace event with monotonic sequence number.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JournalEvent {
+    pub seq: u64,
+    pub event_type: String,
+    pub session_id: Option<String>,
+    pub payload: String,
+    pub timestamp: u64,
+    pub replay: bool,
+}
+
+/// Request streaming journaled workspace events.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WatchEventsRequest {
+    pub cursor_id: Option<String>,
+    pub since_seq: Option<u64>,
+    pub follow: bool,
+}
+
+/// Streamed event frame sent to watching clients.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WatchEventFrame {
+    pub event: Option<JournalEvent>,
+    pub changed_while_away: bool,
+    #[serde(default)]
+    pub is_done: bool,
+}
+
+/// Acknowledge a cursor sequence position.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AckCursorRequest {
+    pub cursor_id: String,
+    pub seq: u64,
+}
+
+/// Result of acknowledging cursor position.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AckCursorResponse {
+    pub success: bool,
+    pub error: Option<String>,
+}
+
 /// Unified framed IPC message envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload")]
 pub enum IpcMessage {
+    WatchEventsRequest(WatchEventsRequest),
+    WatchEventFrame(WatchEventFrame),
+    AckCursorRequest(AckCursorRequest),
+    AckCursorResponse(AckCursorResponse),
     ReserveFilesRequest(ReserveFilesRequest),
     ReserveFilesResponse(ReserveFilesResponse),
     ReleaseFilesRequest(ReleaseFilesRequest),

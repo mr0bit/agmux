@@ -1,7 +1,7 @@
 ---
 id: TASK-20
 title: 'Tracer Bullet: Monotonic Event Journal Stream & Reconnection Replay'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-10-29T01:25:00Z'
 labels:
@@ -27,8 +27,8 @@ Implements `REQ-ORCH-EVENT-WATCH-004`: streams journaled workspace events backed
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 All workspace events persisted with monotonic sequence IDs in SQLite event journal
-- [ ] #2 CLI `agmux watch --as <cursor> --follow` streams live events and records cursor position
-- [ ] #3 Disconnected cursor reconnecting replays all missed events in exact monotonic order
-- [ ] #4 Integration test asserts sequential event logging, live follow, and cursor replay
+- [x] #1 All workspace events persisted with monotonic sequence IDs in SQLite event journal
+- [x] #2 CLI `agmux watch --as <cursor> --follow` streams live events and records cursor position
+- [x] #3 Disconnected cursor reconnecting replays all missed events in exact monotonic order
+- [x] #4 Integration test asserts sequential event logging, live follow, and cursor replay
 <!-- AC:END -->

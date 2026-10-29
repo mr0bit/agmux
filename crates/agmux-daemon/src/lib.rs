@@ -1,6 +1,7 @@
 //! Daemon orchestration and server components.
 
 pub mod file_reservation_table;
+pub mod journal_watcher;
 pub mod lock_manager;
 pub mod process_supervisor;
 pub mod server;

@@ -51,11 +51,11 @@ This specification details the autonomous multi-agent orchestration primitives, 
 * **Text:** As an orchestrator script monitoring workspace state (`agmux watch --as <cursor> --follow`), the system shall stream journaled events backed by SQLite monotonic sequence numbers, supporting reconnection replay (`replay: true`, `changedWhileAway: true`) without dropping events.
 * **Criticality:** Medium
 * **SW Component:** `crates/agmux-daemon::journal_watcher`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Start `agmux watch --as test_cursor`; disconnect client; trigger 5 session state transitions; reconnect `agmux watch --as test_cursor`. Verify that all 5 missed events are replayed in exact monotonic sequence order.
 * **Downstream Req:** `LLD-ORCH-EVENT-WATCH-004`
 * **Downstream Test:** `TEST-VER-ORCH-004`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

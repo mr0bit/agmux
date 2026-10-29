@@ -6,11 +6,12 @@ pub mod transport;
 
 pub use auth::constant_time_eq;
 pub use messages::{
-    AcknowledgeSessionRequest, AcknowledgeSessionResponse, AcquireLockRequest, AcquireLockResponse,
-    AddReviewCommentRequest, AddReviewCommentResponse, DiffHunk, DiffLine, DiffLineType, DiffScope,
-    DispatchReviewRoundRequest, DispatchReviewRoundResponse, FileDiff, FileReservationEntry,
-    FreezeSessionRequest, FreezeSessionResponse, GetDiffRequest, GetDiffResponse, HandshakeRequest,
-    HandshakeResponse, IpcMessage, ListLocksRequest, ListLocksResponse, ListReservationsRequest,
+    AckCursorRequest, AckCursorResponse, AcknowledgeSessionRequest, AcknowledgeSessionResponse,
+    AcquireLockRequest, AcquireLockResponse, AddReviewCommentRequest, AddReviewCommentResponse,
+    DiffHunk, DiffLine, DiffLineType, DiffScope, DispatchReviewRoundRequest,
+    DispatchReviewRoundResponse, FileDiff, FileReservationEntry, FreezeSessionRequest,
+    FreezeSessionResponse, GetDiffRequest, GetDiffResponse, HandshakeRequest, HandshakeResponse,
+    IpcMessage, JournalEvent, ListLocksRequest, ListLocksResponse, ListReservationsRequest,
     ListReservationsResponse, ListReviewCommentsRequest, ListReviewCommentsResponse,
     ListSessionsRequest, ListSessionsResponse, LockEntry, ReleaseFilesRequest,
     ReleaseFilesResponse, ReleaseLockRequest, ReleaseLockResponse, RemoveSessionRequest,
@@ -18,6 +19,7 @@ pub use messages::{
     ResolveReviewCommentResponse, ResumeSessionRequest, ResumeSessionResponse, ReviewComment,
     SearchLogsRequest, SearchLogsResponse, SearchMatch, SendMessageRequest, SendMessageResponse,
     SessionExitEvent, SessionInfo, SessionStateChangedEvent, SpawnSessionRequest,
-    SpawnSessionResponse, TerminalInputFrame, TerminalOutputFrame,
+    SpawnSessionResponse, TerminalInputFrame, TerminalOutputFrame, WatchEventFrame,
+    WatchEventsRequest,
 };
 pub use transport::{FramedStream, IpcCodec, ProtoError, new_framed};
