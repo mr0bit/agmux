@@ -25,11 +25,11 @@ This specification details the Ratatui terminal user interface (`agmux-tui`), si
 * **Text:** As a user pressing `Ctrl+Shift+P` (or `F1` / `:` fallbacks), the system shall open an overlay Command Palette modal indexing both static actions (*"Toggle Split View"*, *"New Worktree Session"*, *"Archive Session"*) and dynamic targets (*"Jump to Session: <name>"*, *"Switch Model: <model>"*) using the Nucleo fuzzy matcher.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-tui::command_palette`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Press `F1` and `:` in terminal emulators without CSI-u support; verify that the Command Palette opens, fuzzy-matches typed queries across static and dynamic items, and executes the selected action on `[Enter]`.
 * **Downstream Req:** `LLD-TUI-COMMAND-PALETTE-002`
 * **Downstream Test:** `TEST-VER-TUI-002`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 
@@ -38,11 +38,11 @@ This specification details the Ratatui terminal user interface (`agmux-tui`), si
 * **Text:** As a user pressing `Space` on any session row, the system shall open a floating Quick Prompt composer to send prompts without attaching into the terminal, supporting inline cycling of tool (`Tab`), model (`Ctrl+L`), reasoning effort (`Ctrl+X`), and worktree toggle (`Ctrl+T`).
 * **Criticality:** High
 * **SW Component:** `crates/agmux-tui::quick_prompt`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Highlight an idle session; hit `Space`; type a prompt; press `Enter`. Verify that the prompt is delivered to the session's PTY and the session transitions to `WORKING` while remaining in the sidebar view.
 * **Downstream Req:** `LLD-TUI-QUICK-PROMPT-003`
 * **Downstream Test:** `TEST-VER-TUI-003`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

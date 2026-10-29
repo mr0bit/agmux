@@ -4,16 +4,33 @@ pub mod ui;
 
 use std::{io, path::Path, time::Duration};
 
-use agmux_proto::{HandshakeRequest, IpcMessage, ListSessionsRequest, SessionInfo, new_framed};
+use agmux_proto::{
+    FreezeSessionRequest, HandshakeRequest, IpcMessage, ListSessionsRequest, SessionInfo,
+    SpawnSessionRequest, TerminalInputFrame, new_framed,
+};
 use anyhow::{Context, Result, bail};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use futures_util::{SinkExt, StreamExt};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tokio::net::UnixStream;
+
+/// The currently displayed floating input.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ModalState {
+    #[default]
+    None,
+    CommandPalette {
+        query: String,
+        selected: usize,
+    },
+    QuickPrompt {
+        input: String,
+    },
+}
 
 /// State displayed by the interactive viewport.
 #[derive(Default)]
@@ -22,23 +39,201 @@ pub struct App {
     pub selected_index: usize,
     pub active_viewport_lines: Vec<String>,
     pub should_quit: bool,
+    pub modal: ModalState,
+    pub attention_filter: bool,
+    /// Pending daemon request produced by an input action.
+    pub pending_message: Option<IpcMessage>,
 }
 
 impl App {
-    /// Handle a navigation key, keeping selection within the session list.
+    /// Actions matching the palette query, in display order.
+    pub fn palette_actions(&self, query: &str) -> Vec<String> {
+        let mut actions = vec![
+            "New Session".to_owned(),
+            "Freeze Session".to_owned(),
+            "Toggle Attention Filter".to_owned(),
+            "Quit Agmux".to_owned(),
+        ];
+        actions.extend(
+            self.sessions
+                .iter()
+                .filter(|s| s.state != "DEAD")
+                .map(|s| format!("Jump to Session: {}", s.session_id)),
+        );
+        let query = query.to_lowercase();
+        actions
+            .into_iter()
+            .filter(|action| action.to_lowercase().contains(&query))
+            .collect()
+    }
+
+    /// Handle a key without modifiers.
     pub fn handle_key(&mut self, key: KeyCode) {
-        match key {
-            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.selected_index = self
-                    .selected_index
-                    .saturating_add(1)
-                    .min(self.sessions.len().saturating_sub(1))
+        self.handle_key_with_modifiers(key, KeyModifiers::NONE);
+    }
+
+    /// Handle a key and its terminal modifiers.
+    pub fn handle_key_with_modifiers(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        let modal = std::mem::take(&mut self.modal);
+        self.modal = match modal {
+            ModalState::None => {
+                match key {
+                    KeyCode::F(1) | KeyCode::Char(':') => return self.open_palette(),
+                    KeyCode::Char('p') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        return self.open_palette();
+                    }
+                    KeyCode::Char(' ') => {
+                        return self.modal = ModalState::QuickPrompt {
+                            input: String::new(),
+                        };
+                    }
+                    KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+                    KeyCode::Down | KeyCode::Char('j') => self.move_selection(true),
+                    KeyCode::Up | KeyCode::Char('k') => self.move_selection(false),
+                    _ => {}
+                }
+                ModalState::None
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.selected_index = self.selected_index.saturating_sub(1)
+            ModalState::CommandPalette {
+                mut query,
+                mut selected,
+            } => {
+                match key {
+                    KeyCode::Esc => return,
+                    KeyCode::Enter => {
+                        if let Some(action) = self.palette_actions(&query).get(selected).cloned() {
+                            self.execute_action(&action);
+                        }
+                        return;
+                    }
+                    KeyCode::Up => selected = selected.saturating_sub(1),
+                    KeyCode::Down => {
+                        selected = selected
+                            .saturating_add(1)
+                            .min(self.palette_actions(&query).len().saturating_sub(1))
+                    }
+                    KeyCode::Backspace => {
+                        query.pop();
+                        selected = 0;
+                    }
+                    KeyCode::Char(c)
+                        if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        query.push(c);
+                        selected = 0;
+                    }
+                    _ => {}
+                }
+                ModalState::CommandPalette { query, selected }
             }
-            _ => {}
+            ModalState::QuickPrompt { mut input } => {
+                match key {
+                    KeyCode::Esc => return,
+                    KeyCode::Enter => {
+                        if let Some(session) = self.sessions.get(self.selected_index) {
+                            input.push('\n');
+                            self.pending_message =
+                                Some(IpcMessage::TerminalInputFrame(TerminalInputFrame {
+                                    session_id: session.session_id.clone(),
+                                    data: input.into_bytes(),
+                                }));
+                        }
+                        return;
+                    }
+                    KeyCode::Backspace => {
+                        input.pop();
+                    }
+                    KeyCode::Char(c)
+                        if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        input.push(c)
+                    }
+                    _ => {}
+                }
+                ModalState::QuickPrompt { input }
+            }
+        };
+    }
+
+    fn open_palette(&mut self) {
+        self.modal = ModalState::CommandPalette {
+            query: String::new(),
+            selected: 0,
+        };
+    }
+
+    fn move_selection(&mut self, forward: bool) {
+        let visible: Vec<_> = self
+            .sessions
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !self.attention_filter || !matches!(s.state.as_str(), "IDLE" | "DEAD"))
+            .map(|(i, _)| i)
+            .collect();
+        if visible.is_empty() {
+            return;
+        }
+        let position = visible
+            .iter()
+            .position(|&i| i == self.selected_index)
+            .unwrap_or(0);
+        self.selected_index = visible[if forward {
+            (position + 1).min(visible.len() - 1)
+        } else {
+            position.saturating_sub(1)
+        }];
+    }
+
+    fn execute_action(&mut self, action: &str) {
+        match action {
+            "Quit Agmux" => self.should_quit = true,
+            "Toggle Attention Filter" => {
+                self.attention_filter = !self.attention_filter;
+                if self.attention_filter
+                    && self
+                        .sessions
+                        .get(self.selected_index)
+                        .is_some_and(|s| matches!(s.state.as_str(), "IDLE" | "DEAD"))
+                {
+                    if let Some(index) = self
+                        .sessions
+                        .iter()
+                        .position(|s| !matches!(s.state.as_str(), "IDLE" | "DEAD"))
+                    {
+                        self.selected_index = index;
+                    }
+                }
+            }
+            "Freeze Session" => {
+                if let Some(session) = self.sessions.get(self.selected_index) {
+                    self.pending_message =
+                        Some(IpcMessage::FreezeSessionRequest(FreezeSessionRequest {
+                            session_id: session.session_id.clone(),
+                        }));
+                }
+            }
+            "New Session" => {
+                let id = format!(
+                    "session-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                );
+                self.pending_message = Some(IpcMessage::SpawnSessionRequest(SpawnSessionRequest {
+                    session_id: id,
+                    command: std::env::var("SHELL").unwrap_or_else(|_| "sh".into()),
+                    args: vec![],
+                    cwd: None,
+                }));
+            }
+            _ => {
+                if let Some(id) = action.strip_prefix("Jump to Session: ") {
+                    if let Some(index) = self.sessions.iter().position(|s| s.session_id == id) {
+                        self.selected_index = index;
+                    }
+                }
+            }
         }
     }
 }
@@ -112,7 +307,8 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                     if let Event::Key(key) = event::read()? {
                         if key.kind != KeyEventKind::Press { continue; }
                         let previous = app.selected_index;
-                        app.handle_key(key.code);
+                        app.handle_key_with_modifiers(key.code, key.modifiers);
+                        if let Some(message) = app.pending_message.take() { ipc.send(message).await?; }
                         if app.should_quit { return Ok(()); }
                         if previous != app.selected_index {
                             parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
@@ -128,6 +324,13 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                 IpcMessage::TerminalOutputFrame(frame) if app.sessions.get(app.selected_index).is_some_and(|s| s.session_id == frame.session_id) => {
                     parser.process(&frame.data);
                     app.active_viewport_lines = parser.screen().contents().lines().map(str::to_owned).collect();
+                }
+                IpcMessage::SpawnSessionResponse(_) | IpcMessage::FreezeSessionResponse(_) => {
+                    ipc.send(IpcMessage::ListSessionsRequest(ListSessionsRequest {})).await?;
+                }
+                IpcMessage::ListSessionsResponse(response) => {
+                    app.sessions = response.sessions;
+                    app.selected_index = app.selected_index.min(app.sessions.len().saturating_sub(1));
                 }
                 IpcMessage::SessionStateChangedEvent(event) => {
                     if let Some(session) = app.sessions.iter_mut().find(|s| s.session_id == event.session_id) { session.state = event.new_state; }

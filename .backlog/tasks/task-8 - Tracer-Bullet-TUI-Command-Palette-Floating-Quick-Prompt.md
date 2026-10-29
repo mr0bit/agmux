@@ -1,9 +1,10 @@
 ---
 id: TASK-8
 title: 'Tracer Bullet: TUI Command Palette & Floating Quick-Prompt'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-10-28T23:40:00Z'
+updated_date: '2026-10-29T00:44:00Z'
 labels:
   - tracer-bullet
   - palette
@@ -27,8 +28,8 @@ In TUI, Ctrl+P opens a fuzzy-filtered command palette with universal fallbacks. 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Ctrl+P displays fuzzy command palette with action execution
-- [ ] #2 Quick-prompt modal accepts user input and dispatches to active session PTY
-- [ ] #3 Fallback mechanisms handle unmapped hotkeys gracefully
-- [ ] #4 UI seam test verifies keyboard focus capture and event dispatch
+- [x] #1 Ctrl+P displays fuzzy command palette with action execution
+- [x] #2 Quick-prompt modal accepts user input and dispatches to active session PTY
+- [x] #3 Fallback mechanisms handle unmapped hotkeys gracefully
+- [x] #4 UI seam test verifies keyboard focus capture and event dispatch
 <!-- AC:END -->
