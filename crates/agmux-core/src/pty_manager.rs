@@ -52,6 +52,7 @@ pub struct ActivePtySession {
     output_tx: broadcast::Sender<Vec<u8>>,
     /// Watch channel for process exit status (`None` while running).
     exit_rx: watch::Receiver<Option<i32>>,
+    input_tx: broadcast::Sender<()>,
     initial_output: std::sync::Mutex<Option<broadcast::Receiver<Vec<u8>>>>,
 }
 
@@ -64,6 +65,7 @@ impl ActivePtySession {
             .map_err(|e| PtyError::InputWrite(std::io::Error::other(e.to_string())))?;
         writer.write_all(data)?;
         writer.flush()?;
+        let _ = self.input_tx.send(());
         Ok(())
     }
 
@@ -74,6 +76,11 @@ impl ActivePtySession {
             .expect("output receiver lock")
             .take()
             .unwrap_or_else(|| self.output_tx.subscribe())
+    }
+
+    /// Subscribe to delivered input.
+    pub fn subscribe_input(&self) -> broadcast::Receiver<()> {
+        self.input_tx.subscribe()
     }
 
     /// Subscribe to the process exit event.
@@ -148,6 +155,7 @@ impl PtyManager {
             .map_err(|e| PtyError::PtyAllocation(e.to_string()))?;
 
         let (output_tx, output_rx) = broadcast::channel(OUTPUT_BROADCAST_CAPACITY);
+        let (input_tx, _) = broadcast::channel(64);
         let (exit_tx, exit_rx) = watch::channel(None);
 
         let output_tx_clone = output_tx.clone();
@@ -204,6 +212,7 @@ impl PtyManager {
             pid,
             writer: Arc::new(std::sync::Mutex::new(writer)),
             output_tx,
+            input_tx,
             exit_rx,
             initial_output: std::sync::Mutex::new(Some(output_rx)),
         });

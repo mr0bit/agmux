@@ -12,11 +12,11 @@ This specification details the event-driven 4-signal agent state classification 
 * **Text:** As a user monitoring concurrent agents, the system shall maintain a strictly typed 7-state machine per session: `WORKING` (actively computing/streaming), `WAITING` (blocked on user approval/prompt), `STUCK` (held unsubmitted text >10s), `FINISHED` (completed turn awaiting acknowledgment), `IDLE` (turn acknowledged or shell ready), `ERRORED` (crashed, non-zero exit, or rate-limited), and `DEAD` (process reaped, read-only snapshot stored).
 * **Criticality:** High
 * **SW Component:** `crates/agmux-core::state_machine`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Drive an agent session through all 7 states; verify that every transition generates a valid typed `StateChangeEvent` broadcast over IPC with zero illegal state flips.
 * **Downstream Req:** `LLD-STATE-7STATE-MODEL-001`
 * **Downstream Test:** `TEST-VER-STATE-001`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

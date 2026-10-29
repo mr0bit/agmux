@@ -11,7 +11,7 @@ use tokio::net::{UnixListener, UnixStream};
 use agmux_core::pty_manager::PtyManager;
 use agmux_proto::{
     HandshakeResponse, IpcMessage, ListSessionsResponse, SearchLogsResponse, SessionExitEvent,
-    SessionInfo, SpawnSessionResponse, TerminalOutputFrame, new_framed,
+    SessionInfo, SessionStateChangedEvent, SpawnSessionResponse, TerminalOutputFrame, new_framed,
 };
 
 pub use agmux_core::default_socket_path;
@@ -76,6 +76,7 @@ impl DaemonServer {
 
         let pty_manager = self.pty_manager;
         let auth_token = Arc::new(self.auth_token);
+        let (events, _) = tokio::sync::broadcast::channel::<SessionStateChangedEvent>(256);
 
         loop {
             match listener.accept().await {
@@ -83,9 +84,10 @@ impl DaemonServer {
                     let pty_mgr = pty_manager.clone();
                     let expected_token = auth_token.clone();
                     let storage = storage.clone();
+                    let events = events.clone();
                     tokio::spawn(async move {
                         if let Err(e) =
-                            handle_client(stream, pty_mgr, expected_token, storage).await
+                            handle_client(stream, pty_mgr, expected_token, storage, events).await
                         {
                             tracing::debug!("Client session ended: {e:#}");
                         }
@@ -105,6 +107,7 @@ async fn handle_client(
     pty_manager: PtyManager,
     expected_token: Arc<String>,
     storage: Arc<std::sync::Mutex<agmux_core::storage_engine::StorageEngine>>,
+    events: tokio::sync::broadcast::Sender<SessionStateChangedEvent>,
 ) -> Result<()> {
     let framed = new_framed(stream);
     let (mut sink, mut reader) = framed.split();
@@ -154,6 +157,26 @@ async fn handle_client(
         }
     });
 
+    let mut event_rx = events.subscribe();
+    let event_out = out_tx.clone();
+    let event_task = tokio::spawn(async move {
+        loop {
+            match event_rx.recv().await {
+                Ok(event) => {
+                    if event_out
+                        .send(IpcMessage::SessionStateChangedEvent(event))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            }
+        }
+    });
+
     while let Some(frame_res) = reader.next().await {
         let message = match frame_res {
             Ok(msg) => msg,
@@ -191,7 +214,7 @@ async fn handle_client(
                             created_at: std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)?
                                 .as_secs(),
-                            state: "WORKING".into(),
+                            state: "RUNNING".into(),
                         };
                         let db = storage.clone();
                         let inserted = tokio::task::spawn_blocking(move || {
@@ -212,24 +235,6 @@ async fn handle_client(
                                 .await;
                             continue;
                         }
-                        let db = storage.clone();
-                        let id = session_id.clone();
-                        let mut exit = session.subscribe_exit();
-                        tokio::spawn(async move {
-                            if exit.borrow().is_none() {
-                                let _ = exit.changed().await;
-                            }
-                            let result = tokio::task::spawn_blocking(move || {
-                                db.lock()
-                                    .map_err(|e| e.to_string())?
-                                    .update_session_state(&id, "DEAD")
-                                    .map_err(|e| e.to_string())
-                            })
-                            .await;
-                            if !matches!(result, Ok(Ok(()))) {
-                                tracing::error!("Failed to update session state: {result:?}");
-                            }
-                        });
                         let resp = IpcMessage::SpawnSessionResponse(SpawnSessionResponse {
                             session_id: session_id.clone(),
                             success: true,
@@ -241,9 +246,19 @@ async fn handle_client(
                         let out_tx_fwd = out_tx.clone();
                         let output_db = storage.clone();
                         let fwd_session_id = session_id.clone();
+                        let state_events = events.clone();
                         tokio::spawn(async move {
                             let mut output_rx = session.subscribe_output();
                             let mut exit_rx = session.subscribe_exit();
+                            let mut input_rx = session.subscribe_input();
+                            let threshold = std::env::var("AGMUX_STUCK_TIMEOUT_MS")
+                                .ok()
+                                .and_then(|v| v.parse::<u64>().ok())
+                                .filter(|v| *v > 0)
+                                .unwrap_or(120_000);
+                            let mut classifier = agmux_core::state_machine::Classifier::new(
+                                std::time::Duration::from_millis(threshold),
+                            );
 
                             let mut history =
                                 agmux_core::fts_indexer::TerminalHistory::new(1024 * 1024);
@@ -256,6 +271,7 @@ async fn handle_client(
                                         result = output_rx.recv() => {
                                             match result {
                                                 Ok(data) => {
+                                                    publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.output(&data)).await;
                                                     let lines = history.ingest(&data);
                                                     index_lines(output_db.clone(), &fwd_session_id, &mut line_no, lines).await;
                                                     let _ = out_tx_fwd.send(IpcMessage::TerminalOutputFrame(TerminalOutputFrame { session_id: fwd_session_id.clone(), data })).await;
@@ -265,12 +281,27 @@ async fn handle_client(
                                                 Err(_) => true,
                                             }
                                         }
+                                        _ = input_rx.recv() => {
+                                            publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.input()).await;
+                                            false
+                                        }
+                                        _ = tokio::time::sleep_until(classifier.deadline().into()), if classifier.state() == agmux_core::state_machine::SessionState::Running => {
+                                            publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.timeout()).await;
+                                            false
+                                        }
                                         _ = exit_rx.changed() => true,
                                     }
                                 };
                                 if finished {
                                     // The reader has stopped before exit is signaled; drain queued frames first.
                                     while let Ok(data) = output_rx.try_recv() {
+                                        publish_transition(
+                                            output_db.clone(),
+                                            &state_events,
+                                            &fwd_session_id,
+                                            classifier.output(&data),
+                                        )
+                                        .await;
                                         let lines = history.ingest(&data);
                                         index_lines(
                                             output_db.clone(),
@@ -298,6 +329,15 @@ async fn handle_client(
                                         .await;
                                     }
                                     let code = *exit_rx.borrow();
+                                    if let Some(code) = code {
+                                        publish_transition(
+                                            output_db.clone(),
+                                            &state_events,
+                                            &fwd_session_id,
+                                            classifier.exit(code),
+                                        )
+                                        .await;
+                                    }
                                     let _ = out_tx_fwd
                                         .send(IpcMessage::SessionExitEvent(SessionExitEvent {
                                             session_id: fwd_session_id.clone(),
@@ -371,12 +411,14 @@ async fn handle_client(
             | IpcMessage::ListSessionsResponse(_)
             | IpcMessage::SpawnSessionResponse(_)
             | IpcMessage::TerminalOutputFrame(_)
-            | IpcMessage::SessionExitEvent(_) => {
+            | IpcMessage::SessionExitEvent(_)
+            | IpcMessage::SessionStateChangedEvent(_) => {
                 tracing::debug!("Unhandled message in active session state: {message:?}");
             }
         }
     }
 
+    event_task.abort();
     writer_task.abort();
     Ok(())
 }
@@ -406,5 +448,38 @@ async fn index_lines(
     .await;
     if !matches!(result, Ok(Ok(()))) {
         tracing::error!("Failed to index terminal lines: {result:?}");
+    }
+}
+
+async fn publish_transition(
+    db: Arc<std::sync::Mutex<agmux_core::storage_engine::StorageEngine>>,
+    events: &tokio::sync::broadcast::Sender<SessionStateChangedEvent>,
+    id: &str,
+    transition: Option<(
+        agmux_core::state_machine::SessionState,
+        agmux_core::state_machine::SessionState,
+        &'static str,
+    )>,
+) {
+    if let Some((old, new, reason)) = transition {
+        let session_id = id.to_owned();
+        let db_id = session_id.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            db.lock()
+                .map_err(|e| e.to_string())?
+                .update_session_state(&db_id, new.as_str())
+                .map_err(|e| e.to_string())
+        })
+        .await;
+        if matches!(result, Ok(Ok(()))) {
+            let _ = events.send(SessionStateChangedEvent {
+                session_id,
+                old_state: old.as_str().into(),
+                new_state: new.as_str().into(),
+                reason: reason.into(),
+            });
+        } else {
+            tracing::error!("Failed to persist state transition: {result:?}");
+        }
     }
 }

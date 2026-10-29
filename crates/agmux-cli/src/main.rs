@@ -111,16 +111,17 @@ async fn main() -> Result<()> {
                 println!("{}", serde_json::to_string(&sessions)?);
             } else {
                 println!(
-                    "{:<24} {:<8} {:<24} {:<24} STARTED",
-                    "SESSION ID", "PID", "COMMAND", "CWD"
+                    "{:<24} {:<8} {:<24} {:<24} {:<16} STARTED",
+                    "SESSION ID", "PID", "COMMAND", "CWD", "STATE"
                 );
                 for session in sessions {
                     println!(
-                        "{:<24} {:<8} {:<24} {:<24} {}",
+                        "{:<24} {:<8} {:<24} {:<24} {} {}",
                         session.session_id,
                         session.pid,
                         session.command,
                         session.cwd,
+                        state_badge(&session.state),
                         session.created_at
                     );
                 }
@@ -133,4 +134,16 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn state_badge(state: &str) -> String {
+    let color = match state {
+        "RUNNING" => 32,
+        "WAITING_INPUT" => 33,
+        "STUCK" => 35,
+        "COMPLETED" => 36,
+        "FAILED" => 31,
+        _ => 0,
+    };
+    format!("\x1b[{color}m[{state}]\x1b[0m")
 }

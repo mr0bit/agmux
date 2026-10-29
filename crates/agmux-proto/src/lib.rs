@@ -8,6 +8,7 @@ pub use auth::constant_time_eq;
 pub use messages::{
     HandshakeRequest, HandshakeResponse, IpcMessage, ListSessionsRequest, ListSessionsResponse,
     SearchLogsRequest, SearchLogsResponse, SearchMatch, SessionExitEvent, SessionInfo,
-    SpawnSessionRequest, SpawnSessionResponse, TerminalInputFrame, TerminalOutputFrame,
+    SessionStateChangedEvent, SpawnSessionRequest, SpawnSessionResponse, TerminalInputFrame,
+    TerminalOutputFrame,
 };
 pub use transport::{FramedStream, IpcCodec, ProtoError, new_framed};

@@ -73,6 +73,15 @@ pub struct SessionExitEvent {
     pub exit_code: Option<i32>,
 }
 
+/// Notification of a persisted session state transition.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionStateChangedEvent {
+    pub session_id: String,
+    pub old_state: String,
+    pub new_state: String,
+    pub reason: String,
+}
+
 /// Request the active sessions.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListSessionsRequest {}
@@ -138,6 +147,7 @@ pub enum IpcMessage {
     TerminalInputFrame(TerminalInputFrame),
     /// Daemon signals child process termination.
     SessionExitEvent(SessionExitEvent),
+    SessionStateChangedEvent(SessionStateChangedEvent),
 }
 
 impl From<HandshakeRequest> for IpcMessage {

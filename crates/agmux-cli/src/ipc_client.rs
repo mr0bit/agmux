@@ -74,11 +74,16 @@ pub async fn run_command(
         .await
         .context("Failed sending spawn request to daemon")?;
 
-    let spawn_res = reader
-        .next()
-        .await
-        .context("Connection closed by daemon during spawn request")?
-        .context("Framing error reading spawn response")?;
+    let spawn_res = loop {
+        let message = reader
+            .next()
+            .await
+            .context("Connection closed by daemon during spawn request")?
+            .context("Framing error reading spawn response")?;
+        if !matches!(message, IpcMessage::SessionStateChangedEvent(_)) {
+            break message;
+        }
+    };
 
     match spawn_res {
         IpcMessage::SpawnSessionResponse(resp) => {
@@ -144,11 +149,16 @@ pub async fn list_sessions(
             agmux_proto::ListSessionsRequest {},
         ))
         .await?;
-    match framed
-        .next()
-        .await
-        .context("Connection closed during list request")??
-    {
+    let response = loop {
+        let message = framed
+            .next()
+            .await
+            .context("Connection closed during list request")??;
+        if !matches!(message, IpcMessage::SessionStateChangedEvent(_)) {
+            break message;
+        }
+    };
+    match response {
         IpcMessage::ListSessionsResponse(response) => Ok(response.sessions),
         other => bail!("Unexpected list response: {other:?}"),
     }
@@ -189,11 +199,16 @@ pub async fn search_logs(
             },
         ))
         .await?;
-    match framed
-        .next()
-        .await
-        .context("Connection closed during search")??
-    {
+    let response = loop {
+        let message = framed
+            .next()
+            .await
+            .context("Connection closed during search")??;
+        if !matches!(message, IpcMessage::SessionStateChangedEvent(_)) {
+            break message;
+        }
+    };
+    match response {
         IpcMessage::SearchLogsResponse(response) => Ok(response.matches),
         other => bail!("Unexpected search response: {other:?}"),
     }

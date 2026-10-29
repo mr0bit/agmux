@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod pty_manager;
+pub mod state_machine;
 pub mod storage_engine;
 
 use std::path::PathBuf;

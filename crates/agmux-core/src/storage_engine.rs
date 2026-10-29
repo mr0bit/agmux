@@ -110,7 +110,7 @@ impl StorageEngine {
         Ok(())
     }
     pub fn list_active_sessions(&self) -> Result<Vec<SessionInfo>, StorageError> {
-        let mut stmt = self.connection.prepare("SELECT id,pid,cwd,command,created_at,state FROM sessions WHERE state NOT IN ('DEAD','ERRORED') ORDER BY created_at,id")?;
+        let mut stmt = self.connection.prepare("SELECT id,pid,cwd,command,created_at,state FROM sessions WHERE state NOT IN ('DEAD','ERRORED','COMPLETED','FAILED') ORDER BY created_at,id")?;
         let rows = stmt.query_map([], |r| {
             Ok(SessionInfo {
                 session_id: r.get(0)?,
