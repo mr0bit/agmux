@@ -22,6 +22,9 @@ pub enum WorktreeError {
     /// Git rejected the request.
     #[error("git failed: {0}")]
     Git(String),
+    /// The checkout contains uncommitted changes.
+    #[error("dirty working tree: {0}")]
+    DirtyWorkingTree(PathBuf),
     /// A branch or include path was unsafe.
     #[error("invalid worktree path or pattern: {0}")]
     InvalidPath(String),
@@ -67,7 +70,15 @@ pub fn provision_worktree(repo_root: &Path, branch: &str) -> Result<WorktreeInfo
     )?;
     let result = copy_includes(&repo_root, &path);
     if let Err(error) = result {
-        let _ = remove_worktree(&repo_root, &path);
+        let _ = git(
+            &repo_root,
+            &[
+                "worktree".as_ref(),
+                "remove".as_ref(),
+                "--force".as_ref(),
+                path.as_os_str(),
+            ],
+        );
         return Err(error);
     }
     let hash = branch.bytes().fold(2166136261u32, |h, b| {
@@ -122,7 +133,7 @@ fn matches_pattern(pattern: &[u8], name: &[u8]) -> bool {
     }
 }
 
-/// Force removal of a Git worktree.
+/// Remove a Git worktree from disk and Git tracking.
 pub fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<(), WorktreeError> {
     git(
         repo_root,
@@ -133,4 +144,69 @@ pub fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<(), Wor
             worktree_path.as_os_str(),
         ],
     )
+}
+
+/// Check for tracked or untracked changes, or unpushed commits in a checkout.
+pub fn is_worktree_dirty(worktree_path: &Path) -> Result<bool, WorktreeError> {
+    let output = Command::new("git")
+        .current_dir(worktree_path)
+        .args(["status", "--porcelain"])
+        .output()?;
+    if !output.status.success() {
+        return Err(WorktreeError::Git(
+            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        ));
+    }
+    if !output.stdout.is_empty() {
+        return Ok(true);
+    }
+    // Also check for unpushed commits if an upstream branch is tracked
+    if let Ok(unpushed) = Command::new("git")
+        .current_dir(worktree_path)
+        .args(["log", "@{u}..HEAD", "--oneline"])
+        .output()
+    {
+        if unpushed.status.success() && !unpushed.stdout.is_empty() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Stash tracked and untracked changes before removing a checkout.
+pub fn create_backup_stash(worktree_path: &Path) -> Result<String, WorktreeError> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let name = format!("agmux-auto-stash-{timestamp}");
+    git(
+        worktree_path,
+        &[
+            "stash".as_ref(),
+            "push".as_ref(),
+            "-u".as_ref(),
+            "-m".as_ref(),
+            name.as_ref(),
+        ],
+    )?;
+    Ok(name)
+}
+
+/// Remove a checkout only after preserving any uncommitted changes.
+pub fn safe_remove_worktree(
+    repo_root: &Path,
+    worktree_path: &Path,
+    force: bool,
+) -> Result<Option<String>, WorktreeError> {
+    let stash = if is_worktree_dirty(worktree_path)? {
+        if !force {
+            return Err(WorktreeError::DirtyWorkingTree(worktree_path.to_path_buf()));
+        }
+        Some(create_backup_stash(worktree_path)?)
+    } else {
+        None
+    };
+    remove_worktree(repo_root, worktree_path)?;
+    Ok(stash)
 }

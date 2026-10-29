@@ -1,6 +1,6 @@
 //! SQLite session metadata repository.
 use agmux_proto::{SearchMatch, SessionInfo};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 
 /// SQLite repository. The daemon owns the connection.
@@ -123,6 +123,26 @@ impl StorageEngine {
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+    /// Look up a session regardless of its lifecycle state.
+    pub fn get_session(&self, id: &str) -> Result<Option<SessionInfo>, StorageError> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT id,pid,cwd,command,created_at,state FROM sessions WHERE id=?1",
+                [id],
+                |r| {
+                    Ok(SessionInfo {
+                        session_id: r.get(0)?,
+                        pid: r.get(1)?,
+                        cwd: r.get(2)?,
+                        command: r.get(3)?,
+                        created_at: r.get(4)?,
+                        state: r.get(5)?,
+                    })
+                },
+            )
+            .optional()?)
     }
     pub fn remove_session(&self, id: &str) -> Result<(), StorageError> {
         self.connection

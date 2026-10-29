@@ -482,6 +482,76 @@ async fn handle_client(
                     }));
                 }
             }
+            IpcMessage::RemoveSessionRequest(req) => {
+                let db = storage.clone();
+                let sid = req.session_id.clone();
+                let force = req.force;
+                let result =
+                    tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
+                        let session = db
+                            .lock()
+                            .map_err(|e| e.to_string())?
+                            .get_session(&sid)
+                            .map_err(|e| e.to_string())?
+                            .ok_or_else(|| format!("session not found: {sid}"))?;
+                        let cwd = PathBuf::from(session.cwd);
+                        let stash = if cwd.join(".git").is_file() {
+                            let output = std::process::Command::new("git")
+                                .current_dir(&cwd)
+                                .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+                                .output()
+                                .map_err(|e| e.to_string())?;
+                            if !output.status.success() {
+                                return Err(String::from_utf8_lossy(&output.stderr)
+                                    .trim()
+                                    .to_owned());
+                            }
+                            let common = PathBuf::from(
+                                String::from_utf8(output.stdout)
+                                    .map_err(|e| e.to_string())?
+                                    .trim(),
+                            );
+                            let root = common
+                                .parent()
+                                .ok_or_else(|| "invalid git common directory".to_string())?;
+                            agmux_core::worktree_manager::safe_remove_worktree(root, &cwd, force)
+                                .map_err(|e| e.to_string())?
+                        } else {
+                            None
+                        };
+                        db.lock()
+                            .map_err(|e| e.to_string())?
+                            .remove_session(&sid)
+                            .map_err(|e| e.to_string())?;
+                        Ok(stash)
+                    })
+                    .await;
+                let response = match result {
+                    Ok(Ok(stash_created)) => {
+                        if let Some(session) = pty_manager.remove_session(&req.session_id).await {
+                            session.kill();
+                        }
+                        agmux_proto::RemoveSessionResponse {
+                            success: true,
+                            stash_created,
+                            error: None,
+                        }
+                    }
+                    Ok(Err(error)) => agmux_proto::RemoveSessionResponse {
+                        success: false,
+                        stash_created: None,
+                        error: Some(error),
+                    },
+                    Err(error) => agmux_proto::RemoveSessionResponse {
+                        success: false,
+                        stash_created: None,
+                        error: Some(error.to_string()),
+                    },
+                };
+                out_tx
+                    .send(IpcMessage::RemoveSessionResponse(response))
+                    .await?;
+            }
             IpcMessage::ListSessionsRequest(_) => {
                 let db = storage.clone();
                 let sessions = tokio::task::spawn_blocking(move || {
@@ -584,6 +654,7 @@ async fn handle_client(
                     .await?;
             }
             IpcMessage::HandshakeRequest(_)
+            | IpcMessage::RemoveSessionResponse(_)
             | IpcMessage::FreezeSessionResponse(_)
             | IpcMessage::ResumeSessionResponse(_)
             | IpcMessage::HandshakeResponse(_)

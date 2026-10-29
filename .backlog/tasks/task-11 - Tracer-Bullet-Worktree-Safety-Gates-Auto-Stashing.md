@@ -1,8 +1,10 @@
 ---
 id: TASK-11
 title: 'Tracer Bullet: Worktree Safety Gates & Auto-Stashing'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@codex'
+  - '@agy'
 created_date: '2026-10-29T00:48:00Z'
 labels:
   - tracer-bullet
@@ -27,8 +29,8 @@ Prevents accidental loss of uncommitted agent code during session removal. Inspe
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Teardown inspects worktree status and rejects removal of dirty working tree without force
-- [ ] #2 Forced removal creates timestamped automatic git stash before pruning
-- [ ] #3 Pruned worktree cleans up OS directories and unregisters from git worktree list
-- [ ] #4 Integration test asserts dirty rejection, force stash creation, and clean removal
+- [x] #1 Teardown inspects worktree status and rejects removal of dirty working tree without force
+- [x] #2 Forced removal creates timestamped automatic git stash before pruning
+- [x] #3 Pruned worktree cleans up OS directories and unregisters from git worktree list
+- [x] #4 Integration test asserts dirty rejection, force stash creation, and clean removal
 <!-- AC:END -->

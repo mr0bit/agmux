@@ -61,6 +61,13 @@ enum Commands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Remove a session and its worktree.
+    #[command(alias = "rm")]
+    Remove {
+        session_id: String,
+        #[arg(long)]
+        force: bool,
+    },
     /// Freeze an active session, persisting screen to Zstd snapshot
     Freeze {
         /// Session identifier to freeze
@@ -170,6 +177,20 @@ async fn main() -> Result<()> {
         }) => {
             let exit_code = run_command(&socket_path, &token, command, args, worktree).await?;
             std::process::exit(exit_code);
+        }
+        Some(Commands::Remove { session_id, force }) => {
+            let response =
+                agmux_cli::ipc_client::remove_session(&socket_path, &token, session_id, force)
+                    .await?;
+            if !response.success {
+                anyhow::bail!(
+                    "{}",
+                    response.error.unwrap_or_else(|| "Removal failed".into())
+                );
+            }
+            if let Some(stash) = response.stash_created {
+                println!("Backup stash: {stash}");
+            }
         }
         Some(Commands::Freeze { session_id }) => {
             let resp = agmux_cli::freeze_session(&socket_path, &token, session_id.clone()).await?;

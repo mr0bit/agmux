@@ -154,10 +154,27 @@ pub struct ResumeSessionResponse {
     pub screen_data: Vec<u8>,
 }
 
+/// Request removal of a persisted session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoveSessionRequest {
+    pub session_id: String,
+    pub force: bool,
+}
+
+/// Result of a session removal.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoveSessionResponse {
+    pub success: bool,
+    pub stash_created: Option<String>,
+    pub error: Option<String>,
+}
+
 /// Unified framed IPC message envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload")]
 pub enum IpcMessage {
+    RemoveSessionRequest(RemoveSessionRequest),
+    RemoveSessionResponse(RemoveSessionResponse),
     FreezeSessionRequest(FreezeSessionRequest),
     FreezeSessionResponse(FreezeSessionResponse),
     ResumeSessionRequest(ResumeSessionRequest),

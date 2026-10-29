@@ -25,11 +25,11 @@ This specification details the Git worktree provisioning engine (`gix`/`git2`), 
 * **Text:** As a user or autonomous agent attempting to delete, archive, or teardown a session with an active Git worktree, the system shall inspect git status; if uncommitted changes or unpushed commits exist, the operation shall be blocked unless explicit `--force` confirmation is passed, and a backup `git stash` shall be created automatically before deletion.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-core::worktree_safety_gate`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Modify a file in a worktree without committing; trigger `agmux session delete`. Verify that the operation fails with a dirty-working-tree warning. Add `--force`; verify that an automatic backup `git stash` is created before the worktree directory is removed.
 * **Downstream Req:** `LLD-GIT-SAFETY-GATE-002`
 * **Downstream Test:** `TEST-VER-GIT-002`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

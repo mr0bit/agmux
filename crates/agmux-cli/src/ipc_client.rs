@@ -303,3 +303,46 @@ pub async fn resume_session(
         other => bail!("Unexpected resume response: {other:?}"),
     }
 }
+
+/// Remove a session over authenticated IPC.
+pub async fn remove_session(
+    socket_path: &Path,
+    token: &str,
+    session_id: String,
+    force: bool,
+) -> Result<agmux_proto::RemoveSessionResponse> {
+    let stream = UnixStream::connect(socket_path)
+        .await
+        .context("Failed to connect to daemon")?;
+    let mut framed = new_framed(stream);
+    framed
+        .send(IpcMessage::HandshakeRequest(HandshakeRequest {
+            client_version: env!("CARGO_PKG_VERSION").into(),
+            token: token.into(),
+        }))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during handshake")??
+    {
+        IpcMessage::HandshakeResponse(response) if response.success => {}
+        other => bail!("Authentication failed: {other:?}"),
+    }
+    framed
+        .send(IpcMessage::RemoveSessionRequest(
+            agmux_proto::RemoveSessionRequest { session_id, force },
+        ))
+        .await?;
+    loop {
+        match framed
+            .next()
+            .await
+            .context("Connection closed during removal")??
+        {
+            IpcMessage::RemoveSessionResponse(response) => return Ok(response),
+            IpcMessage::SessionStateChangedEvent(_) => continue,
+            other => bail!("Unexpected removal response: {other:?}"),
+        }
+    }
+}
