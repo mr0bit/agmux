@@ -27,6 +27,10 @@ Whenever an AI agent (Codex, Antigravity, or orchestrator) is tasked with implem
    cargo fmt --check
    cargo clippy -- -D warnings
    ```
-3. **Update Test Status:** Update the spec file in `docs/specs/` setting `Implementation Status: Verified` and `Test Status: Passed`.
-4. **Close Task in Backlog:** Run `npx backlog.md task edit <taskId> -s "Done"`.
-5. **Report Concisely:** Provide a structured report summarizing modified files, verification test outputs, and spec updates.
+3. **Capture Visual Proof Artifact:** Execute the feature live as a proper user, capture a high-resolution terminal/TUI screenshot, and store it under `docs/assets/screenshots/<task>_verification.png`.
+4. **Update Test Status:** Update the spec file in `docs/specs/` setting `Implementation Status: Verified` and `Test Status: Passed`.
+5. **Close Task in Backlog:** Run `npx backlog.md task edit <taskId> -s "Done"`.
+6. **Report with Visual Proof & Traceability Matrix:**
+   * In PR bodies, include a dedicated technical report for each task followed by its visual proof screenshot.
+   * **Private Repo Asset Upload Trick:** Use `gh pr edit` / `gh pr create` with `--attach docs/assets/screenshots/<task>_verification.png` flags to automatically upload images to GitHub user-attachment storage and rewrite markdown references.
+   * Include the **Traceability Contribution & Delta Table** showing the baseline, per-phase gains, net gain, and post-PR status.
