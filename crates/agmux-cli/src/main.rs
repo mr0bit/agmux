@@ -255,7 +255,7 @@ async fn main() -> Result<()> {
             }
         }
         Some(Commands::Input { session_id, text }) => {
-            let stream = tokio::net::UnixStream::connect(&socket_path)
+            let stream = agmux_proto::connect_ipc(&socket_path)
                 .await
                 .context("Failed to connect to daemon")?;
             let mut framed = agmux_proto::new_framed(stream);

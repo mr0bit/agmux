@@ -6,12 +6,12 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::{UnixListener, UnixStream};
 
 use agmux_core::pty_manager::PtyManager;
 use agmux_proto::{
-    HandshakeResponse, IpcMessage, ListSessionsResponse, SearchLogsResponse, SessionExitEvent,
-    SessionInfo, SessionStateChangedEvent, SpawnSessionResponse, TerminalOutputFrame, new_framed,
+    HandshakeResponse, IpcListener, IpcMessage, IpcServerStream, ListSessionsResponse,
+    SearchLogsResponse, SessionExitEvent, SessionInfo, SessionStateChangedEvent,
+    SpawnSessionResponse, TerminalOutputFrame, connect_ipc, new_framed,
 };
 
 pub use agmux_core::default_socket_path;
@@ -35,9 +35,10 @@ impl DaemonServer {
 
     /// Run the IPC listener loop.
     pub async fn run(self) -> Result<()> {
+        #[cfg(unix)]
         if self.socket_path.exists() {
             // Check if another daemon is already responding
-            if UnixStream::connect(&self.socket_path).await.is_ok() {
+            if connect_ipc(&self.socket_path).await.is_ok() {
                 anyhow::bail!(
                     "Active daemon already running on socket {}",
                     self.socket_path.display()
@@ -47,6 +48,17 @@ impl DaemonServer {
             let _ = fs::remove_file(&self.socket_path);
         }
 
+        #[cfg(windows)]
+        {
+            if connect_ipc(&self.socket_path).await.is_ok() {
+                anyhow::bail!(
+                    "Active daemon already running on pipe {}",
+                    self.socket_path.display()
+                );
+            }
+        }
+
+        #[cfg(unix)]
         if let Some(parent) = self.socket_path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create socket dir {}", parent.display()))?;
@@ -59,7 +71,7 @@ impl DaemonServer {
             .context("Failed to open session database")?,
         ));
 
-        let listener = UnixListener::bind(&self.socket_path)
+        let listener = IpcListener::bind(&self.socket_path)
             .with_context(|| format!("Failed to bind socket {}", self.socket_path.display()))?;
 
         #[cfg(unix)]
@@ -94,8 +106,8 @@ impl DaemonServer {
         };
 
         loop {
-            match listener.accept().await {
-                Ok((stream, _addr)) => {
+            match listener.accept_stream().await {
+                Ok(stream) => {
                     let ctx = ctx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_client(stream, ctx).await {
@@ -124,7 +136,7 @@ pub struct DaemonContext {
 }
 
 /// Process an individual client connection through handshake and session streaming.
-async fn handle_client(stream: UnixStream, ctx: DaemonContext) -> Result<()> {
+async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()> {
     let DaemonContext {
         pty_manager,
         expected_token,

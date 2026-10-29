@@ -8,6 +8,7 @@ use agmux_core::{
     agent_discovery::{DiscoveredAgent, discover_installed_agents},
     config_manager::ensure_config_exists,
 };
+use agmux_proto::connect_ipc;
 use agmux_proto::{
     FreezeSessionRequest, HandshakeRequest, IpcMessage, ListSessionsRequest, SessionInfo,
     SpawnSessionRequest, TerminalInputFrame, new_framed,
@@ -20,7 +21,6 @@ use crossterm::{
 };
 use futures_util::{SinkExt, StreamExt};
 use ratatui::{Terminal, backend::CrosstermBackend};
-use tokio::net::UnixStream;
 
 /// The currently displayed floating input.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -548,7 +548,7 @@ impl Drop for TerminalGuard {
 
 /// Connect to the daemon and run the interactive viewport until quit.
 pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
-    let stream = UnixStream::connect(socket_path)
+    let stream = connect_ipc(socket_path)
         .await
         .context("Failed to connect to daemon")?;
     let mut ipc = new_framed(stream);

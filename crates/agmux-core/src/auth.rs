@@ -24,8 +24,8 @@ pub enum AuthError {
 ///
 /// Priority:
 /// 1. `AGMUX_AUTH_TOKEN_PATH` environment variable if set.
-/// 2. `~/.agmux/auth_token` if `HOME` is available.
-/// 3. Fallback to `/tmp/.agmux_auth_token` if home directory is unavailable.
+/// 2. `APPDATA/agmux/auth_token` on Windows or `~/.agmux/auth_token` on Unix.
+/// 3. Fallback to `/tmp/.agmux_auth_token` or temp directory.
 pub fn default_token_path() -> PathBuf {
     if let Ok(path) = std::env::var("AGMUX_AUTH_TOKEN_PATH") {
         if !path.is_empty() {
@@ -33,20 +33,55 @@ pub fn default_token_path() -> PathBuf {
         }
     }
 
+    #[cfg(windows)]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            if !appdata.is_empty() {
+                return PathBuf::from(appdata).join("agmux").join("auth_token");
+            }
+        }
+        if let Ok(userprofile) = std::env::var("USERPROFILE") {
+            if !userprofile.is_empty() {
+                return PathBuf::from(userprofile).join(".agmux").join("auth_token");
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
     if let Ok(home) = std::env::var("HOME") {
         if !home.is_empty() {
             return PathBuf::from(home).join(".agmux").join("auth_token");
         }
     }
 
-    PathBuf::from("/tmp/.agmux_auth_token")
+    std::env::temp_dir().join(".agmux_auth_token")
 }
 
 /// Generate 32 cryptographically secure random bytes from `/dev/urandom` on POSIX systems.
+#[cfg(unix)]
 pub fn generate_random_32_bytes() -> Result<[u8; 32], std::io::Error> {
     let mut buf = [0u8; 32];
     let mut file = fs::File::open("/dev/urandom")?;
     file.read_exact(&mut buf)?;
+    Ok(buf)
+}
+
+/// Generate 32 pseudorandom entropy bytes on non-POSIX systems.
+#[cfg(not(unix))]
+pub fn generate_random_32_bytes() -> Result<[u8; 32], std::io::Error> {
+    let mut buf = [0u8; 32];
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let pid = std::process::id();
+    let mut state = (t ^ ((pid as u128) << 32)) as u64;
+    for byte in buf.iter_mut() {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        *byte = (state & 0xFF) as u8;
+    }
     Ok(buf)
 }
 

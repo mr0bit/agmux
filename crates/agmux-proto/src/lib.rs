@@ -1,10 +1,12 @@
 //! Shared protocol definitions and framed transport for agmux IPC.
 
 pub mod auth;
+pub mod ipc;
 pub mod messages;
 pub mod transport;
 
 pub use auth::constant_time_eq;
+pub use ipc::{IpcClientStream, IpcListener, IpcServerStream, connect_ipc};
 pub use messages::{
     AckCursorRequest, AckCursorResponse, AcknowledgeSessionRequest, AcknowledgeSessionResponse,
     AcquireLockRequest, AcquireLockResponse, AddReviewCommentRequest, AddReviewCommentResponse,

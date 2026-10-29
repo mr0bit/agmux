@@ -5,9 +5,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::UnixStream;
 
-use agmux_proto::{HandshakeRequest, IpcMessage, SpawnSessionRequest, new_framed};
+use agmux_proto::{HandshakeRequest, IpcMessage, SpawnSessionRequest, connect_ipc, new_framed};
 
 /// Connect to daemon IPC, spawn a command inside a new PTY session,
 /// and stream child stdout/stderr directly to the user's terminal until exit.
@@ -18,7 +17,7 @@ pub async fn run_command(
     args: Vec<String>,
     worktree_branch: Option<String>,
 ) -> Result<i32> {
-    let stream = UnixStream::connect(socket_path).await.with_context(|| {
+    let stream = connect_ipc(socket_path).await.with_context(|| {
         format!(
             "Failed to connect to daemon socket {}",
             socket_path.display()
@@ -128,7 +127,7 @@ pub async fn list_sessions(
     socket_path: &Path,
     token: &str,
 ) -> Result<Vec<agmux_proto::SessionInfo>> {
-    let stream = UnixStream::connect(socket_path)
+    let stream = connect_ipc(socket_path)
         .await
         .context("Failed to connect to daemon")?;
     let mut framed = new_framed(stream);
@@ -174,7 +173,7 @@ pub async fn search_logs(
     session_id: Option<String>,
     limit: u32,
 ) -> Result<Vec<agmux_proto::SearchMatch>> {
-    let stream = UnixStream::connect(socket_path)
+    let stream = connect_ipc(socket_path)
         .await
         .context("Failed to connect to daemon")?;
     let mut framed = new_framed(stream);
@@ -222,7 +221,7 @@ pub async fn freeze_session(
     token: &str,
     session_id: String,
 ) -> Result<agmux_proto::FreezeSessionResponse> {
-    let stream = UnixStream::connect(socket_path)
+    let stream = connect_ipc(socket_path)
         .await
         .context("Failed to connect to daemon")?;
     let mut framed = new_framed(stream);
@@ -266,7 +265,7 @@ pub async fn resume_session(
     token: &str,
     session_id: String,
 ) -> Result<agmux_proto::ResumeSessionResponse> {
-    let stream = UnixStream::connect(socket_path)
+    let stream = connect_ipc(socket_path)
         .await
         .context("Failed to connect to daemon")?;
     let mut framed = new_framed(stream);
@@ -311,7 +310,7 @@ pub async fn remove_session(
     session_id: String,
     force: bool,
 ) -> Result<agmux_proto::RemoveSessionResponse> {
-    let stream = UnixStream::connect(socket_path)
+    let stream = connect_ipc(socket_path)
         .await
         .context("Failed to connect to daemon")?;
     let mut framed = new_framed(stream);
@@ -353,7 +352,7 @@ pub async fn get_diff(
     token: &str,
     request: agmux_proto::GetDiffRequest,
 ) -> Result<Vec<agmux_proto::FileDiff>> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -393,7 +392,7 @@ pub async fn review_request(
     token: &str,
     request: IpcMessage,
 ) -> Result<IpcMessage> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -428,7 +427,7 @@ pub async fn acquire_lock(
     session_id: String,
     wait: bool,
 ) -> Result<agmux_proto::AcquireLockResponse> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -472,7 +471,7 @@ pub async fn release_lock(
     lock_name: String,
     session_id: String,
 ) -> Result<agmux_proto::ReleaseLockResponse> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -510,7 +509,7 @@ pub async fn release_lock(
 
 /// Request active lock list over authenticated IPC.
 pub async fn list_locks(socket_path: &Path, token: &str) -> Result<agmux_proto::ListLocksResponse> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -606,7 +605,7 @@ pub async fn reserve_files(
     session_id: String,
     paths: Vec<String>,
 ) -> Result<agmux_proto::ReserveFilesResponse> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -646,7 +645,7 @@ pub async fn release_files(
     session_id: String,
     paths: Vec<String>,
 ) -> Result<agmux_proto::ReleaseFilesResponse> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -684,7 +683,7 @@ pub async fn list_reservations(
     socket_path: &Path,
     token: &str,
 ) -> Result<agmux_proto::ListReservationsResponse> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -729,7 +728,7 @@ pub async fn watch_events<F>(
 where
     F: FnMut(agmux_proto::WatchEventFrame) -> Result<bool>,
 {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
