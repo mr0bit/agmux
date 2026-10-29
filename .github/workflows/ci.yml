@@ -36,7 +36,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Run .soul V-Cycle Traceability Check
         run: node .soul/tools/v-cycle-checker.mjs
@@ -54,6 +54,9 @@ jobs:
 
       - name: Run Clippy Linter (cargo clippy)
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build Debug Binaries for Integration Tests
+        run: cargo build --workspace --bins
 
       - name: Run Test Suites (cargo test)
         run: cargo test --workspace --verbose
