@@ -259,6 +259,16 @@ pub struct ListReviewCommentsResponse {
     pub error: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolveReviewCommentRequest {
+    pub session_id: Option<String>,
+    pub comment_id: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolveReviewCommentResponse {
+    pub success: bool,
+    pub error: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DispatchReviewRoundRequest {
     pub session_id: String,
 }
@@ -275,6 +285,8 @@ pub struct DispatchReviewRoundResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload")]
 pub enum IpcMessage {
+    ResolveReviewCommentRequest(ResolveReviewCommentRequest),
+    ResolveReviewCommentResponse(ResolveReviewCommentResponse),
     AddReviewCommentRequest(AddReviewCommentRequest),
     AddReviewCommentResponse(AddReviewCommentResponse),
     ListReviewCommentsRequest(ListReviewCommentsRequest),

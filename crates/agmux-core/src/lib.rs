@@ -58,3 +58,5 @@ pub enum AgmuxError {
 }
 
 pub mod fts_indexer;
+
+pub mod comment_tracker;

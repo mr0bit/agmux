@@ -52,6 +52,12 @@ impl StorageEngine {
         )?;
         Ok(())
     }
+    pub fn resolve_review_comment(&self, comment_id: &str) -> Result<bool, StorageError> {
+        Ok(self.connection.execute(
+            "UPDATE review_comments SET status='resolved' WHERE id=?1",
+            [comment_id],
+        )? > 0)
+    }
     pub fn list_review_comments(
         &self,
         session_id: &str,

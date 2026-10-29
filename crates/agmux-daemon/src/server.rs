@@ -491,6 +491,40 @@ async fn handle_client(
                     .send(IpcMessage::AddReviewCommentResponse(response))
                     .await?;
             }
+            IpcMessage::ResolveReviewCommentRequest(req) => {
+                let db = storage.clone();
+                let result = tokio::task::spawn_blocking(move || -> Result<bool, String> {
+                    let db = db.lock().map_err(|e| e.to_string())?;
+                    if let Some(session_id) = req.session_id {
+                        let comments = db
+                            .list_review_comments(&session_id, None)
+                            .map_err(|e| e.to_string())?;
+                        if !comments.iter().any(|c| c.id == req.comment_id) {
+                            return Ok(false);
+                        }
+                    }
+                    db.resolve_review_comment(&req.comment_id)
+                        .map_err(|e| e.to_string())
+                })
+                .await?;
+                let response = match result {
+                    Ok(true) => agmux_proto::ResolveReviewCommentResponse {
+                        success: true,
+                        error: None,
+                    },
+                    Ok(false) => agmux_proto::ResolveReviewCommentResponse {
+                        success: false,
+                        error: Some("Comment not found".into()),
+                    },
+                    Err(error) => agmux_proto::ResolveReviewCommentResponse {
+                        success: false,
+                        error: Some(error),
+                    },
+                };
+                out_tx
+                    .send(IpcMessage::ResolveReviewCommentResponse(response))
+                    .await?;
+            }
             IpcMessage::ListReviewCommentsRequest(req) => {
                 let db = storage.clone();
                 let result = tokio::task::spawn_blocking(move || {
@@ -587,13 +621,29 @@ async fn handle_client(
                             .map_err(|e| e.to_string())?;
                         (session, baseline)
                     };
-                    agmux_core::diff_calculator::calculate_diff(
+                    let track = matches!(
+                        req.scope,
+                        agmux_proto::DiffScope::FullUncommitted
+                            | agmux_proto::DiffScope::LastCommit
+                    );
+                    let files = agmux_core::diff_calculator::calculate_diff(
                         std::path::Path::new(&session.cwd),
                         req.scope,
                         baseline.as_deref(),
                         req.target.as_deref(),
                     )
-                    .map_err(|e| e.to_string())
+                    .map_err(|e| e.to_string())?;
+                    if track {
+                        let db = db.lock().map_err(|e| e.to_string())?;
+                        let comments = db
+                            .list_review_comments(&req.session_id, Some("sent"))
+                            .map_err(|e| e.to_string())?;
+                        let ids =
+                            agmux_core::comment_tracker::check_auto_resolutions(&comments, &files);
+                        db.update_comments_status(&ids, "resolved")
+                            .map_err(|e| e.to_string())?;
+                    }
+                    Ok(files)
                 })
                 .await?;
                 let response = match result {
@@ -835,7 +885,8 @@ async fn handle_client(
                     ))
                     .await?;
             }
-            IpcMessage::AddReviewCommentResponse(_)
+            IpcMessage::ResolveReviewCommentResponse(_)
+            | IpcMessage::AddReviewCommentResponse(_)
             | IpcMessage::ListReviewCommentsResponse(_)
             | IpcMessage::DispatchReviewRoundResponse(_)
             | IpcMessage::HandshakeRequest(_)

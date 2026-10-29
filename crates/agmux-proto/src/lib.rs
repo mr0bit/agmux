@@ -10,9 +10,10 @@ pub use messages::{
     DispatchReviewRoundRequest, DispatchReviewRoundResponse, FileDiff, FreezeSessionRequest,
     FreezeSessionResponse, GetDiffRequest, GetDiffResponse, HandshakeRequest, HandshakeResponse,
     IpcMessage, ListReviewCommentsRequest, ListReviewCommentsResponse, ListSessionsRequest,
-    ListSessionsResponse, RemoveSessionRequest, RemoveSessionResponse, ResumeSessionRequest,
-    ResumeSessionResponse, ReviewComment, SearchLogsRequest, SearchLogsResponse, SearchMatch,
-    SessionExitEvent, SessionInfo, SessionStateChangedEvent, SpawnSessionRequest,
-    SpawnSessionResponse, TerminalInputFrame, TerminalOutputFrame,
+    ListSessionsResponse, RemoveSessionRequest, RemoveSessionResponse, ResolveReviewCommentRequest,
+    ResolveReviewCommentResponse, ResumeSessionRequest, ResumeSessionResponse, ReviewComment,
+    SearchLogsRequest, SearchLogsResponse, SearchMatch, SessionExitEvent, SessionInfo,
+    SessionStateChangedEvent, SpawnSessionRequest, SpawnSessionResponse, TerminalInputFrame,
+    TerminalOutputFrame,
 };
 pub use transport::{FramedStream, IpcCodec, ProtoError, new_framed};

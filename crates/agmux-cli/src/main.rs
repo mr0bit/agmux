@@ -97,6 +97,11 @@ enum Commands {
 
 #[derive(Subcommand, Debug)]
 enum ReviewCommand {
+    Resolve {
+        comment_id: String,
+        #[arg(long)]
+        session: Option<String>,
+    },
     Comment {
         session_id: String,
         #[arg(long)]
@@ -159,7 +164,18 @@ async fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Review { command }) => {
             use agmux_proto::*;
+            let mut resolved_id = None;
             let request = match command {
+                ReviewCommand::Resolve {
+                    comment_id,
+                    session,
+                } => {
+                    resolved_id = Some(comment_id.clone());
+                    IpcMessage::ResolveReviewCommentRequest(ResolveReviewCommentRequest {
+                        session_id: session,
+                        comment_id,
+                    })
+                }
                 ReviewCommand::Comment {
                     session_id,
                     file,
@@ -184,6 +200,12 @@ async fn main() -> Result<()> {
                 }
             };
             match agmux_cli::ipc_client::review_request(&socket_path, &token, request).await? {
+                IpcMessage::ResolveReviewCommentResponse(r) if r.success => {
+                    println!("Resolved comment {}", resolved_id.unwrap_or_default())
+                }
+                IpcMessage::ResolveReviewCommentResponse(r) => {
+                    anyhow::bail!("{}", r.error.unwrap_or_default())
+                }
                 IpcMessage::AddReviewCommentResponse(r) if r.success => {
                     println!("{}", r.comment_id.unwrap_or_default())
                 }

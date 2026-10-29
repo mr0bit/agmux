@@ -64,8 +64,8 @@ This specification details the Git worktree provisioning engine (`gix`/`git2`), 
 * **Text:** As an agent resolving review comments, the system shall support dual resolution: (a) explicit agent command via `agmux review resolve <id>` or MCP `resolve_review_comment`, and (b) automated diff hunk tracking that marks comments `resolved` if the hunk matching `line_hash` was modified during the agent's turn.
 * **Criticality:** Medium
 * **SW Component:** `crates/agmux-core::comment_tracker`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Dispatch a review comment on line 42; allow the agent to edit line 42 and conclude its turn. Verify that the comment status transitions from `draft`/`sent` to `resolved` automatically in SQLite.
 * **Downstream Req:** `LLD-GIT-DUAL-RESOLUTION-005`
 * **Downstream Test:** `TEST-VER-GIT-005`
-* **Test Status:** Failed
+* **Test Status:** Passed
