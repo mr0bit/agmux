@@ -7,9 +7,7 @@ use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::UnixStream;
 
-use agmux_proto::{
-    HandshakeRequest, IpcMessage, SpawnSessionRequest, new_framed,
-};
+use agmux_proto::{HandshakeRequest, IpcMessage, SpawnSessionRequest, new_framed};
 
 /// Connect to daemon IPC, spawn a command inside a new PTY session,
 /// and stream child stdout/stderr directly to the user's terminal until exit.
@@ -19,9 +17,12 @@ pub async fn run_command(
     command: String,
     args: Vec<String>,
 ) -> Result<i32> {
-    let stream = UnixStream::connect(socket_path)
-        .await
-        .with_context(|| format!("Failed to connect to daemon socket {}", socket_path.display()))?;
+    let stream = UnixStream::connect(socket_path).await.with_context(|| {
+        format!(
+            "Failed to connect to daemon socket {}",
+            socket_path.display()
+        )
+    })?;
 
     let framed = new_framed(stream);
     let (mut sink, mut reader) = framed.split();
@@ -58,7 +59,9 @@ pub async fn run_command(
 
     // 2. Send SpawnSessionRequest
     let session_id = format!("run-{}", std::process::id());
-    let cwd = std::env::current_dir().ok().map(|p| p.display().to_string());
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|p| p.display().to_string());
 
     let spawn_req = IpcMessage::SpawnSessionRequest(SpawnSessionRequest {
         session_id: session_id.clone(),
@@ -98,21 +101,55 @@ pub async fn run_command(
     while let Some(msg_res) = reader.next().await {
         let msg = msg_res.context("Error receiving framed message from daemon")?;
         match msg {
-            IpcMessage::TerminalOutputFrame(frame) => {
-                if frame.session_id == session_id {
-                    let _ = stdout.write_all(&frame.data);
-                    let _ = stdout.flush();
-                }
+            IpcMessage::TerminalOutputFrame(frame) if frame.session_id == session_id => {
+                let _ = stdout.write_all(&frame.data);
+                let _ = stdout.flush();
             }
-            IpcMessage::SessionExitEvent(event) => {
-                if event.session_id == session_id {
-                    final_exit_code = event.exit_code.unwrap_or(0);
-                    break;
-                }
+            IpcMessage::SessionExitEvent(event) if event.session_id == session_id => {
+                final_exit_code = event.exit_code.unwrap_or(0);
+                break;
             }
             _ => {}
         }
     }
 
     Ok(final_exit_code)
+}
+
+/// Request active session metadata over authenticated IPC.
+pub async fn list_sessions(
+    socket_path: &Path,
+    token: &str,
+) -> Result<Vec<agmux_proto::SessionInfo>> {
+    let stream = UnixStream::connect(socket_path)
+        .await
+        .context("Failed to connect to daemon")?;
+    let mut framed = new_framed(stream);
+    framed
+        .send(IpcMessage::HandshakeRequest(HandshakeRequest {
+            client_version: env!("CARGO_PKG_VERSION").into(),
+            token: token.into(),
+        }))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during handshake")??
+    {
+        IpcMessage::HandshakeResponse(response) if response.success => {}
+        other => bail!("Authentication failed: {other:?}"),
+    }
+    framed
+        .send(IpcMessage::ListSessionsRequest(
+            agmux_proto::ListSessionsRequest {},
+        ))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during list request")??
+    {
+        IpcMessage::ListSessionsResponse(response) => Ok(response.sessions),
+        other => bail!("Unexpected list response: {other:?}"),
+    }
 }

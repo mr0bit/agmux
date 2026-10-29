@@ -1,9 +1,10 @@
 ---
 id: TASK-3
 title: 'Tracer Bullet: Session Persistence & agmux list'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-10-28T23:40:00Z'
+updated_date: '2026-10-29T00:14:00Z'
 labels:
   - tracer-bullet
   - storage

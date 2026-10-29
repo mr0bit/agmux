@@ -12,11 +12,11 @@ This specification defines the framed inter-process communication protocol (`agm
 * **Text:** As a client communicating with `agmuxd`, the system shall transmit length-delimited binary frames serialized with Bincode 2.0 over native local transports (Unix Domain Sockets on Linux/macOS/WSL2 at `/run/user/$UID/agmuxd.sock`, Named Pipes on Windows at `\\.\pipe\agmuxd-%USERNAME%`).
 * **Criticality:** High
 * **SW Component:** `crates/agmux-proto::transport`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Benchmark and verify bidirectional packet transmission across 10,000 requests; ensure 100% frame integrity, zero message truncation, and serialization overhead under 50 microseconds per frame.
 * **Downstream Req:** `LLD-IPC-FRAMING-001`
 * **Downstream Test:** `TEST-VER-IPC-001`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 
@@ -25,11 +25,11 @@ This specification defines the framed inter-process communication protocol (`agm
 * **Text:** As a security-conscious multi-user system operator, `agmuxd` shall generate a cryptographically secure 256-bit token stored in user-restricted storage (`~/.local/share/agmux/daemon.token` with mode `0600`) and require every connecting client to complete a handshake validation before processing any command frames.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-proto::auth`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Connect to the IPC socket with an invalid or absent authentication token. Verify that `agmuxd` immediately closes the connection without processing any input and logs an unauthorized connection attempt.
 * **Downstream Req:** `LLD-IPC-TOKEN-AUTH-002`
 * **Downstream Test:** `TEST-VER-IPC-002`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

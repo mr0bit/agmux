@@ -30,8 +30,8 @@ Cut complete vertical path from CLI 'agmux run <command>' -> auto-spawning backg
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 CLI auto-spawns daemon and negotiates framed IPC handshake with auth token
-- [ ] #2 Daemon allocates PTY and executes child process
-- [ ] #3 Child process stdout/stderr streams cleanly back to CLI terminal
-- [ ] #4 Verification integration test passes in tests/e2e_spawn_test.rs
+- [x] #1 CLI auto-spawns daemon and negotiates framed IPC handshake with auth token
+- [x] #2 Daemon allocates PTY and executes child process
+- [x] #3 Child process stdout/stderr streams cleanly back to CLI terminal
+- [x] #4 Verification integration test passes in tests/e2e_spawn_test.rs
 <!-- AC:END -->

@@ -12,11 +12,11 @@ This specification details the single-writer SQLite WAL database, embedded atomi
 * **Text:** As `agmuxd` persists state, the system shall operate a bundled SQLite database in WAL mode (`journal_mode = WAL`, `synchronous = NORMAL`, `temp_store = MEMORY`) located at `~/.local/share/agmux/state.db` (or `%LOCALAPPDATA%\agmux\state.db`), acting as the sole writer process.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-core::storage_engine`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Perform 1,000 concurrent read transactions while writing batches; verify zero database corruptions and sub-millisecond query execution.
 * **Downstream Req:** `LLD-STORAGE-SQLITE-WAL-001`
 * **Downstream Test:** `TEST-VER-STORAGE-001`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 
@@ -25,11 +25,11 @@ This specification details the single-writer SQLite WAL database, embedded atomi
 * **Text:** As new versions of Agmux are deployed, `agmuxd` on boot shall inspect `PRAGMA user_version` and apply embedded incremental SQL migrations within a single atomic transaction before serving any IPC requests.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-core::migration_manager`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Seed a version 0 database with mock data; start the daemon with version 1 schema migrations; verify that all tables, columns, and indexes migrate cleanly and `PRAGMA user_version` updates atomically.
 * **Downstream Req:** `LLD-STORAGE-ATOMIC-MIGRATION-002`
 * **Downstream Test:** `TEST-VER-STORAGE-002`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

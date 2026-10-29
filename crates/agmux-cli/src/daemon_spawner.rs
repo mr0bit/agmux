@@ -60,9 +60,12 @@ pub async fn ensure_daemon_running(socket_path: &Path, token_path: &Path) -> Res
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::null());
 
-    let mut child = cmd
-        .spawn()
-        .with_context(|| format!("Failed to auto-spawn daemon binary {}", daemon_bin.display()))?;
+    let mut child = cmd.spawn().with_context(|| {
+        format!(
+            "Failed to auto-spawn daemon binary {}",
+            daemon_bin.display()
+        )
+    })?;
 
     // Poll socket readiness with 50ms intervals up to 3 seconds (60 attempts)
     let max_attempts = 60;

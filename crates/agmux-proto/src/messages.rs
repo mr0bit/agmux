@@ -73,10 +73,34 @@ pub struct SessionExitEvent {
     pub exit_code: Option<i32>,
 }
 
+/// Request the active sessions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListSessionsRequest {}
+
+/// Persisted session metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionInfo {
+    pub session_id: String,
+    pub pid: u32,
+    pub cwd: String,
+    pub command: String,
+    /// Unix timestamp in seconds.
+    pub created_at: u64,
+    pub state: String,
+}
+
+/// Active sessions returned by the daemon.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListSessionsResponse {
+    pub sessions: Vec<SessionInfo>,
+}
+
 /// Unified framed IPC message envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload")]
 pub enum IpcMessage {
+    ListSessionsRequest(ListSessionsRequest),
+    ListSessionsResponse(ListSessionsResponse),
     /// Client initiates connection handshake.
     HandshakeRequest(HandshakeRequest),
     /// Daemon accepts or rejects connection handshake.

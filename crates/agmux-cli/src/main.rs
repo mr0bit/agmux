@@ -9,7 +9,11 @@ use agmux_cli::{ensure_daemon_running, run_command};
 use agmux_core::default_socket_path;
 
 #[derive(Parser, Debug)]
-#[command(name = "agmux", version, about = "Agmux agentic terminal multiplexer CLI")]
+#[command(
+    name = "agmux",
+    version,
+    about = "Agmux agentic terminal multiplexer CLI"
+)]
 struct Cli {
     /// Path to IPC Unix domain socket.
     #[arg(short, long)]
@@ -25,6 +29,12 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// List active sessions.
+    List {
+        /// Output a JSON array.
+        #[arg(long)]
+        json: bool,
+    },
     /// Spawn a command inside a new PTY session and attach to its output stream
     Run {
         /// Executable command name
@@ -47,7 +57,9 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let socket_path = cli.socket.unwrap_or_else(default_socket_path);
-    let token_path = cli.token_path.unwrap_or_else(agmux_core::default_token_path);
+    let token_path = cli
+        .token_path
+        .unwrap_or_else(agmux_core::default_token_path);
 
     // 1. Ensure daemon is running (auto-spawn if not alive)
     ensure_daemon_running(&socket_path, &token_path).await?;
@@ -58,9 +70,32 @@ async fn main() -> Result<()> {
 
     // 3. Dispatch subcommand
     match cli.command {
+        Commands::List { json } => {
+            let sessions = agmux_cli::ipc_client::list_sessions(&socket_path, &token).await?;
+            if json {
+                println!("{}", serde_json::to_string(&sessions)?);
+            } else {
+                println!(
+                    "{:<24} {:<8} {:<24} {:<24} STARTED",
+                    "SESSION ID", "PID", "COMMAND", "CWD"
+                );
+                for session in sessions {
+                    println!(
+                        "{:<24} {:<8} {:<24} {:<24} {}",
+                        session.session_id,
+                        session.pid,
+                        session.command,
+                        session.cwd,
+                        session.created_at
+                    );
+                }
+            }
+        }
         Commands::Run { command, args } => {
             let exit_code = run_command(&socket_path, &token, command, args).await?;
             std::process::exit(exit_code);
         }
     }
+
+    Ok(())
 }

@@ -12,11 +12,11 @@ This specification details the pseudo-terminal allocation (`portable-pty`), Win3
 * **Text:** As a user spawning an agent session on Linux, macOS, or Windows, the system shall allocate native pseudo-terminals using `portable-pty` (POSIX openpty on Unix, CreatePseudoConsole ConPTY on Windows) without requiring tmux or psmux binaries.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-core::pty_manager`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Spawn CLI sessions across Linux, macOS, and native Windows 11; verify interactive shell execution, raw terminal mode negotiation, and cursor addressing without external dependencies.
 * **Downstream Req:** `LLD-PTY-CROSSPLAT-001`
 * **Downstream Test:** `TEST-VER-PTY-001`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

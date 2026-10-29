@@ -10,8 +10,8 @@ use tokio::net::{UnixListener, UnixStream};
 
 use agmux_core::pty_manager::PtyManager;
 use agmux_proto::{
-    HandshakeResponse, IpcMessage, SessionExitEvent, SpawnSessionResponse, TerminalOutputFrame,
-    new_framed,
+    HandshakeResponse, IpcMessage, ListSessionsResponse, SessionExitEvent, SessionInfo,
+    SpawnSessionResponse, TerminalOutputFrame, new_framed,
 };
 
 pub use agmux_core::default_socket_path;
@@ -52,6 +52,13 @@ impl DaemonServer {
                 .with_context(|| format!("Failed to create socket dir {}", parent.display()))?;
         }
 
+        let storage = Arc::new(std::sync::Mutex::new(
+            agmux_core::storage_engine::StorageEngine::open(
+                &agmux_core::storage_engine::default_database_path(),
+            )
+            .context("Failed to open session database")?,
+        ));
+
         let listener = UnixListener::bind(&self.socket_path)
             .with_context(|| format!("Failed to bind socket {}", self.socket_path.display()))?;
 
@@ -75,8 +82,11 @@ impl DaemonServer {
                 Ok((stream, _addr)) => {
                     let pty_mgr = pty_manager.clone();
                     let expected_token = auth_token.clone();
+                    let storage = storage.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, pty_mgr, expected_token).await {
+                        if let Err(e) =
+                            handle_client(stream, pty_mgr, expected_token, storage).await
+                        {
                             tracing::debug!("Client session ended: {e:#}");
                         }
                     });
@@ -94,6 +104,7 @@ async fn handle_client(
     stream: UnixStream,
     pty_manager: PtyManager,
     expected_token: Arc<String>,
+    storage: Arc<std::sync::Mutex<agmux_core::storage_engine::StorageEngine>>,
 ) -> Result<()> {
     let framed = new_framed(stream);
     let (mut sink, mut reader) = framed.split();
@@ -155,6 +166,16 @@ async fn handle_client(
         match message {
             IpcMessage::SpawnSessionRequest(req) => {
                 let session_id = req.session_id.clone();
+                let cwd_text = req.cwd.clone().unwrap_or_else(|| {
+                    std::env::current_dir()
+                        .unwrap_or_default()
+                        .display()
+                        .to_string()
+                });
+                let command = std::iter::once(req.command.as_str())
+                    .chain(req.args.iter().map(String::as_str))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 let cwd = req.cwd.map(PathBuf::from);
 
                 match pty_manager
@@ -162,6 +183,53 @@ async fn handle_client(
                     .await
                 {
                     Ok(session) => {
+                        let info = SessionInfo {
+                            session_id: session_id.clone(),
+                            pid: session.pid,
+                            cwd: cwd_text,
+                            command,
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)?
+                                .as_secs(),
+                            state: "WORKING".into(),
+                        };
+                        let db = storage.clone();
+                        let inserted = tokio::task::spawn_blocking(move || {
+                            db.lock()
+                                .map_err(|e| e.to_string())?
+                                .insert_session(&info)
+                                .map_err(|e| e.to_string())
+                        })
+                        .await?;
+                        if let Err(error) = inserted {
+                            tracing::error!("Failed to persist session: {error}");
+                            let _ = out_tx
+                                .send(IpcMessage::SpawnSessionResponse(SpawnSessionResponse {
+                                    session_id,
+                                    success: false,
+                                    error: Some(error),
+                                }))
+                                .await;
+                            continue;
+                        }
+                        let db = storage.clone();
+                        let id = session_id.clone();
+                        let mut exit = session.subscribe_exit();
+                        tokio::spawn(async move {
+                            if exit.borrow().is_none() {
+                                let _ = exit.changed().await;
+                            }
+                            let result = tokio::task::spawn_blocking(move || {
+                                db.lock()
+                                    .map_err(|e| e.to_string())?
+                                    .update_session_state(&id, "DEAD")
+                                    .map_err(|e| e.to_string())
+                            })
+                            .await;
+                            if !matches!(result, Ok(Ok(()))) {
+                                tracing::error!("Failed to update session state: {result:?}");
+                            }
+                        });
                         let resp = IpcMessage::SpawnSessionResponse(SpawnSessionResponse {
                             session_id: session_id.clone(),
                             success: true,
@@ -216,6 +284,22 @@ async fn handle_client(
                     }
                 }
             }
+            IpcMessage::ListSessionsRequest(_) => {
+                let db = storage.clone();
+                let sessions = tokio::task::spawn_blocking(move || {
+                    db.lock()
+                        .map_err(|e| e.to_string())?
+                        .list_active_sessions()
+                        .map_err(|e| e.to_string())
+                })
+                .await?
+                .map_err(anyhow::Error::msg)?;
+                out_tx
+                    .send(IpcMessage::ListSessionsResponse(ListSessionsResponse {
+                        sessions,
+                    }))
+                    .await?;
+            }
             IpcMessage::TerminalInputFrame(input) => {
                 if let Ok(session) = pty_manager.get_session(&input.session_id).await {
                     if let Err(e) = session.send_input(&input.data) {
@@ -228,6 +312,7 @@ async fn handle_client(
             }
             IpcMessage::HandshakeRequest(_)
             | IpcMessage::HandshakeResponse(_)
+            | IpcMessage::ListSessionsResponse(_)
             | IpcMessage::SpawnSessionResponse(_)
             | IpcMessage::TerminalOutputFrame(_)
             | IpcMessage::SessionExitEvent(_) => {

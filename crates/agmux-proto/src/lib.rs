@@ -6,7 +6,8 @@ pub mod transport;
 
 pub use auth::constant_time_eq;
 pub use messages::{
-    HandshakeRequest, HandshakeResponse, IpcMessage, SessionExitEvent, SpawnSessionRequest,
-    SpawnSessionResponse, TerminalInputFrame, TerminalOutputFrame,
+    HandshakeRequest, HandshakeResponse, IpcMessage, ListSessionsRequest, ListSessionsResponse,
+    SessionExitEvent, SessionInfo, SpawnSessionRequest, SpawnSessionResponse, TerminalInputFrame,
+    TerminalOutputFrame,
 };
 pub use transport::{FramedStream, IpcCodec, ProtoError, new_framed};

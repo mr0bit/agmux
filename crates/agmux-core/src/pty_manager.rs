@@ -44,6 +44,8 @@ pub enum PtyError {
 pub struct ActivePtySession {
     /// Session identifier.
     pub session_id: String,
+    /// Child process identifier.
+    pub pid: u32,
     /// Thread-safe writer connected to PTY master input.
     writer: Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
     /// Broadcast channel for child stdout/stderr output frames.
@@ -131,6 +133,10 @@ impl PtyManager {
                 details: e.to_string(),
             })?;
 
+        let pid = child
+            .process_id()
+            .ok_or_else(|| PtyError::PtyAllocation("child PID unavailable".into()))?;
+
         let mut reader = pair
             .master
             .try_clone_reader()
@@ -195,6 +201,7 @@ impl PtyManager {
 
         let session = Arc::new(ActivePtySession {
             session_id: session_id.clone(),
+            pid,
             writer: Arc::new(std::sync::Mutex::new(writer)),
             output_tx,
             exit_rx,
