@@ -7,6 +7,7 @@ pub mod pty_manager;
 pub mod snapshot_compressor;
 pub mod state_machine;
 pub mod storage_engine;
+pub mod worktree_manager;
 
 use std::path::PathBuf;
 

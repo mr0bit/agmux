@@ -66,6 +66,7 @@ async fn broadcasts_and_persists_inactivity_and_exit() {
             command: "sleep".into(),
             args: vec!["1".into()],
             cwd: None,
+            worktree_branch: None,
         }))
         .await
         .unwrap();

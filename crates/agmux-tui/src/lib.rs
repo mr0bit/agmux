@@ -199,6 +199,7 @@ impl App {
                                         .repository_root
                                         .as_ref()
                                         .map(|p| p.to_string_lossy().into_owned()),
+                                    worktree_branch: None,
                                 }));
                             self.onboarding_error = None;
                             return;
@@ -308,6 +309,7 @@ impl App {
                     command: std::env::var("SHELL").unwrap_or_else(|_| "sh".into()),
                     args: vec![],
                     cwd: None,
+                    worktree_branch: None,
                 }));
             }
             _ => {

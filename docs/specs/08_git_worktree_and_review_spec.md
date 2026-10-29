@@ -12,11 +12,11 @@ This specification details the Git worktree provisioning engine (`gix`/`git2`), 
 * **Text:** As a user enabling worktree isolation for a session (`Ctrl+T` or project `auto_worktree = true`), the system shall create an isolated Git worktree at `{repo_root}/.agmux-worktrees/{branch-slug}` using pure-Rust `gix`/`git2`, copy untracked files matching `.worktreeinclude`, and inject a deterministic `PORT` environment variable.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-core::worktree_manager`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Spawn a worktree session in a repository with `.env` listed in `.worktreeinclude`; verify that the worktree directory is created, branch is checked out, `.env` is copied, and `$PORT` is set in the session PTY.
 * **Downstream Req:** `LLD-GIT-WORKTREE-PROVISION-001`
 * **Downstream Test:** `TEST-VER-GIT-001`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

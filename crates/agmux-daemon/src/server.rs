@@ -190,20 +190,60 @@ async fn handle_client(
         match message {
             IpcMessage::SpawnSessionRequest(req) => {
                 let session_id = req.session_id.clone();
-                let cwd_text = req.cwd.clone().unwrap_or_else(|| {
-                    std::env::current_dir()
-                        .unwrap_or_default()
-                        .display()
-                        .to_string()
-                });
                 let command = std::iter::once(req.command.as_str())
                     .chain(req.args.iter().map(String::as_str))
                     .collect::<Vec<_>>()
                     .join(" ");
-                let cwd = req.cwd.map(PathBuf::from);
-
+                let mut cwd = req.cwd.map(PathBuf::from);
+                let mut port = None;
+                if let Some(branch) = req.worktree_branch {
+                    let base = cwd.clone().unwrap_or(std::env::current_dir()?);
+                    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                        let output = std::process::Command::new("git")
+                            .current_dir(base)
+                            .args(["rev-parse", "--show-toplevel"])
+                            .output()?;
+                        if !output.status.success() {
+                            anyhow::bail!(
+                                "Git repository discovery failed: {}",
+                                String::from_utf8_lossy(&output.stderr).trim()
+                            );
+                        }
+                        let root = PathBuf::from(String::from_utf8(output.stdout)?.trim());
+                        Ok(agmux_core::worktree_manager::provision_worktree(
+                            &root, &branch,
+                        )?)
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok(worktree)) => {
+                            cwd = Some(worktree.path);
+                            port = Some(worktree.port);
+                        }
+                        failure => {
+                            let error = match failure {
+                                Ok(Err(e)) => e.to_string(),
+                                Err(e) => e.to_string(),
+                                _ => unreachable!(),
+                            };
+                            let _ = out_tx
+                                .send(IpcMessage::SpawnSessionResponse(SpawnSessionResponse {
+                                    session_id,
+                                    success: false,
+                                    error: Some(error),
+                                }))
+                                .await;
+                            continue;
+                        }
+                    }
+                }
+                let cwd_text = cwd
+                    .clone()
+                    .unwrap_or(std::env::current_dir()?)
+                    .display()
+                    .to_string();
                 match pty_manager
-                    .spawn(session_id.clone(), req.command, req.args, cwd)
+                    .spawn(session_id.clone(), req.command, req.args, cwd, port)
                     .await
                 {
                     Ok(session) => {

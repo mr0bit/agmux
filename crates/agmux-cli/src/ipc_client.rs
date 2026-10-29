@@ -16,6 +16,7 @@ pub async fn run_command(
     token: &str,
     command: String,
     args: Vec<String>,
+    worktree_branch: Option<String>,
 ) -> Result<i32> {
     let stream = UnixStream::connect(socket_path).await.with_context(|| {
         format!(
@@ -68,6 +69,7 @@ pub async fn run_command(
         command,
         args,
         cwd,
+        worktree_branch,
     });
 
     sink.send(spawn_req)

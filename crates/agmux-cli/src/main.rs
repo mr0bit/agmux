@@ -51,6 +51,9 @@ enum Commands {
     },
     /// Spawn a command inside a new PTY session and attach to its output stream
     Run {
+        /// Create an isolated worktree for this branch.
+        #[arg(long)]
+        worktree: Option<String>,
         /// Executable command name
         command: String,
 
@@ -160,8 +163,12 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Some(Commands::Run { command, args }) => {
-            let exit_code = run_command(&socket_path, &token, command, args).await?;
+        Some(Commands::Run {
+            command,
+            args,
+            worktree,
+        }) => {
+            let exit_code = run_command(&socket_path, &token, command, args, worktree).await?;
             std::process::exit(exit_code);
         }
         Some(Commands::Freeze { session_id }) => {

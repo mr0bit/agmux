@@ -33,6 +33,9 @@ pub struct SpawnSessionRequest {
     pub args: Vec<String>,
     /// Optional working directory for the spawned process.
     pub cwd: Option<String>,
+    /// Optional Git branch for an isolated worktree.
+    #[serde(default)]
+    pub worktree_branch: Option<String>,
 }
 
 /// Daemon response indicating whether session spawning succeeded.

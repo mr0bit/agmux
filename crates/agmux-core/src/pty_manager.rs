@@ -134,6 +134,7 @@ impl PtyManager {
         command: String,
         args: Vec<String>,
         cwd: Option<PathBuf>,
+        port: Option<u16>,
     ) -> Result<Arc<ActivePtySession>, PtyError> {
         let mut sessions_lock = self.sessions.lock().await;
         if sessions_lock.contains_key(&session_id) {
@@ -154,6 +155,10 @@ impl PtyManager {
         cmd.args(&args);
         if let Some(ref dir) = cwd {
             cmd.cwd(dir);
+        }
+
+        if let Some(port) = port {
+            cmd.env("PORT", port.to_string());
         }
 
         let mut child = pair
@@ -279,6 +284,7 @@ mod tests {
                 "test-1".to_string(),
                 "echo".to_string(),
                 vec!["HELLO_TEST_PTY".to_string()],
+                None,
                 None,
             )
             .await
