@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+agmux-core = { path = "../agmux-core" }
 crossterm = "0.28.1"
 ratatui = "0.28.1"
 tokio.workspace = true

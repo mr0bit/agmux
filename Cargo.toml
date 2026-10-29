@@ -36,6 +36,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dev-dependencies]
+agmux-core = { path = "crates/agmux-core" }
 agmux-tui = { path = "crates/agmux-tui" }
 ratatui = "0.28.1"
 crossterm = "0.28.1"

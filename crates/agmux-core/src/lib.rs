@@ -1,6 +1,8 @@
 //! Core domain types, PTY process management, and token authentication.
 
+pub mod agent_discovery;
 pub mod auth;
+pub mod config_manager;
 pub mod pty_manager;
 pub mod snapshot_compressor;
 pub mod state_machine;

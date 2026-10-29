@@ -41,6 +41,8 @@ crates/
 * **`builtin_plugins`**: Compiled implementations for the 14 first-class CLI tools.
 * **`declarative_plugin`**: Dynamic parser for user-defined regexes in `agents.toml`.
 * **`session_tracker`**: Automatic session UUID capture (flag injection and store watchers).
+* **`agent_discovery`**: PATH discovery for supported agent executables.
+* **`config_manager`**: First-run configuration generation and creation.
 * **`cli_detector`**: Missing CLI binary scanner and installation guidance provider.
 * **`storage_engine`**: Bundled SQLite single-writer database wrapper in WAL mode.
 * **`migration_manager`**: Embedded atomic schema migrator using `PRAGMA user_version`.

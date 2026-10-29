@@ -67,6 +67,7 @@ dependencies = [
 name = "agmux-tui"
 version = "0.1.0"
 dependencies = [
+ "agmux-core",
  "agmux-proto",
  "anyhow",
  "crossterm",
@@ -80,6 +81,7 @@ dependencies = [
 name = "agmux-verification"
 version = "0.1.0"
 dependencies = [
+ "agmux-core",
  "agmux-proto",
  "agmux-tui",
  "crossterm",

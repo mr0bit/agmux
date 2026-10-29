@@ -95,6 +95,54 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 .collect();
             frame.render_widget(List::new(items), rows[1]);
         }
+        ModalState::OnboardingWizard { selected } => {
+            let area = centered(frame.area(), 70, 22);
+            frame.render_widget(Clear, area);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title("Welcome to Agmux — First-Run Setup");
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+            let mut lines = vec![Line::from("Detected AI Agents in PATH:")];
+            for agent in &app.discovered_agents {
+                let (status, style) = if agent.available {
+                    ("[INSTALLED]", Style::default().fg(Color::Green))
+                } else {
+                    ("[NOT FOUND]", Style::default().add_modifier(Modifier::DIM))
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(status, style),
+                    Span::raw(format!(" {} ({})", agent.name, agent.binary_name)),
+                ]));
+            }
+            if let Some(root) = &app.repository_root {
+                lines.push(Line::from(format!("Repository: {}", root.display())));
+            }
+            lines.push(Line::from("Select Default Environment to Launch:"));
+            for (index, command) in app.onboarding_commands().iter().enumerate() {
+                let label = if index == 0 {
+                    format!("Shell ({command})")
+                } else {
+                    command.clone()
+                };
+                lines.push(Line::styled(
+                    format!("{} {label}", if index == *selected { ">" } else { " " }),
+                    if index == *selected {
+                        Style::default().add_modifier(Modifier::REVERSED)
+                    } else {
+                        Style::default()
+                    },
+                ));
+            }
+            lines.push(Line::from("[↑/↓] Select  [Enter] Launch  [Esc] Quit"));
+            if let Some(error) = &app.onboarding_error {
+                lines.push(Line::styled(
+                    error.as_str(),
+                    Style::default().fg(Color::Red),
+                ));
+            }
+            frame.render_widget(Paragraph::new(lines), inner);
+        }
         ModalState::QuickPrompt { input } => {
             let area = centered(frame.area(), 60, 5);
             frame.render_widget(Clear, area);

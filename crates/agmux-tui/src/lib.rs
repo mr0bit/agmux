@@ -4,6 +4,10 @@ pub mod ui;
 
 use std::{io, path::Path, time::Duration};
 
+use agmux_core::{
+    agent_discovery::{DiscoveredAgent, discover_installed_agents},
+    config_manager::ensure_config_exists,
+};
 use agmux_proto::{
     FreezeSessionRequest, HandshakeRequest, IpcMessage, ListSessionsRequest, SessionInfo,
     SpawnSessionRequest, TerminalInputFrame, new_framed,
@@ -27,6 +31,9 @@ pub enum ModalState {
         query: String,
         selected: usize,
     },
+    OnboardingWizard {
+        selected: usize,
+    },
     QuickPrompt {
         input: String,
     },
@@ -41,11 +48,47 @@ pub struct App {
     pub should_quit: bool,
     pub modal: ModalState,
     pub attention_filter: bool,
+    pub discovered_agents: Vec<DiscoveredAgent>,
+    pub config_path: std::path::PathBuf,
+    pub onboarding_error: Option<String>,
+    pub repository_root: Option<std::path::PathBuf>,
     /// Pending daemon request produced by an input action.
     pub pending_message: Option<IpcMessage>,
 }
 
 impl App {
+    /// Open onboarding for a cold start with no sessions.
+    pub fn open_onboarding(&mut self, config_path: std::path::PathBuf) {
+        self.config_path = config_path;
+        self.discovered_agents = discover_installed_agents();
+        self.repository_root = std::process::Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                std::path::PathBuf::from(String::from_utf8_lossy(&o.stdout).trim().to_owned())
+            });
+        self.modal = ModalState::OnboardingWizard { selected: 0 };
+    }
+
+    /// Available launch commands, beginning with the user's shell.
+    pub fn onboarding_commands(&self) -> Vec<String> {
+        let mut commands = vec![
+            std::env::var("SHELL")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "bash".into()),
+        ];
+        commands.extend(
+            self.discovered_agents
+                .iter()
+                .filter(|agent| agent.available)
+                .map(|agent| agent.binary_name.clone()),
+        );
+        commands
+    }
+
     /// Actions matching the palette query, in display order.
     pub fn palette_actions(&self, query: &str) -> Vec<String> {
         let mut actions = vec![
@@ -125,6 +168,46 @@ impl App {
                     _ => {}
                 }
                 ModalState::CommandPalette { query, selected }
+            }
+            ModalState::OnboardingWizard { mut selected } => {
+                match key {
+                    KeyCode::Up => selected = selected.saturating_sub(1),
+                    KeyCode::Down => {
+                        selected = (selected + 1).min(self.onboarding_commands().len() - 1)
+                    }
+                    KeyCode::Esc => {
+                        self.should_quit = true;
+                    }
+                    KeyCode::Enter => match ensure_config_exists(&self.config_path) {
+                        Ok(_) => {
+                            let command = self.onboarding_commands()
+                                [selected.min(self.onboarding_commands().len() - 1)]
+                            .clone();
+                            let id = format!(
+                                "session-{}",
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis()
+                            );
+                            self.pending_message =
+                                Some(IpcMessage::SpawnSessionRequest(SpawnSessionRequest {
+                                    session_id: id,
+                                    command,
+                                    args: vec![],
+                                    cwd: self
+                                        .repository_root
+                                        .as_ref()
+                                        .map(|p| p.to_string_lossy().into_owned()),
+                                }));
+                            self.onboarding_error = None;
+                            return;
+                        }
+                        Err(error) => self.onboarding_error = Some(error.to_string()),
+                    },
+                    _ => {}
+                }
+                ModalState::OnboardingWizard { selected }
             }
             ModalState::QuickPrompt { mut input } => {
                 match key {
@@ -283,6 +366,9 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
             other => bail!("Unexpected list response: {other:?}"),
         }
     };
+    if app.sessions.is_empty() && !Path::new("agmux.toml").exists() {
+        app.open_onboarding("agmux.toml".into());
+    }
     if let Some(session) = app.sessions.first() {
         ipc.send(IpcMessage::SubscribeViewport {
             session_id: session.session_id.clone(),
@@ -325,7 +411,11 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                     parser.process(&frame.data);
                     app.active_viewport_lines = parser.screen().contents().lines().map(str::to_owned).collect();
                 }
-                IpcMessage::SpawnSessionResponse(_) | IpcMessage::FreezeSessionResponse(_) => {
+                IpcMessage::SpawnSessionResponse(response) => {
+                    if response.success { ipc.send(IpcMessage::SubscribeViewport { session_id: response.session_id }).await?; }
+                    ipc.send(IpcMessage::ListSessionsRequest(ListSessionsRequest {})).await?;
+                }
+                IpcMessage::FreezeSessionResponse(_) => {
                     ipc.send(IpcMessage::ListSessionsRequest(ListSessionsRequest {})).await?;
                 }
                 IpcMessage::ListSessionsResponse(response) => {

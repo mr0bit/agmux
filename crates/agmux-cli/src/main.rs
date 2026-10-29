@@ -29,6 +29,8 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Create a first-run configuration and report discovered agents.
+    Init,
     /// Open the interactive terminal interface.
     Tui,
     /// Search terminal history.
@@ -78,6 +80,23 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    if matches!(cli.command, Some(Commands::Init)) {
+        let agents = agmux_core::agent_discovery::discover_installed_agents();
+        let path =
+            agmux_core::config_manager::ensure_config_exists(std::path::Path::new("agmux.toml"))?;
+        println!("Configuration: {}", path.display());
+        for agent in agents {
+            println!(
+                "{} ({}): {}",
+                agent.name,
+                agent.binary_name,
+                agent
+                    .path
+                    .map_or_else(|| "not found".into(), |p| p.display().to_string())
+            );
+        }
+        return Ok(());
+    }
     let socket_path = cli.socket.unwrap_or_else(default_socket_path);
     let token_path = cli
         .token_path
@@ -92,6 +111,7 @@ async fn main() -> Result<()> {
 
     // 3. Dispatch subcommand
     match cli.command {
+        Some(Commands::Init) => unreachable!("init handled before daemon startup"),
         None | Some(Commands::Tui) => agmux_tui::run_tui(&socket_path, &token).await?,
         Some(Commands::Search {
             query,

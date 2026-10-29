@@ -1,9 +1,10 @@
 ---
 id: TASK-9
 title: 'Tracer Bullet: Zero-Config First-Run Cold-Start Wizard'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-10-28T23:40:00Z'
+updated_date: '2026-10-29T00:47:00Z'
 labels:
   - tracer-bullet
   - wizard
@@ -28,8 +29,8 @@ If launched without existing configuration, agmux opens an interactive first-run
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 CLI/TUI detects absence of configuration and triggers first-run wizard
-- [ ] #2 Discovers installed AI coding agent CLIs in PATH
-- [ ] #3 Generates valid agmux.toml with default terminal keybindings
-- [ ] #4 Seamlessly transitions into default shell session without restart
+- [x] #1 CLI/TUI detects absence of configuration and triggers first-run wizard
+- [x] #2 Discovers installed AI coding agent CLIs in PATH
+- [x] #3 Generates valid agmux.toml with default terminal keybindings
+- [x] #4 Seamlessly transitions into default shell session without restart
 <!-- AC:END -->

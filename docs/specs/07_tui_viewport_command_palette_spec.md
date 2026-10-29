@@ -77,8 +77,8 @@ This specification details the Ratatui terminal user interface (`agmux-tui`), si
 * **Text:** As a first-time user launching `agmux` with zero existing sessions in the database, the system shall automatically display an interactive New Session onboarding wizard pre-populated with detected local Git repo details and installed CLI agents, allowing a session to launch on `[Enter]`.
 * **Criticality:** Medium
 * **SW Component:** `crates/agmux-tui::onboarding_wizard`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Start `agmux` with an empty database; verify that the wizard displays detected CLI agents (e.g. `claude`, `codex`, `agy`), populates the repository root, and spawns the chosen agent on `[Enter]`.
 * **Downstream Req:** `LLD-TUI-COLD-START-006`
 * **Downstream Test:** `TEST-VER-TUI-006`
-* **Test Status:** Failed
+* **Test Status:** Passed
