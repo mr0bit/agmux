@@ -83,29 +83,22 @@ impl DaemonServer {
             crate::file_reservation_table::FileReservationTable::new(storage.clone());
         let journal = crate::journal_watcher::JournalWatcher::new(storage.clone());
 
+        let ctx = DaemonContext {
+            pty_manager,
+            expected_token: auth_token,
+            storage,
+            events,
+            lock_manager,
+            file_reservations,
+            journal,
+        };
+
         loop {
             match listener.accept().await {
                 Ok((stream, _addr)) => {
-                    let pty_mgr = pty_manager.clone();
-                    let expected_token = auth_token.clone();
-                    let storage = storage.clone();
-                    let events = events.clone();
-                    let lock_manager = lock_manager.clone();
-                    let file_reservations = file_reservations.clone();
-                    let journal = journal.clone();
+                    let ctx = ctx.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_client(
-                            stream,
-                            pty_mgr,
-                            expected_token,
-                            storage,
-                            events,
-                            lock_manager,
-                            file_reservations,
-                            journal,
-                        )
-                        .await
-                        {
+                        if let Err(e) = handle_client(stream, ctx).await {
                             tracing::debug!("Client session ended: {e:#}");
                         }
                     });
@@ -118,17 +111,30 @@ impl DaemonServer {
     }
 }
 
+/// Shared daemon service contexts passed to client session handlers.
+#[derive(Clone)]
+pub struct DaemonContext {
+    pub pty_manager: PtyManager,
+    pub expected_token: Arc<String>,
+    pub storage: Arc<std::sync::Mutex<agmux_core::storage_engine::StorageEngine>>,
+    pub events: tokio::sync::broadcast::Sender<SessionStateChangedEvent>,
+    pub lock_manager: crate::lock_manager::LockManager,
+    pub file_reservations: crate::file_reservation_table::FileReservationTable,
+    pub journal: crate::journal_watcher::JournalWatcher,
+}
+
 /// Process an individual client connection through handshake and session streaming.
-async fn handle_client(
-    stream: UnixStream,
-    pty_manager: PtyManager,
-    expected_token: Arc<String>,
-    storage: Arc<std::sync::Mutex<agmux_core::storage_engine::StorageEngine>>,
-    events: tokio::sync::broadcast::Sender<SessionStateChangedEvent>,
-    lock_manager: crate::lock_manager::LockManager,
-    file_reservations: crate::file_reservation_table::FileReservationTable,
-    journal: crate::journal_watcher::JournalWatcher,
-) -> Result<()> {
+async fn handle_client(stream: UnixStream, ctx: DaemonContext) -> Result<()> {
+    let DaemonContext {
+        pty_manager,
+        expected_token,
+        storage,
+        events,
+        lock_manager,
+        file_reservations,
+        journal,
+    } = ctx;
+
     let framed = new_framed(stream);
     let (mut sink, mut reader) = framed.split();
 

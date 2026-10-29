@@ -46,3 +46,6 @@ tokio.workspace = true
 futures-util.workspace = true
 rusqlite.workspace = true
 zstd = "0.14"
+
+[lints.clippy]
+zombie_processes = "allow"
