@@ -4,6 +4,7 @@ pub mod agent_discovery;
 pub mod auth;
 pub mod config_manager;
 pub mod diff_calculator;
+pub mod prompt_flattener;
 pub mod pty_manager;
 pub mod snapshot_compressor;
 pub mod state_machine;

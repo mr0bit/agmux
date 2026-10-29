@@ -51,11 +51,11 @@ This specification details the Git worktree provisioning engine (`gix`/`git2`), 
 * **Text:** As a user annotating diff lines in review mode, the system shall store line-level draft comments (`c`/`d`) and, upon pressing `C`, flatten all pending drafts into a single numbered structured prompt round with stable comment IDs and inject the payload into the agent's PTY master.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-core::prompt_flattener`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Add 3 review comments on different files; press `C`. Verify that the agent's PTY receives a single structured prompt containing all 3 comments with IDs (`[ID: rev_01]`, etc.) and transitions the session state to `WORKING`.
 * **Downstream Req:** `LLD-GIT-REVIEW-DISPATCH-004`
 * **Downstream Test:** `TEST-VER-GIT-004`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

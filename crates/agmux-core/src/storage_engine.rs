@@ -1,5 +1,5 @@
 //! SQLite session metadata repository.
-use agmux_proto::{SearchMatch, SessionInfo};
+use agmux_proto::{ReviewComment, SearchMatch, SessionInfo};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 
@@ -32,8 +32,93 @@ impl StorageEngine {
         }
         tx.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS terminal_logs_fts USING fts5(session_id UNINDEXED, line_no UNINDEXED, timestamp UNINDEXED, content, tokenize='trigram');")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS session_snapshots (session_id TEXT PRIMARY KEY, snapshot BLOB, compressed_size INTEGER, uncompressed_size INTEGER, timestamp INTEGER);")?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, file_path TEXT NOT NULL, line_number INTEGER NOT NULL, line_hash TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_review_session_status ON review_comments(session_id, status); CREATE TABLE IF NOT EXISTS review_rounds (session_id TEXT NOT NULL, round_number INTEGER NOT NULL, PRIMARY KEY(session_id, round_number));")?;
         tx.commit()?;
         Ok(Self { connection })
+    }
+    pub fn add_review_comment(&self, comment: &ReviewComment) -> Result<(), StorageError> {
+        self.connection.execute(
+            "INSERT INTO review_comments VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                comment.id,
+                comment.session_id,
+                comment.file_path,
+                comment.line_number,
+                comment.line_hash,
+                comment.content,
+                comment.status,
+                comment.created_at
+            ],
+        )?;
+        Ok(())
+    }
+    pub fn list_review_comments(
+        &self,
+        session_id: &str,
+        status: Option<&str>,
+    ) -> Result<Vec<ReviewComment>, StorageError> {
+        let mut stmt = self.connection.prepare("SELECT id,session_id,file_path,line_number,line_hash,content,status,created_at FROM review_comments WHERE session_id=?1 AND (?2 IS NULL OR status=?2) ORDER BY rowid")?;
+        let rows = stmt.query_map(params![session_id, status], |r| {
+            Ok(ReviewComment {
+                id: r.get(0)?,
+                session_id: r.get(1)?,
+                file_path: r.get(2)?,
+                line_number: r.get(3)?,
+                line_hash: r.get(4)?,
+                content: r.get(5)?,
+                status: r.get(6)?,
+                created_at: r.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+    pub fn update_comments_status(
+        &self,
+        ids: &[String],
+        new_status: &str,
+    ) -> Result<(), StorageError> {
+        let tx = self.connection.unchecked_transaction()?;
+        for id in ids {
+            tx.execute(
+                "UPDATE review_comments SET status=?1 WHERE id=?2",
+                params![new_status, id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn next_review_round(&self, session_id: &str) -> Result<u32, StorageError> {
+        Ok(self.connection.query_row(
+            "SELECT COALESCE(MAX(round_number),0)+1 FROM review_rounds WHERE session_id=?1",
+            [session_id],
+            |r| r.get(0),
+        )?)
+    }
+    pub fn complete_review_round(
+        &self,
+        session_id: &str,
+        round: u32,
+        ids: &[String],
+    ) -> Result<String, StorageError> {
+        let tx = self.connection.unchecked_transaction()?;
+        let old: String = tx.query_row(
+            "SELECT state FROM sessions WHERE id=?1",
+            [session_id],
+            |r| r.get(0),
+        )?;
+        for id in ids {
+            tx.execute("UPDATE review_comments SET status='sent' WHERE id=?1 AND session_id=?2 AND status='draft'", params![id,session_id])?;
+        }
+        tx.execute(
+            "INSERT INTO review_rounds VALUES (?1,?2)",
+            params![session_id, round],
+        )?;
+        tx.execute(
+            "UPDATE sessions SET state='WORKING' WHERE id=?1",
+            [session_id],
+        )?;
+        tx.commit()?;
+        Ok(old)
     }
     /// Insert one clean terminal line.
     pub fn index_terminal_line(

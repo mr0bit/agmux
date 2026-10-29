@@ -223,10 +223,64 @@ pub struct GetDiffResponse {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReviewComment {
+    pub id: String,
+    pub session_id: String,
+    pub file_path: String,
+    pub line_number: u64,
+    pub line_hash: String,
+    pub content: String,
+    pub status: String,
+    pub created_at: i64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AddReviewCommentRequest {
+    pub session_id: String,
+    pub file_path: String,
+    pub line_number: u64,
+    pub content: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AddReviewCommentResponse {
+    pub success: bool,
+    pub comment_id: Option<String>,
+    pub error: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListReviewCommentsRequest {
+    pub session_id: String,
+    pub status: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListReviewCommentsResponse {
+    pub success: bool,
+    pub comments: Vec<ReviewComment>,
+    pub error: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DispatchReviewRoundRequest {
+    pub session_id: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DispatchReviewRoundResponse {
+    pub success: bool,
+    pub round_number: u32,
+    pub count: usize,
+    pub prompt: String,
+    pub error: Option<String>,
+}
+
 /// Unified framed IPC message envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload")]
 pub enum IpcMessage {
+    AddReviewCommentRequest(AddReviewCommentRequest),
+    AddReviewCommentResponse(AddReviewCommentResponse),
+    ListReviewCommentsRequest(ListReviewCommentsRequest),
+    ListReviewCommentsResponse(ListReviewCommentsResponse),
+    DispatchReviewRoundRequest(DispatchReviewRoundRequest),
+    DispatchReviewRoundResponse(DispatchReviewRoundResponse),
     GetDiffRequest(GetDiffRequest),
     GetDiffResponse(GetDiffResponse),
     RemoveSessionRequest(RemoveSessionRequest),

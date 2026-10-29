@@ -29,6 +29,11 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Manage review comments.
+    Review {
+        #[command(subcommand)]
+        command: ReviewCommand,
+    },
     /// Show a session review diff.
     Diff {
         session_id: String,
@@ -90,6 +95,27 @@ enum Commands {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum ReviewCommand {
+    Comment {
+        session_id: String,
+        #[arg(long)]
+        file: String,
+        #[arg(long)]
+        line: u64,
+        #[arg(long)]
+        content: String,
+    },
+    List {
+        session_id: String,
+        #[arg(long, value_parser = ["draft", "sent", "resolved"])]
+        status: Option<String>,
+    },
+    Dispatch {
+        session_id: String,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -131,6 +157,57 @@ async fn main() -> Result<()> {
 
     // 3. Dispatch subcommand
     match cli.command {
+        Some(Commands::Review { command }) => {
+            use agmux_proto::*;
+            let request = match command {
+                ReviewCommand::Comment {
+                    session_id,
+                    file,
+                    line,
+                    content,
+                } => IpcMessage::AddReviewCommentRequest(AddReviewCommentRequest {
+                    session_id,
+                    file_path: file,
+                    line_number: line,
+                    content,
+                }),
+                ReviewCommand::List { session_id, status } => {
+                    IpcMessage::ListReviewCommentsRequest(ListReviewCommentsRequest {
+                        session_id,
+                        status,
+                    })
+                }
+                ReviewCommand::Dispatch { session_id } => {
+                    IpcMessage::DispatchReviewRoundRequest(DispatchReviewRoundRequest {
+                        session_id,
+                    })
+                }
+            };
+            match agmux_cli::ipc_client::review_request(&socket_path, &token, request).await? {
+                IpcMessage::AddReviewCommentResponse(r) if r.success => {
+                    println!("{}", r.comment_id.unwrap_or_default())
+                }
+                IpcMessage::ListReviewCommentsResponse(r) if r.success => {
+                    for c in r.comments {
+                        println!(
+                            "{} [{}] {}:{}: {}",
+                            c.id, c.status, c.file_path, c.line_number, c.content
+                        );
+                    }
+                }
+                IpcMessage::DispatchReviewRoundResponse(r) if r.success => print!("{}", r.prompt),
+                IpcMessage::AddReviewCommentResponse(r) => {
+                    anyhow::bail!("{}", r.error.unwrap_or_default())
+                }
+                IpcMessage::ListReviewCommentsResponse(r) => {
+                    anyhow::bail!("{}", r.error.unwrap_or_default())
+                }
+                IpcMessage::DispatchReviewRoundResponse(r) => {
+                    anyhow::bail!("{}", r.error.unwrap_or_default())
+                }
+                other => anyhow::bail!("Unexpected review response: {other:?}"),
+            }
+        }
         Some(Commands::Init) => unreachable!("init handled before daemon startup"),
         None | Some(Commands::Tui) => agmux_tui::run_tui(&socket_path, &token).await?,
         Some(Commands::Diff {

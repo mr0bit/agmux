@@ -434,6 +434,145 @@ async fn handle_client(
                     }
                 }
             }
+            IpcMessage::AddReviewCommentRequest(req) => {
+                let db = storage.clone();
+                let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
+                    use std::hash::{Hash, Hasher};
+                    let db = db.lock().map_err(|e| e.to_string())?;
+                    let session = db
+                        .get_session(&req.session_id)
+                        .map_err(|e| e.to_string())?
+                        .ok_or("Session not found")?;
+                    let bytes =
+                        agmux_core::generate_random_32_bytes().map_err(|e| e.to_string())?;
+                    let id = format!(
+                        "rev_{}",
+                        bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                    );
+                    let text = std::fs::read_to_string(
+                        std::path::Path::new(&session.cwd).join(&req.file_path),
+                    )
+                    .unwrap_or_default();
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    text.lines()
+                        .nth(req.line_number.saturating_sub(1) as usize)
+                        .unwrap_or("")
+                        .hash(&mut hasher);
+                    let comment = agmux_proto::ReviewComment {
+                        id: id.clone(),
+                        session_id: req.session_id,
+                        file_path: req.file_path,
+                        line_number: req.line_number,
+                        line_hash: format!("{:016x}", hasher.finish()),
+                        content: req.content,
+                        status: "draft".into(),
+                        created_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64,
+                    };
+                    db.add_review_comment(&comment).map_err(|e| e.to_string())?;
+                    Ok(id)
+                })
+                .await?;
+                let response = match result {
+                    Ok(id) => agmux_proto::AddReviewCommentResponse {
+                        success: true,
+                        comment_id: Some(id),
+                        error: None,
+                    },
+                    Err(error) => agmux_proto::AddReviewCommentResponse {
+                        success: false,
+                        comment_id: None,
+                        error: Some(error),
+                    },
+                };
+                out_tx
+                    .send(IpcMessage::AddReviewCommentResponse(response))
+                    .await?;
+            }
+            IpcMessage::ListReviewCommentsRequest(req) => {
+                let db = storage.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    db.lock()
+                        .map_err(|e| e.to_string())?
+                        .list_review_comments(&req.session_id, req.status.as_deref())
+                        .map_err(|e| e.to_string())
+                })
+                .await?;
+                let response = match result {
+                    Ok(comments) => agmux_proto::ListReviewCommentsResponse {
+                        success: true,
+                        comments,
+                        error: None,
+                    },
+                    Err(error) => agmux_proto::ListReviewCommentsResponse {
+                        success: false,
+                        comments: vec![],
+                        error: Some(error),
+                    },
+                };
+                out_tx
+                    .send(IpcMessage::ListReviewCommentsResponse(response))
+                    .await?;
+            }
+            IpcMessage::DispatchReviewRoundRequest(req) => {
+                let session = pty_manager.get_session(&req.session_id).await;
+                let db = storage.clone();
+                let sid = req.session_id.clone();
+                let result = tokio::task::spawn_blocking(move || -> Result<_, String> {
+                    let db = db.lock().map_err(|e| e.to_string())?;
+                    let comments = db
+                        .list_review_comments(&sid, Some("draft"))
+                        .map_err(|e| e.to_string())?;
+                    if comments.is_empty() {
+                        return Err("No draft comments to dispatch".into());
+                    }
+                    let session = session.map_err(|e| e.to_string())?;
+                    if session.subscribe_exit().borrow().is_some() {
+                        return Err("Session is not active".into());
+                    }
+                    let round = db.next_review_round(&sid).map_err(|e| e.to_string())?;
+                    let prompt =
+                        agmux_core::prompt_flattener::flatten_review_comments(round, &comments);
+                    session
+                        .send_input(format!("{prompt}\n").as_bytes())
+                        .map_err(|e| e.to_string())?;
+                    let ids: Vec<_> = comments.iter().map(|c| c.id.clone()).collect();
+                    let old = db
+                        .complete_review_round(&sid, round, &ids)
+                        .map_err(|e| e.to_string())?;
+                    Ok((round, comments.len(), prompt, old))
+                })
+                .await?;
+                let response = match result {
+                    Ok((round_number, count, prompt, old_state)) => {
+                        let _ = events.send(SessionStateChangedEvent {
+                            session_id: req.session_id,
+                            old_state,
+                            new_state: "WORKING".into(),
+                            reason: "review round dispatched".into(),
+                        });
+                        agmux_proto::DispatchReviewRoundResponse {
+                            success: true,
+                            round_number,
+                            count,
+                            prompt,
+                            error: None,
+                        }
+                    }
+                    Err(error) => agmux_proto::DispatchReviewRoundResponse {
+                        success: false,
+                        round_number: 0,
+                        count: 0,
+                        prompt: String::new(),
+                        error: Some(error),
+                    },
+                };
+                out_tx
+                    .send(IpcMessage::DispatchReviewRoundResponse(response))
+                    .await?;
+            }
             IpcMessage::GetDiffRequest(req) => {
                 let db = storage.clone();
                 let result = tokio::task::spawn_blocking(move || -> Result<_, String> {
@@ -696,7 +835,10 @@ async fn handle_client(
                     ))
                     .await?;
             }
-            IpcMessage::HandshakeRequest(_)
+            IpcMessage::AddReviewCommentResponse(_)
+            | IpcMessage::ListReviewCommentsResponse(_)
+            | IpcMessage::DispatchReviewRoundResponse(_)
+            | IpcMessage::HandshakeRequest(_)
             | IpcMessage::GetDiffResponse(_)
             | IpcMessage::RemoveSessionResponse(_)
             | IpcMessage::FreezeSessionResponse(_)

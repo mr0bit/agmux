@@ -340,6 +340,39 @@ impl App {
                                 target: None,
                             }));
                     }
+                    KeyCode::Char('C') => {
+                        self.pending_message = Some(IpcMessage::DispatchReviewRoundRequest(
+                            agmux_proto::DispatchReviewRoundRequest {
+                                session_id: session_id.clone(),
+                            },
+                        ));
+                    }
+                    KeyCode::Char('c') => {
+                        let mut current_idx = 0;
+                        for file in &files {
+                            let path = file
+                                .new_path
+                                .clone()
+                                .or_else(|| file.old_path.clone())
+                                .unwrap_or_else(|| "file".into());
+                            for hunk in &file.hunks {
+                                if current_idx == selected_hunk {
+                                    let line_no = hunk.new_start;
+                                    self.pending_message =
+                                        Some(IpcMessage::AddReviewCommentRequest(
+                                            agmux_proto::AddReviewCommentRequest {
+                                                session_id: session_id.clone(),
+                                                file_path: path.clone(),
+                                                line_number: line_no,
+                                                content: "Needs revision".into(),
+                                            },
+                                        ));
+                                    break;
+                                }
+                                current_idx += 1;
+                            }
+                        }
+                    }
                     KeyCode::Down | KeyCode::Char('j') => {
                         let total_hunks: usize = files.iter().map(|f| f.hunks.len()).sum();
                         if total_hunks > 0 {

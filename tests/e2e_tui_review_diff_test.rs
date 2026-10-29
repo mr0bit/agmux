@@ -108,6 +108,20 @@ fn test_review_diff_mode_and_hunk_navigation() {
         Some(IpcMessage::GetDiffRequest(req)) if req.scope == DiffScope::LastCommit
     ));
 
+    // Draft a comment with 'c'
+    app.handle_key(KeyCode::Char('c'));
+    assert!(matches!(
+        app.pending_message.take(),
+        Some(IpcMessage::AddReviewCommentRequest(req)) if req.file_path == "src/main.rs"
+    ));
+
+    // Dispatch review round with 'C'
+    app.handle_key(KeyCode::Char('C'));
+    assert!(matches!(
+        app.pending_message.take(),
+        Some(IpcMessage::DispatchReviewRoundRequest(req)) if req.session_id == "agent-review-session"
+    ));
+
     // Close review diff modal via Esc
     app.handle_key(KeyCode::Esc);
     assert_eq!(app.modal, ModalState::None);

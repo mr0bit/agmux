@@ -386,3 +386,36 @@ pub async fn get_diff(
         }
     }
 }
+
+/// Send a review request over authenticated IPC.
+pub async fn review_request(
+    socket_path: &Path,
+    token: &str,
+    request: IpcMessage,
+) -> Result<IpcMessage> {
+    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    framed
+        .send(IpcMessage::HandshakeRequest(HandshakeRequest {
+            client_version: env!("CARGO_PKG_VERSION").into(),
+            token: token.into(),
+        }))
+        .await?;
+    match framed
+        .next()
+        .await
+        .context("Connection closed during handshake")??
+    {
+        IpcMessage::HandshakeResponse(response) if response.success => {}
+        other => bail!("Authentication failed: {other:?}"),
+    }
+    framed.send(request).await?;
+    loop {
+        let message = framed
+            .next()
+            .await
+            .context("Connection closed during review request")??;
+        if !matches!(message, IpcMessage::SessionStateChangedEvent(_)) {
+            return Ok(message);
+        }
+    }
+}

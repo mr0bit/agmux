@@ -1,8 +1,10 @@
 ---
 id: TASK-13
 title: 'Tracer Bullet: Structured Review Comment Round Dispatch'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@codex'
+  - '@agy'
 created_date: '2026-10-29T00:48:00Z'
 labels:
   - tracer-bullet
@@ -27,8 +29,8 @@ Stores draft review comments on specific file lines. When user triggers submissi
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Stores review comments with file path, line number, and content in SQLite
-- [ ] #2 Flattens draft comments into formatted prompt payload with stable comment IDs
-- [ ] #3 Dispatches review round into agent PTY and transitions session to WORKING state
-- [ ] #4 Integration test asserts comment staging, flattening, and PTY delivery
+- [x] #1 Stores review comments with file path, line number, and content in SQLite
+- [x] #2 Flattens draft comments into formatted prompt payload with stable comment IDs
+- [x] #3 Dispatches review round into agent PTY and transitions session to WORKING state
+- [x] #4 Integration test asserts comment staging, flattening, and PTY delivery
 <!-- AC:END -->

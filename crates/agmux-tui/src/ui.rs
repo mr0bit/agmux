@@ -261,7 +261,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             frame.render_widget(Paragraph::new(diff_lines), rows[1]);
 
             let footer = Line::from(vec![Span::raw(
-                "[Tab / 1-5] Switch Scope | [↑/↓] Hunk Nav | [Esc] Close",
+                "[Tab/1-5] Scope | [c] Draft Comment | [C] Dispatch Round | [↑/↓] Hunk | [Esc] Close",
             )]);
             frame.render_widget(Paragraph::new(footer), rows[2]);
         }

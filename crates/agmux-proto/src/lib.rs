@@ -6,11 +6,13 @@ pub mod transport;
 
 pub use auth::constant_time_eq;
 pub use messages::{
-    DiffHunk, DiffLine, DiffLineType, DiffScope, FileDiff, FreezeSessionRequest,
+    AddReviewCommentRequest, AddReviewCommentResponse, DiffHunk, DiffLine, DiffLineType, DiffScope,
+    DispatchReviewRoundRequest, DispatchReviewRoundResponse, FileDiff, FreezeSessionRequest,
     FreezeSessionResponse, GetDiffRequest, GetDiffResponse, HandshakeRequest, HandshakeResponse,
-    IpcMessage, ListSessionsRequest, ListSessionsResponse, RemoveSessionRequest,
-    RemoveSessionResponse, ResumeSessionRequest, ResumeSessionResponse, SearchLogsRequest,
-    SearchLogsResponse, SearchMatch, SessionExitEvent, SessionInfo, SessionStateChangedEvent,
-    SpawnSessionRequest, SpawnSessionResponse, TerminalInputFrame, TerminalOutputFrame,
+    IpcMessage, ListReviewCommentsRequest, ListReviewCommentsResponse, ListSessionsRequest,
+    ListSessionsResponse, RemoveSessionRequest, RemoveSessionResponse, ResumeSessionRequest,
+    ResumeSessionResponse, ReviewComment, SearchLogsRequest, SearchLogsResponse, SearchMatch,
+    SessionExitEvent, SessionInfo, SessionStateChangedEvent, SpawnSessionRequest,
+    SpawnSessionResponse, TerminalInputFrame, TerminalOutputFrame,
 };
 pub use transport::{FramedStream, IpcCodec, ProtoError, new_framed};
