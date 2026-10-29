@@ -1,0 +1,136 @@
+//! Strongly-typed IPC message definitions for client-daemon communication.
+
+use serde::{Deserialize, Serialize};
+
+/// Handshake request sent by a client immediately upon connecting.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HandshakeRequest {
+    /// Semantic version of the connecting client.
+    pub client_version: String,
+    /// 32-byte authentication token (hex or string encoded).
+    pub token: String,
+}
+
+/// Handshake response returned by the daemon.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HandshakeResponse {
+    /// Whether the authentication handshake succeeded.
+    pub success: bool,
+    /// Semantic version of the running daemon.
+    pub daemon_version: String,
+    /// Optional error description if authentication failed.
+    pub error: Option<String>,
+}
+
+/// Request to spawn a command inside a new PTY session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SpawnSessionRequest {
+    /// Unique identifier for the session.
+    pub session_id: String,
+    /// Executable command name or path.
+    pub command: String,
+    /// Command line arguments.
+    pub args: Vec<String>,
+    /// Optional working directory for the spawned process.
+    pub cwd: Option<String>,
+}
+
+/// Daemon response indicating whether session spawning succeeded.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SpawnSessionResponse {
+    /// Session identifier matching the request.
+    pub session_id: String,
+    /// Whether process spawn was successful.
+    pub success: bool,
+    /// Optional error message if spawning failed.
+    pub error: Option<String>,
+}
+
+/// Terminal output frame forwarded from PTY master to subscribed clients.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TerminalOutputFrame {
+    /// Target session identifier.
+    pub session_id: String,
+    /// Raw terminal byte payload (ANSI escape sequences or text).
+    pub data: Vec<u8>,
+}
+
+/// Terminal input frame forwarded from client to PTY master stdin.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TerminalInputFrame {
+    /// Target session identifier.
+    pub session_id: String,
+    /// Raw keyboard or input byte stream.
+    pub data: Vec<u8>,
+}
+
+/// Event notification emitted when a session's child process exits.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionExitEvent {
+    /// Session identifier.
+    pub session_id: String,
+    /// Process exit code if available.
+    pub exit_code: Option<i32>,
+}
+
+/// Unified framed IPC message envelope.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", content = "payload")]
+pub enum IpcMessage {
+    /// Client initiates connection handshake.
+    HandshakeRequest(HandshakeRequest),
+    /// Daemon accepts or rejects connection handshake.
+    HandshakeResponse(HandshakeResponse),
+    /// Client requests spawning a command in a PTY.
+    SpawnSessionRequest(SpawnSessionRequest),
+    /// Daemon reports spawn result.
+    SpawnSessionResponse(SpawnSessionResponse),
+    /// Daemon streams child PTY stdout/stderr to client.
+    TerminalOutputFrame(TerminalOutputFrame),
+    /// Client forwards keyboard input to child PTY stdin.
+    TerminalInputFrame(TerminalInputFrame),
+    /// Daemon signals child process termination.
+    SessionExitEvent(SessionExitEvent),
+}
+
+impl From<HandshakeRequest> for IpcMessage {
+    fn from(req: HandshakeRequest) -> Self {
+        Self::HandshakeRequest(req)
+    }
+}
+
+impl From<HandshakeResponse> for IpcMessage {
+    fn from(res: HandshakeResponse) -> Self {
+        Self::HandshakeResponse(res)
+    }
+}
+
+impl From<SpawnSessionRequest> for IpcMessage {
+    fn from(req: SpawnSessionRequest) -> Self {
+        Self::SpawnSessionRequest(req)
+    }
+}
+
+impl From<SpawnSessionResponse> for IpcMessage {
+    fn from(res: SpawnSessionResponse) -> Self {
+        Self::SpawnSessionResponse(res)
+    }
+}
+
+impl From<TerminalOutputFrame> for IpcMessage {
+    fn from(frame: TerminalOutputFrame) -> Self {
+        Self::TerminalOutputFrame(frame)
+    }
+}
+
+impl From<TerminalInputFrame> for IpcMessage {
+    fn from(frame: TerminalInputFrame) -> Self {
+        Self::TerminalInputFrame(frame)
+    }
+}
+
+impl From<SessionExitEvent> for IpcMessage {
+    fn from(event: SessionExitEvent) -> Self {
+        Self::SessionExitEvent(event)
+    }
+}

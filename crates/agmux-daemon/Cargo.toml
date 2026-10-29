@@ -9,4 +9,13 @@ name = "agmuxd"
 path = "src/main.rs"
 
 [dependencies]
+agmux-proto = { path = "../agmux-proto" }
+agmux-core = { path = "../agmux-core" }
 anyhow.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures-util.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+clap.workspace = true
+libc.workspace = true

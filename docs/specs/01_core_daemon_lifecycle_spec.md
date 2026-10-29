@@ -12,11 +12,11 @@ This specification defines the lifecycle, process supervision, signal propagatio
 * **Text:** As a user invoking any `agmux` frontend or CLI subcommand when the background daemon is not running, the system shall automatically spawn `agmuxd` detached as an independent background daemon process before establishing the IPC connection, requiring zero manual daemon launch commands.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-cli::daemon_spawner`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Verify that invoking `agmux list` or `agmux` TUI on a clean system with no running `agmuxd` successfully starts `agmuxd` detached, exits the launch helper, and successfully connects over IPC within 500ms without leaving terminal lockups.
 * **Downstream Req:** `LLD-DAEMON-AUTOSPAWN-001`
 * **Downstream Test:** `TEST-VER-DAEMON-001`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 
@@ -25,11 +25,11 @@ This specification defines the lifecycle, process supervision, signal propagatio
 * **Text:** As a user running multiple concurrent CLI agents, the system shall isolate each agent session and its child processes into a dedicated operating system process group (`setpgid` on Unix, Job Objects on Windows), ensuring that process operations on one session do not affect sibling sessions or the daemon.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-daemon::process_supervisor`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Spawn two agent sessions; send a SIGKILL to the process group of session A. Verify that all child processes of session A terminate, while session B and `agmuxd` continue running with zero state disruption.
 * **Downstream Req:** `LLD-DAEMON-PROCGROUP-002`
 * **Downstream Test:** `TEST-VER-DAEMON-002`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

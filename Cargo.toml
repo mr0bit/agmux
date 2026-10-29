@@ -16,8 +16,25 @@ rust-version = "1.85"
 [workspace.dependencies]
 thiserror = "2"
 anyhow = "1"
-tokio = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+bytes = "1"
+futures-util = { version = "0.3", features = ["sink"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+portable-pty = "0.9"
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+
+[package]
+name = "agmux-verification"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dev-dependencies]
+agmux-proto = { path = "crates/agmux-proto" }
+tokio.workspace = true
+futures-util.workspace = true

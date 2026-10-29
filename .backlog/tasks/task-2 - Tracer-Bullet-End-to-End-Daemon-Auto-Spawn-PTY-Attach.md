@@ -1,9 +1,10 @@
 ---
 id: TASK-2
 title: 'Tracer Bullet: End-to-End Daemon Auto-Spawn & PTY Attach'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-10-28T23:40:00Z'
+updated_date: '2026-10-29T00:11:00Z'
 labels:
   - tracer-bullet
   - pty
