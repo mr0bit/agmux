@@ -177,6 +177,7 @@ async fn handle_client(
         }
     });
 
+    let mut viewport_task: Option<tokio::task::JoinHandle<()>> = None;
     while let Some(frame_res) = reader.next().await {
         let message = match frame_res {
             Ok(msg) => msg,
@@ -402,6 +403,45 @@ async fn handle_client(
                     }))
                     .await?;
             }
+            IpcMessage::SubscribeViewport { session_id } => {
+                if let Some(task) = viewport_task.take() {
+                    task.abort();
+                }
+                if let Ok(session) = pty_manager.get_session(&session_id).await {
+                    let (snapshot, mut output) = session.subscribe_viewport();
+                    out_tx
+                        .send(IpcMessage::TerminalOutputFrame(TerminalOutputFrame {
+                            session_id: session_id.clone(),
+                            data: snapshot,
+                        }))
+                        .await?;
+                    let tx = out_tx.clone();
+                    viewport_task = Some(tokio::spawn(async move {
+                        loop {
+                            match output.recv().await {
+                                Ok(data) => {
+                                    if tx
+                                        .send(IpcMessage::TerminalOutputFrame(
+                                            TerminalOutputFrame {
+                                                session_id: session_id.clone(),
+                                                data,
+                                            },
+                                        ))
+                                        .await
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                    continue;
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                    }));
+                }
+            }
             IpcMessage::ListSessionsRequest(_) => {
                 let db = storage.clone();
                 let sessions = tokio::task::spawn_blocking(move || {
@@ -518,6 +558,9 @@ async fn handle_client(
         }
     }
 
+    if let Some(task) = viewport_task {
+        task.abort();
+    }
     event_task.abort();
     writer_task.abort();
     Ok(())

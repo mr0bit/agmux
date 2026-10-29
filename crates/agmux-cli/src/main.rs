@@ -24,11 +24,13 @@ struct Cli {
     token_path: Option<PathBuf>,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Open the interactive terminal interface.
+    Tui,
     /// Search terminal history.
     Search {
         query: String,
@@ -90,12 +92,13 @@ async fn main() -> Result<()> {
 
     // 3. Dispatch subcommand
     match cli.command {
-        Commands::Search {
+        None | Some(Commands::Tui) => agmux_tui::run_tui(&socket_path, &token).await?,
+        Some(Commands::Search {
             query,
             json,
             session_id,
             limit,
-        } => {
+        }) => {
             let matches = agmux_cli::ipc_client::search_logs(
                 &socket_path,
                 &token,
@@ -115,7 +118,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::List { json } => {
+        Some(Commands::List { json }) => {
             let sessions = agmux_cli::ipc_client::list_sessions(&socket_path, &token).await?;
             if json {
                 println!("{}", serde_json::to_string(&sessions)?);
@@ -137,11 +140,11 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Run { command, args } => {
+        Some(Commands::Run { command, args }) => {
             let exit_code = run_command(&socket_path, &token, command, args).await?;
             std::process::exit(exit_code);
         }
-        Commands::Freeze { session_id } => {
+        Some(Commands::Freeze { session_id }) => {
             let resp = agmux_cli::freeze_session(&socket_path, &token, session_id.clone()).await?;
             if resp.success {
                 println!(
@@ -153,7 +156,7 @@ async fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Commands::Inspect { session_id } => {
+        Some(Commands::Inspect { session_id }) => {
             let resp = agmux_cli::resume_session(&socket_path, &token, session_id.clone()).await?;
             if resp.success {
                 let text = String::from_utf8_lossy(&resp.screen_data);

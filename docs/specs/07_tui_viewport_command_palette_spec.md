@@ -12,11 +12,11 @@ This specification details the Ratatui terminal user interface (`agmux-tui`), si
 * **Text:** As a user interacting with Agmux in a terminal, the system shall render a multi-pane TUI using Ratatui 0.30 and Crossterm 0.29, displaying the 3-tier sidebar hierarchy on the left and an active `tui-term` terminal viewport on the right, operating under 10 MB RAM.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-tui::viewport_renderer`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Launch `agmux-tui` in a standard terminal; verify clean multi-pane rendering, correct color rendition, responsive keyboard input, and resident memory usage under 10 MB.
 * **Downstream Req:** `LLD-TUI-RATATUI-VIEWPORT-001`
 * **Downstream Test:** `TEST-VER-TUI-001`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

@@ -3,3 +3,12 @@ name = "agmux-tui"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+
+[dependencies]
+crossterm = "0.28.1"
+ratatui = "0.28.1"
+tokio.workspace = true
+anyhow.workspace = true
+agmux-proto = { path = "../agmux-proto" }
+futures-util.workspace = true
+vt100 = "0.18.1"

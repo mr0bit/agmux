@@ -79,6 +79,13 @@ impl ActivePtySession {
             .unwrap_or_else(|| self.output_tx.subscribe())
     }
 
+    /// Subscribe to output and capture a screen at the same output boundary.
+    pub fn subscribe_viewport(&self) -> (Vec<u8>, broadcast::Receiver<Vec<u8>>) {
+        let screen = self.screen_buffer.lock().expect("screen buffer lock");
+        let receiver = self.output_tx.subscribe();
+        (screen.capture_formatted(), receiver)
+    }
+
     /// Subscribe to delivered input.
     pub fn subscribe_input(&self) -> broadcast::Receiver<()> {
         self.input_tx.subscribe()
@@ -194,9 +201,7 @@ impl PtyManager {
                         let chunk = buf[..n].to_vec();
                         if let Ok(mut sb) = screen_buf_clone.lock() {
                             sb.process(&chunk);
-                        }
-                        if output_tx_clone.send(chunk).is_err() {
-                            // No active receivers, continue buffering/reading until EOF
+                            let _ = output_tx_clone.send(chunk);
                         }
                     }
                     Err(e) => {

@@ -161,6 +161,10 @@ pub enum IpcMessage {
     ResumeSessionResponse(ResumeSessionResponse),
     SearchLogsRequest(SearchLogsRequest),
     SearchLogsResponse(SearchLogsResponse),
+    /// Subscribe to one session viewport, replacing the previous subscription.
+    SubscribeViewport {
+        session_id: String,
+    },
     ListSessionsRequest(ListSessionsRequest),
     ListSessionsResponse(ListSessionsResponse),
     /// Client initiates connection handshake.

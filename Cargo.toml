@@ -36,6 +36,9 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dev-dependencies]
+agmux-tui = { path = "crates/agmux-tui" }
+ratatui = "0.28.1"
+crossterm = "0.28.1"
 serde_json.workspace = true
 agmux-proto = { path = "crates/agmux-proto" }
 tokio.workspace = true
