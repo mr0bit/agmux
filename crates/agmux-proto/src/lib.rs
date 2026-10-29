@@ -13,8 +13,8 @@ pub use messages::{
     IpcMessage, ListReviewCommentsRequest, ListReviewCommentsResponse, ListSessionsRequest,
     ListSessionsResponse, RemoveSessionRequest, RemoveSessionResponse, ResolveReviewCommentRequest,
     ResolveReviewCommentResponse, ResumeSessionRequest, ResumeSessionResponse, ReviewComment,
-    SearchLogsRequest, SearchLogsResponse, SearchMatch, SessionExitEvent, SessionInfo,
-    SessionStateChangedEvent, SpawnSessionRequest, SpawnSessionResponse, TerminalInputFrame,
-    TerminalOutputFrame,
+    SearchLogsRequest, SearchLogsResponse, SearchMatch, SendMessageRequest, SendMessageResponse,
+    SessionExitEvent, SessionInfo, SessionStateChangedEvent, SpawnSessionRequest,
+    SpawnSessionResponse, TerminalInputFrame, TerminalOutputFrame,
 };
 pub use transport::{FramedStream, IpcCodec, ProtoError, new_framed};

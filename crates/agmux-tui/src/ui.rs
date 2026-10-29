@@ -28,7 +28,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         .map(|(index, session)| {
             let (badge, color) = match session.state.as_str() {
                 "RUNNING" => ("RUNNING", Color::Green),
-                "WAITING" | "WAITING_INPUT" => ("WAITING", Color::Yellow),
+                "WAITING" | "WAITING_INPUT" => ("WAITING ✉", Color::Yellow),
                 "STUCK" => ("STUCK", Color::Magenta),
                 "DEAD" => ("DEAD", Color::Red),
                 _ => (session.state.as_str(), Color::Cyan),

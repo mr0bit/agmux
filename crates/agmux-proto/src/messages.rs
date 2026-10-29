@@ -294,10 +294,27 @@ pub struct DispatchReviewRoundResponse {
     pub error: Option<String>,
 }
 
+/// Request asynchronous delivery to a session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SendMessageRequest {
+    pub target_session_id: String,
+    pub message: String,
+}
+
+/// Result of a message delivery request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SendMessageResponse {
+    pub success: bool,
+    pub queued: bool,
+    pub error: Option<String>,
+}
+
 /// Unified framed IPC message envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload")]
 pub enum IpcMessage {
+    SendMessageRequest(SendMessageRequest),
+    SendMessageResponse(SendMessageResponse),
     ResolveReviewCommentRequest(ResolveReviewCommentRequest),
     ResolveReviewCommentResponse(ResolveReviewCommentResponse),
     AddReviewCommentRequest(AddReviewCommentRequest),

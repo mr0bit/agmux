@@ -325,7 +325,7 @@ async fn handle_client(
                                         result = output_rx.recv() => {
                                             match result {
                                                 Ok(data) => {
-                                                    publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.output(&data)).await;
+                                                    publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.output(&data), Some(&session_clone)).await;
                                                     let lines = history.ingest(&data);
                                                     index_lines(output_db.clone(), &fwd_session_id, &mut line_no, lines).await;
                                                     let _ = out_tx_fwd.send(IpcMessage::TerminalOutputFrame(TerminalOutputFrame { session_id: fwd_session_id.clone(), data })).await;
@@ -336,11 +336,11 @@ async fn handle_client(
                                             }
                                         }
                                         _ = input_rx.recv() => {
-                                            publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.input()).await;
+                                            publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.input(), Some(&session_clone)).await;
                                             false
                                         }
                                         _ = tokio::time::sleep_until(classifier.deadline().into()), if classifier.state() == agmux_core::state_machine::SessionState::Running => {
-                                            publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.timeout()).await;
+                                            publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.timeout(), Some(&session_clone)).await;
                                             false
                                         }
                                         _ = exit_rx.changed() => true,
@@ -354,6 +354,7 @@ async fn handle_client(
                                             &state_events,
                                             &fwd_session_id,
                                             classifier.output(&data),
+                                            Some(&session_clone),
                                         )
                                         .await;
                                         let lines = history.ingest(&data);
@@ -389,6 +390,7 @@ async fn handle_client(
                                             &state_events,
                                             &fwd_session_id,
                                             classifier.exit(code),
+                                            Some(&session_clone),
                                         )
                                         .await;
                                     }
@@ -800,6 +802,52 @@ async fn handle_client(
                     }))
                     .await?;
             }
+            IpcMessage::SendMessageRequest(req) => {
+                let session = pty_manager.get_session(&req.target_session_id).await;
+                let db = storage.clone();
+                let result = tokio::task::spawn_blocking(move || -> Result<bool, String> {
+                    let db = db.lock().map_err(|e| e.to_string())?;
+                    let info = db
+                        .get_session(&req.target_session_id)
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| format!("Session not found: {}", req.target_session_id))?;
+                    if matches!(info.state.as_str(), "WAITING" | "WAITING_INPUT") {
+                        db.enqueue_message(&req.target_session_id, &req.message)
+                            .map_err(|e| e.to_string())?;
+                        Ok(true)
+                    } else {
+                        let session = session.map_err(|e| e.to_string())?;
+                        if session.subscribe_exit().borrow().is_some() {
+                            return Err("Session is not active".into());
+                        }
+                        session
+                            .send_input(format!("{}\n", req.message).as_bytes())
+                            .map_err(|e| e.to_string())?;
+                        Ok(false)
+                    }
+                })
+                .await;
+                let response = match result {
+                    Ok(Ok(queued)) => agmux_proto::SendMessageResponse {
+                        success: true,
+                        queued,
+                        error: None,
+                    },
+                    Ok(Err(error)) => agmux_proto::SendMessageResponse {
+                        success: false,
+                        queued: false,
+                        error: Some(error),
+                    },
+                    Err(error) => agmux_proto::SendMessageResponse {
+                        success: false,
+                        queued: false,
+                        error: Some(error.to_string()),
+                    },
+                };
+                out_tx
+                    .send(IpcMessage::SendMessageResponse(response))
+                    .await?;
+            }
             IpcMessage::TerminalInputFrame(input) => {
                 if let Ok(session) = pty_manager.get_session(&input.session_id).await {
                     if let Err(e) = session.send_input(&input.data) {
@@ -888,10 +936,20 @@ async fn handle_client(
             IpcMessage::AcknowledgeSessionRequest(req) => {
                 let db = storage.clone();
                 let sid = req.session_id.clone();
+                let active = pty_manager.get_session(&sid).await.ok();
                 let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
                     let db = db.lock().map_err(|e| e.to_string())?;
                     db.update_session_state(&sid, "IDLE")
                         .map_err(|e| e.to_string())?;
+                    if let Some(session) = active.filter(|s| s.subscribe_exit().borrow().is_none())
+                    {
+                        for (id, message) in db.pending_messages(&sid).map_err(|e| e.to_string())? {
+                            session
+                                .send_input(format!("{message}\n").as_bytes())
+                                .map_err(|e| e.to_string())?;
+                            db.mark_message_delivered(id).map_err(|e| e.to_string())?;
+                        }
+                    }
                     Ok(())
                 })
                 .await;
@@ -921,7 +979,8 @@ async fn handle_client(
                     .send(IpcMessage::AcknowledgeSessionResponse(response))
                     .await?;
             }
-            IpcMessage::ResolveReviewCommentResponse(_)
+            IpcMessage::SendMessageResponse(_)
+            | IpcMessage::ResolveReviewCommentResponse(_)
             | IpcMessage::AcknowledgeSessionResponse(_)
             | IpcMessage::AddReviewCommentResponse(_)
             | IpcMessage::ListReviewCommentsResponse(_)
@@ -988,12 +1047,15 @@ async fn publish_transition(
         agmux_core::state_machine::SessionState,
         &'static str,
     )>,
+    session: Option<&Arc<agmux_core::pty_manager::ActivePtySession>>,
 ) {
     if let Some((old, new, reason)) = transition {
         let session_id = id.to_owned();
         let db_id = session_id.clone();
+        let db_update = db.clone();
         let result = tokio::task::spawn_blocking(move || {
-            db.lock()
+            db_update
+                .lock()
                 .map_err(|e| e.to_string())?
                 .update_session_state(&db_id, new.as_str())
                 .map_err(|e| e.to_string())
@@ -1001,11 +1063,35 @@ async fn publish_transition(
         .await;
         if matches!(result, Ok(Ok(()))) {
             let _ = events.send(SessionStateChangedEvent {
-                session_id,
+                session_id: session_id.clone(),
                 old_state: old.as_str().into(),
                 new_state: new.as_str().into(),
                 reason: reason.into(),
             });
+
+            // Auto-flush queued messages when prompt is resolved or session transitions out of WaitingInput
+            if (old == agmux_core::state_machine::SessionState::WaitingInput
+                || new == agmux_core::state_machine::SessionState::Idle)
+                && new != agmux_core::state_machine::SessionState::WaitingInput
+            {
+                if let Some(active_session) = session {
+                    let db_clone = db.clone();
+                    let sid = session_id.clone();
+                    if let Ok(Ok(msgs)) = tokio::task::spawn_blocking(move || {
+                        db_clone
+                            .lock()
+                            .map_err(|e| e.to_string())?
+                            .pop_pending_messages(&sid)
+                            .map_err(|e| e.to_string())
+                    })
+                    .await
+                    {
+                        for (_id, msg) in msgs {
+                            let _ = active_session.send_input(format!("{msg}\n").as_bytes());
+                        }
+                    }
+                }
+            }
         } else {
             tracing::error!("Failed to persist state transition: {result:?}");
         }

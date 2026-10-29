@@ -33,8 +33,51 @@ impl StorageEngine {
         tx.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS terminal_logs_fts USING fts5(session_id UNINDEXED, line_no UNINDEXED, timestamp UNINDEXED, content, tokenize='trigram');")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS session_snapshots (session_id TEXT PRIMARY KEY, snapshot BLOB, compressed_size INTEGER, uncompressed_size INTEGER, timestamp INTEGER);")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, file_path TEXT NOT NULL, line_number INTEGER NOT NULL, line_hash TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_review_session_status ON review_comments(session_id, status); CREATE TABLE IF NOT EXISTS review_rounds (session_id TEXT NOT NULL, round_number INTEGER NOT NULL, PRIMARY KEY(session_id, round_number));")?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS queued_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, target_session_id TEXT NOT NULL, message TEXT NOT NULL, created_at INTEGER NOT NULL, delivered_at INTEGER); CREATE INDEX IF NOT EXISTS idx_queued_messages ON queued_messages(target_session_id, delivered_at);")?;
         tx.commit()?;
         Ok(Self { connection })
+    }
+    /// Persist a message for a session.
+    pub fn enqueue_message(
+        &self,
+        target_session_id: &str,
+        message: &str,
+    ) -> Result<u64, StorageError> {
+        self.connection.execute("INSERT INTO queued_messages (target_session_id,message,created_at) VALUES (?1,?2,unixepoch())", params![target_session_id,message])?;
+        Ok(self.connection.last_insert_rowid() as u64)
+    }
+    /// Return pending messages in FIFO order without removing them.
+    pub fn pending_messages(
+        &self,
+        target_session_id: &str,
+    ) -> Result<Vec<(u64, String)>, StorageError> {
+        let mut stmt = self.connection.prepare("SELECT id,message FROM queued_messages WHERE target_session_id=?1 AND delivered_at IS NULL ORDER BY id")?;
+        let rows = stmt.query_map([target_session_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+    /// Mark a successfully delivered message.
+    pub fn mark_message_delivered(&self, id: u64) -> Result<(), StorageError> {
+        self.connection.execute("UPDATE queued_messages SET delivered_at=unixepoch() WHERE id=?1 AND delivered_at IS NULL", [id])?;
+        Ok(())
+    }
+    /// Atomically claim all currently pending messages.
+    pub fn pop_pending_messages(
+        &self,
+        target_session_id: &str,
+    ) -> Result<Vec<(u64, String)>, StorageError> {
+        let tx = self.connection.unchecked_transaction()?;
+        let messages = {
+            let mut stmt = tx.prepare("SELECT id,message FROM queued_messages WHERE target_session_id=?1 AND delivered_at IS NULL ORDER BY id")?;
+            let rows = stmt.query_map([target_session_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        tx.execute("UPDATE queued_messages SET delivered_at=unixepoch() WHERE target_session_id=?1 AND delivered_at IS NULL", [target_session_id])?;
+        tx.commit()?;
+        Ok(messages)
+    }
+    /// Count pending messages for a session.
+    pub fn pending_message_count(&self, target_session_id: &str) -> Result<usize, StorageError> {
+        Ok(self.connection.query_row("SELECT count(*) FROM queued_messages WHERE target_session_id=?1 AND delivered_at IS NULL", [target_session_id], |r| r.get(0))?)
     }
     pub fn add_review_comment(&self, comment: &ReviewComment) -> Result<(), StorageError> {
         self.connection.execute(

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use futures_util::SinkExt;
 
 use agmux_cli::{ensure_daemon_running, run_command};
 use agmux_core::default_socket_path;
@@ -29,6 +30,10 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Send a message to another session.
+    Send { target_id: String, message: String },
+    /// Send raw text input to an active session PTY.
+    Input { session_id: String, text: String },
     /// Manage review comments.
     Review {
         #[command(subcommand)]
@@ -162,6 +167,55 @@ async fn main() -> Result<()> {
 
     // 3. Dispatch subcommand
     match cli.command {
+        Some(Commands::Send { target_id, message }) => {
+            let request =
+                agmux_proto::IpcMessage::SendMessageRequest(agmux_proto::SendMessageRequest {
+                    target_session_id: target_id.clone(),
+                    message,
+                });
+            match agmux_cli::ipc_client::review_request(&socket_path, &token, request).await? {
+                agmux_proto::IpcMessage::SendMessageResponse(r) if r.success && r.queued => {
+                    println!(
+                        "[QUEUED ✉] Target session is WAITING; message held in queue until prompt resolution"
+                    )
+                }
+                agmux_proto::IpcMessage::SendMessageResponse(r) if r.success => {
+                    println!("Delivered message to {target_id}")
+                }
+                agmux_proto::IpcMessage::SendMessageResponse(r) => {
+                    anyhow::bail!("{}", r.error.unwrap_or_default())
+                }
+                other => anyhow::bail!("Unexpected send response: {other:?}"),
+            }
+        }
+        Some(Commands::Input { session_id, text }) => {
+            let stream = tokio::net::UnixStream::connect(&socket_path)
+                .await
+                .context("Failed to connect to daemon")?;
+            let mut framed = agmux_proto::new_framed(stream);
+            framed
+                .send(agmux_proto::IpcMessage::HandshakeRequest(
+                    agmux_proto::HandshakeRequest {
+                        client_version: env!("CARGO_PKG_VERSION").into(),
+                        token: token.clone(),
+                    },
+                ))
+                .await?;
+            use futures_util::StreamExt;
+            match framed.next().await.context("Handshake failed")?? {
+                agmux_proto::IpcMessage::HandshakeResponse(r) if r.success => {}
+                other => anyhow::bail!("Handshake failed: {other:?}"),
+            }
+            framed
+                .send(agmux_proto::IpcMessage::TerminalInputFrame(
+                    agmux_proto::TerminalInputFrame {
+                        session_id,
+                        data: format!("{text}\n").into_bytes(),
+                    },
+                ))
+                .await?;
+        }
+
         Some(Commands::Review { command }) => {
             use agmux_proto::*;
             let mut resolved_id = None;

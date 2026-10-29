@@ -12,11 +12,11 @@ This specification details the autonomous multi-agent orchestration primitives, 
 * **Text:** As a parent or sibling agent sending an asynchronous message to a target session (`agmux send <target_id> <message>`), if the target session is in the `WAITING` state (blocked on permission prompt or `(y/n)`), the system shall hold the message in queue (`✉` badge) and auto-deliver it only after the human resolves or bypasses the prompt (`IDLE`/`FINISHED`), preventing corruption of security prompts.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-daemon::message_queue`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Place a target session in `WAITING` on a `(y/n)` prompt; send an inter-agent message via `agmux send`. Verify that the message is queued without writing to PTY stdin. Resolve the prompt as the user; verify that the queued message is delivered cleanly once the session finishes the turn.
 * **Downstream Req:** `LLD-ORCH-QUEUED-MSG-GUARD-001`
 * **Downstream Test:** `TEST-VER-ORCH-001`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 
