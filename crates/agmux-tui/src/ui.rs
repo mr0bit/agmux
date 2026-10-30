@@ -196,7 +196,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     } else if app.input_mode {
         "[INTERACTIVE] Esc: normal | Ctrl+F: search | Ctrl+PgUp/PgDn: notes".into()
     } else {
-        "[NORMAL] g: group | *: favorite | D: density | a/t/u: archive | f: fork | Space: prompt | /: filter | F1: palette"
+        "[NORMAL] n/s: new session | Space: prompt | F1: palette | g: group | *: fav | D: density | a/t/u: archive | f: fork | /: filter"
             .into()
     };
     frame.render_widget(Paragraph::new(status_bar), rows[1]);

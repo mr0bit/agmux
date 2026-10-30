@@ -277,7 +277,7 @@ impl App {
                         self.input_mode = true;
                         return;
                     }
-                    KeyCode::Char('n') => {
+                    KeyCode::Char('n') | KeyCode::Char('s') => {
                         self.execute_action("New Session");
                         return;
                     }
