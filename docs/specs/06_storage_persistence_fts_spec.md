@@ -64,8 +64,8 @@ This specification details the single-writer SQLite WAL database, embedded atomi
 * **Text:** As a user edits `~/.config/agmux/config.toml` (or `%APPDATA%\agmux\config.toml` on Windows), `agmuxd` shall watch the file using the `notify` crate and hot-reload retention caps, settle debounce windows, and notification rules without restarting or dropping sessions.
 * **Criticality:** Medium
 * **SW Component:** `crates/agmux-daemon::config_watcher`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Modify `idle_after_ms` from 1000 to 2000 in `config.toml` while `agmuxd` is running; verify via daemon log output that the configuration is reloaded and the new debounce window is immediately applied.
 * **Downstream Req:** `LLD-STORAGE-CONFIG-HOTRELOAD-005`
 * **Downstream Test:** `TEST-VER-STORAGE-005`
-* **Test Status:** Failed
+* **Test Status:** Passed

@@ -451,10 +451,287 @@ pub struct AckCursorResponse {
     pub error: Option<String>,
 }
 
+/// Shared Kanban board task entry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KanbanTask {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub claimed_by: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// Structured worker completion report.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkerReport {
+    pub task_id: String,
+    pub session_id: String,
+    pub summary: String,
+    pub pr_url: Option<String>,
+    pub commit_sha: Option<String>,
+    pub created_at: u64,
+}
+
+/// Request to create a Kanban task.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateTaskRequest {
+    pub task_id: String,
+    pub title: String,
+    pub description: String,
+}
+
+/// Result of creating a Kanban task.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateTaskResponse {
+    pub success: bool,
+    pub task: Option<KanbanTask>,
+    pub error: Option<String>,
+}
+
+/// Request to list Kanban tasks, optionally filtered by status.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListTasksRequest {
+    pub status: Option<String>,
+}
+
+/// List of Kanban tasks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListTasksResponse {
+    pub tasks: Vec<KanbanTask>,
+    pub error: Option<String>,
+}
+
+/// Request to claim a Kanban task.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClaimTaskRequest {
+    pub task_id: String,
+    pub session_id: String,
+}
+
+/// Result of claiming a Kanban task.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClaimTaskResponse {
+    pub success: bool,
+    pub task: Option<KanbanTask>,
+    pub error: Option<String>,
+}
+
+/// Request to mark a Kanban task finished.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FinishTaskRequest {
+    pub task_id: String,
+    pub session_id: String,
+}
+
+/// Result of marking a Kanban task finished.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FinishTaskResponse {
+    pub success: bool,
+    pub task: Option<KanbanTask>,
+    pub error: Option<String>,
+}
+
+/// Request to release a claimed Kanban task back to todo.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseTaskRequest {
+    pub task_id: String,
+    pub session_id: String,
+}
+
+/// Result of releasing a Kanban task.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseTaskResponse {
+    pub success: bool,
+    pub task: Option<KanbanTask>,
+    pub error: Option<String>,
+}
+
+/// Request to post a structured worker report for a task.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PostReportRequest {
+    pub task_id: String,
+    pub session_id: String,
+    pub summary: String,
+    pub pr_url: Option<String>,
+    pub commit_sha: Option<String>,
+}
+
+/// Result of posting a worker report.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PostReportResponse {
+    pub success: bool,
+    pub report: Option<WorkerReport>,
+    pub error: Option<String>,
+}
+
+/// Request to view structured worker reports for a task.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ViewReportRequest {
+    pub task_id: String,
+}
+
+/// Result of viewing worker reports for a task.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ViewReportResponse {
+    pub success: bool,
+    pub reports: Vec<WorkerReport>,
+    pub error: Option<String>,
+}
+
+/// Request graceful daemon shutdown with SIGHUP -> SIGTERM propagation to active child process groups.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShutdownDaemonRequest {}
+
+/// Result of graceful daemon shutdown.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShutdownDaemonResponse {
+    pub success: bool,
+    pub terminated_sessions: usize,
+}
+
+/// Atomic screen state snapshot sent immediately upon `SubscribeViewport`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScreenSyncFrame {
+    pub session_id: String,
+    pub rows: u16,
+    pub cols: u16,
+    pub cursor_row: u16,
+    pub cursor_col: u16,
+    pub scrollback_offset: usize,
+    pub formatted_screen: Vec<u8>,
+    pub lines: Vec<String>,
+}
+
+/// Asynchronous notification event pushed to subscribed clients on state transitions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NotificationEvent {
+    pub session_id: String,
+    pub kind: String,
+    pub title: String,
+    pub body: String,
+    pub timestamp: u64,
+}
+
+/// Asynchronous session list update pushed to subscribed clients on session lifecycle changes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionListUpdate {
+    pub sessions: Vec<SessionInfo>,
+}
+
+/// Request to resize a PTY session grid and propagate `TIOCSWINSZ`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResizeSessionRequest {
+    pub session_id: String,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// Result of resizing a PTY session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResizeSessionResponse {
+    pub success: bool,
+    pub cols: u16,
+    pub rows: u16,
+    pub error: Option<String>,
+}
+
+/// Request to spawn an interactive shell sub-tab inheriting a parent session's CWD and PORT.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SpawnSubtabRequest {
+    pub parent_session_id: String,
+    pub subtab_id: String,
+    pub shell: Option<String>,
+}
+
+/// Result of spawning an interactive shell sub-tab.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SpawnSubtabResponse {
+    pub success: bool,
+    pub subtab_id: String,
+    pub cwd: String,
+    pub port: u16,
+    pub error: Option<String>,
+}
+
+/// Request to emit a Tier 1 deterministic CLI hook event (`working`, `permission_request`, `stop`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InternalHookRequest {
+    pub session_id: String,
+    pub event: String,
+}
+
+/// Result of processing a Tier 1 deterministic CLI hook event.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InternalHookResponse {
+    pub success: bool,
+    pub new_state: String,
+    pub error: Option<String>,
+}
+
+/// Request to federate and mount a remote daemon over SSH or Tailscale (`REQ-REMOTE-FEDERATION-SSH-001`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConnectRemoteRequest {
+    pub target: String,
+    #[serde(default)]
+    pub remote_socket: Option<String>,
+    #[serde(default)]
+    pub remote_token: Option<String>,
+}
+
+/// Result of connecting and mounting a remote daemon.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConnectRemoteResponse {
+    pub success: bool,
+    pub host_label: String,
+    pub mounted_sessions: Vec<SessionInfo>,
+    pub error: Option<String>,
+}
+
+/// Request active federated remote host labels.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListRemotesRequest {}
+
+/// List of connected federated remote host labels.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListRemotesResponse {
+    pub remotes: Vec<String>,
+}
+
 /// Unified framed IPC message envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload")]
 pub enum IpcMessage {
+    ConnectRemoteRequest(ConnectRemoteRequest),
+    ConnectRemoteResponse(ConnectRemoteResponse),
+    ListRemotesRequest(ListRemotesRequest),
+    ListRemotesResponse(ListRemotesResponse),
+    ResizeSessionRequest(ResizeSessionRequest),
+    ResizeSessionResponse(ResizeSessionResponse),
+    SpawnSubtabRequest(SpawnSubtabRequest),
+    SpawnSubtabResponse(SpawnSubtabResponse),
+    InternalHookRequest(InternalHookRequest),
+    InternalHookResponse(InternalHookResponse),
+    ShutdownDaemonRequest(ShutdownDaemonRequest),
+    ShutdownDaemonResponse(ShutdownDaemonResponse),
+    ScreenSyncFrame(ScreenSyncFrame),
+    NotificationEvent(NotificationEvent),
+    SessionListUpdate(SessionListUpdate),
+    CreateTaskRequest(CreateTaskRequest),
+    CreateTaskResponse(CreateTaskResponse),
+    ListTasksRequest(ListTasksRequest),
+    ListTasksResponse(ListTasksResponse),
+    ClaimTaskRequest(ClaimTaskRequest),
+    ClaimTaskResponse(ClaimTaskResponse),
+    FinishTaskRequest(FinishTaskRequest),
+    FinishTaskResponse(FinishTaskResponse),
+    ReleaseTaskRequest(ReleaseTaskRequest),
+    ReleaseTaskResponse(ReleaseTaskResponse),
+    PostReportRequest(PostReportRequest),
+    PostReportResponse(PostReportResponse),
+    ViewReportRequest(ViewReportRequest),
+    ViewReportResponse(ViewReportResponse),
     WatchEventsRequest(WatchEventsRequest),
     WatchEventFrame(WatchEventFrame),
     AckCursorRequest(AckCursorRequest),

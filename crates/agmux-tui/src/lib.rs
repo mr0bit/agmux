@@ -22,6 +22,56 @@ use crossterm::{
 use futures_util::{SinkExt, StreamExt};
 use ratatui::{Terminal, backend::CrosstermBackend};
 
+/// Platform-aware default interactive shell (`powershell.exe` on Windows, `$SHELL` / `bash` on Unix).
+pub fn default_shell() -> String {
+    #[cfg(windows)]
+    {
+        std::env::var("COMSPEC").unwrap_or_else(|_| "powershell.exe".to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var("SHELL")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "bash".to_string())
+    }
+}
+
+/// Alias for `default_shell()`.
+pub fn default_shell_command() -> String {
+    default_shell()
+}
+
+/// Encode a terminal `KeyCode` + `KeyModifiers` into raw PTY stdin bytes for Interactive Mode passthrough.
+pub fn encode_key_to_pty_bytes(key: KeyCode, modifiers: KeyModifiers) -> Option<Vec<u8>> {
+    match key {
+        KeyCode::Enter => Some(b"\r".to_vec()),
+        KeyCode::Backspace => Some(vec![0x7f]),
+        KeyCode::Tab => Some(b"\t".to_vec()),
+        KeyCode::Up => Some(b"\x1b[A".to_vec()),
+        KeyCode::Down => Some(b"\x1b[B".to_vec()),
+        KeyCode::Right => Some(b"\x1b[C".to_vec()),
+        KeyCode::Left => Some(b"\x1b[D".to_vec()),
+        KeyCode::Home => Some(b"\x1b[H".to_vec()),
+        KeyCode::End => Some(b"\x1b[F".to_vec()),
+        KeyCode::Delete => Some(b"\x1b[3~".to_vec()),
+        KeyCode::Char(c) if modifiers.contains(KeyModifiers::CONTROL) => {
+            let lower = c.to_ascii_lowercase();
+            if lower.is_ascii_lowercase() {
+                let ctrl_byte = (lower as u8) - b'a' + 1;
+                Some(vec![ctrl_byte])
+            } else {
+                None
+            }
+        }
+        KeyCode::Char(c) => {
+            let mut buf = [0u8; 4];
+            Some(c.encode_utf8(&mut buf).as_bytes().to_vec())
+        }
+        _ => None,
+    }
+}
+
 /// The currently displayed floating input.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ModalState {
@@ -43,6 +93,9 @@ pub enum ModalState {
         selected_hunk: usize,
         files: Vec<agmux_proto::FileDiff>,
     },
+    KanbanBoard {
+        selected: usize,
+    },
 }
 
 /// State displayed by the interactive viewport.
@@ -53,10 +106,15 @@ pub struct App {
     pub active_viewport_lines: Vec<String>,
     pub should_quit: bool,
     pub modal: ModalState,
+    /// When `true`, keystrokes are forwarded directly to the active session's PTY (`Esc` returns to Normal Mode).
+    pub input_mode: bool,
     pub attention_filter: bool,
     pub split_view: bool,
     pub pinned_session_index: Option<usize>,
     pub pinned_viewport_lines: Vec<String>,
+    pub subtabs: Vec<String>,
+    pub active_subtab_idx: usize,
+    pub kanban_tasks: Vec<agmux_proto::KanbanTask>,
     pub discovered_agents: Vec<DiscoveredAgent>,
     pub config_path: std::path::PathBuf,
     pub onboarding_error: Option<String>,
@@ -83,12 +141,7 @@ impl App {
 
     /// Available launch commands, beginning with the user's shell.
     pub fn onboarding_commands(&self) -> Vec<String> {
-        let mut commands = vec![
-            std::env::var("SHELL")
-                .ok()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "bash".into()),
-        ];
+        let mut commands = vec![default_shell()];
         commands.extend(
             self.discovered_agents
                 .iter()
@@ -130,10 +183,70 @@ impl App {
         let modal = std::mem::take(&mut self.modal);
         self.modal = match modal {
             ModalState::None => {
+                if self.input_mode {
+                    if key == KeyCode::Esc {
+                        self.input_mode = false;
+                        return;
+                    }
+                    if let Some(bytes) = encode_key_to_pty_bytes(key, modifiers)
+                        && let Some(session) = self.sessions.get(self.selected_index)
+                    {
+                        self.pending_message =
+                            Some(IpcMessage::TerminalInputFrame(TerminalInputFrame {
+                                session_id: session.session_id.clone(),
+                                data: bytes,
+                            }));
+                    }
+                    return;
+                }
+
                 match key {
                     KeyCode::F(1) | KeyCode::Char(':') => return self.open_palette(),
                     KeyCode::Char('p') if modifiers.contains(KeyModifiers::CONTROL) => {
                         return self.open_palette();
+                    }
+                    KeyCode::Char('i') | KeyCode::Enter => {
+                        self.input_mode = true;
+                        return;
+                    }
+                    KeyCode::Char('n') => {
+                        self.execute_action("New Session");
+                        return;
+                    }
+                    KeyCode::Char('t') => {
+                        if let Some(parent) = self.sessions.get(self.selected_index) {
+                            let subtab_id =
+                                format!("{}:shell-{}", parent.session_id, self.subtabs.len() + 1);
+                            self.subtabs.push(subtab_id.clone());
+                            self.active_subtab_idx = self.subtabs.len() - 1;
+                            self.pending_message = Some(IpcMessage::SpawnSubtabRequest(
+                                agmux_proto::SpawnSubtabRequest {
+                                    parent_session_id: parent.session_id.clone(),
+                                    subtab_id,
+                                    shell: Some(default_shell()),
+                                },
+                            ));
+                        }
+                        return;
+                    }
+                    KeyCode::Char('[') => {
+                        if !self.subtabs.is_empty() {
+                            self.active_subtab_idx = self.active_subtab_idx.saturating_sub(1);
+                        }
+                        return;
+                    }
+                    KeyCode::Char(']') => {
+                        if !self.subtabs.is_empty() {
+                            self.active_subtab_idx =
+                                (self.active_subtab_idx + 1).min(self.subtabs.len() - 1);
+                        }
+                        return;
+                    }
+                    KeyCode::Char('K') => {
+                        self.pending_message = Some(IpcMessage::ListTasksRequest(
+                            agmux_proto::ListTasksRequest { status: None },
+                        ));
+                        return self.modal = ModalState::KanbanBoard { selected: 0 };
                     }
                     KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
                         if let Some(session) = self.sessions.get(self.selected_index) {
@@ -434,6 +547,21 @@ impl App {
                     files,
                 }
             }
+            ModalState::KanbanBoard { mut selected } => {
+                match key {
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('K') => return,
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if !self.kanban_tasks.is_empty() {
+                            selected = (selected + 1).min(self.kanban_tasks.len() - 1);
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        selected = selected.saturating_sub(1);
+                    }
+                    _ => {}
+                }
+                ModalState::KanbanBoard { selected }
+            }
         };
     }
 
@@ -521,7 +649,7 @@ impl App {
                 );
                 self.pending_message = Some(IpcMessage::SpawnSessionRequest(SpawnSessionRequest {
                     session_id: id,
-                    command: std::env::var("SHELL").unwrap_or_else(|_| "sh".into()),
+                    command: default_shell(),
                     args: vec![],
                     cwd: None,
                     worktree_branch: None,
@@ -579,7 +707,9 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                     ..App::default()
                 };
             }
-            IpcMessage::SessionStateChangedEvent(_) => {}
+            IpcMessage::SessionStateChangedEvent(_)
+            | IpcMessage::NotificationEvent(_)
+            | IpcMessage::SessionListUpdate(_) => {}
             other => bail!("Unexpected list response: {other:?}"),
         }
     };
@@ -624,6 +754,13 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                 }
             }
             message = ipc.next() => match message.context("Daemon connection closed")?? {
+                IpcMessage::ScreenSyncFrame(frame) if app.sessions.get(app.selected_index).is_some_and(|s| s.session_id == frame.session_id) => {
+                    let rows = std::num::NonZeroU16::new(frame.rows.max(1)).expect("nonzero rows");
+                    let cols = std::num::NonZeroU16::new(frame.cols.max(1)).expect("nonzero cols");
+                    parser = vt100::Parser::new(rows, cols, 0);
+                    parser.process(&frame.formatted_screen);
+                    app.active_viewport_lines = frame.lines;
+                }
                 IpcMessage::TerminalOutputFrame(frame) if app.sessions.get(app.selected_index).is_some_and(|s| s.session_id == frame.session_id) => {
                     parser.process(&frame.data);
                     app.active_viewport_lines = parser.screen().contents().lines().map(str::to_owned).collect();
@@ -631,6 +768,18 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                 IpcMessage::SpawnSessionResponse(response) => {
                     if response.success { ipc.send(IpcMessage::SubscribeViewport { session_id: response.session_id }).await?; }
                     ipc.send(IpcMessage::ListSessionsRequest(ListSessionsRequest {})).await?;
+                }
+                IpcMessage::SpawnSubtabResponse(response) => {
+                    if response.success {
+                        if !app.subtabs.contains(&response.subtab_id) {
+                            app.subtabs.push(response.subtab_id.clone());
+                        }
+                        ipc.send(IpcMessage::SubscribeViewport { session_id: response.subtab_id }).await?;
+                    }
+                    ipc.send(IpcMessage::ListSessionsRequest(ListSessionsRequest {})).await?;
+                }
+                IpcMessage::ListTasksResponse(response) => {
+                    app.kanban_tasks = response.tasks;
                 }
                 IpcMessage::FreezeSessionResponse(_) => {
                     ipc.send(IpcMessage::ListSessionsRequest(ListSessionsRequest {})).await?;
@@ -642,6 +791,10 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                 }
                 IpcMessage::ListSessionsResponse(response) => {
                     app.sessions = response.sessions;
+                    app.selected_index = app.selected_index.min(app.sessions.len().saturating_sub(1));
+                }
+                IpcMessage::SessionListUpdate(update) => {
+                    app.sessions = update.sessions;
                     app.selected_index = app.selected_index.min(app.sessions.len().saturating_sub(1));
                 }
                 IpcMessage::SessionStateChangedEvent(event) => {

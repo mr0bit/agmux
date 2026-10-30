@@ -41,6 +41,14 @@ fn git(root: &Path, args: &[&std::ffi::OsStr]) -> Result<(), WorktreeError> {
     }
 }
 
+/// Compute a deterministic port (`8000..=8999`) from a branch or session identifier using FNV-1a.
+pub fn port_for_branch(branch: &str) -> u16 {
+    let hash = branch.bytes().fold(2166136261u32, |h, b| {
+        (h ^ u32::from(b)).wrapping_mul(16777619)
+    });
+    8000 + (hash % 1000) as u16
+}
+
 /// Create a worktree, copying matching root-level files.
 pub fn provision_worktree(repo_root: &Path, branch: &str) -> Result<WorktreeInfo, WorktreeError> {
     if branch.is_empty()
@@ -81,13 +89,10 @@ pub fn provision_worktree(repo_root: &Path, branch: &str) -> Result<WorktreeInfo
         );
         return Err(error);
     }
-    let hash = branch.bytes().fold(2166136261u32, |h, b| {
-        (h ^ u32::from(b)).wrapping_mul(16777619)
-    });
     Ok(WorktreeInfo {
         path,
         branch: branch.into(),
-        port: 8000 + (hash % 1000) as u16,
+        port: port_for_branch(branch),
     })
 }
 

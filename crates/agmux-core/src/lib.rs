@@ -68,4 +68,18 @@ pub enum AgmuxError {
 
 pub mod fts_indexer;
 
+pub mod builtin_plugins;
+pub mod child_process_monitor;
+pub mod cli_detector;
 pub mod comment_tracker;
+pub mod debounce_timer;
+pub mod declarative_plugin;
+pub mod plugin_api;
+pub mod pty_resizer;
+pub mod session_tracker;
+pub mod shell_classifier;
+pub mod stuck_detector;
+pub mod subtab_spawner;
+pub mod tail_matcher;
+pub mod vt_parser;
+pub mod wsl_bridge;

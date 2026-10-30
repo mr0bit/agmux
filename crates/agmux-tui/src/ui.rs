@@ -89,22 +89,65 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             split_panes[1],
         );
     } else {
-        let title = app
+        let base_title = app
             .sessions
             .get(app.selected_index)
             .map_or("Viewport", |s| s.session_id.as_str());
+        let subtab_suffix = if app.subtabs.is_empty() {
+            String::new()
+        } else {
+            let active_sub = app
+                .subtabs
+                .get(app.active_subtab_idx)
+                .map_or("", String::as_str);
+            format!(" [❯ {active_sub}]")
+        };
+        let title = if app.input_mode {
+            format!("{base_title}{subtab_suffix} [INTERACTIVE - Esc to exit]")
+        } else if subtab_suffix.is_empty() {
+            base_title.to_string()
+        } else {
+            format!("{base_title}{subtab_suffix}")
+        };
+
+        let body_text = if app.sessions.is_empty()
+            && app.active_viewport_lines.is_empty()
+            && matches!(app.modal, ModalState::None)
+        {
+            vec![
+                "Welcome to Agmux — Agentic Terminal Multiplexer & Orchestrator".to_string(),
+                String::new(),
+                "Quick-Start Hotkeys:".to_string(),
+                "  [n]         Spawn native shell session immediately".to_string(),
+                "  [i / Enter] Enter Interactive Terminal Mode (Esc to return to Normal Mode)"
+                    .to_string(),
+                "  [t]         Open interactive shell sub-tab (❯) in session worktree".to_string(),
+                "  [Space]     Quick Prompt composer".to_string(),
+                "  [v / m]     Split Compare & Pin viewport".to_string(),
+                "  [K]         Shared Multi-Agent Kanban Board".to_string(),
+                "  [Ctrl+R]    5-Scope Git Code Review Diff Engine".to_string(),
+                "  [F1 / :]    Command Palette".to_string(),
+                String::new(),
+                "14 Supported Agent Profiles:".to_string(),
+                "  claude, agy, gemini, codex, opencode, aider, cursor-agent,".to_string(),
+                "  grok, q, pi, omp, cmd (command-code), hermes, muse".to_string(),
+            ]
+            .join("\n")
+        } else {
+            app.active_viewport_lines.join("\n")
+        };
+
         frame.render_widget(
-            Paragraph::new(app.active_viewport_lines.join("\n"))
-                .block(Block::default().borders(Borders::ALL).title(title)),
+            Paragraph::new(body_text).block(Block::default().borders(Borders::ALL).title(title)),
             columns[1],
         );
     }
-    frame.render_widget(
-        Paragraph::new(
-            "q: quit | j/k: nav | Space: prompt | w: filter | .: ack | v: split | m: pin | F1: palette",
-        ),
-        rows[1],
-    );
+    let status_bar = if app.input_mode {
+        "[INTERACTIVE] Esc: normal mode | All keys forwarded to active session PTY"
+    } else {
+        "[NORMAL] q: quit | n: new | i/Enter: interact | t: subtab | K: kanban | Space: prompt | w: filter | .: ack | v: split | m: pin | F1: palette"
+    };
+    frame.render_widget(Paragraph::new(status_bar), rows[1]);
     match &app.modal {
         ModalState::None => {}
         ModalState::CommandPalette { query, selected } => {
@@ -305,6 +348,40 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 "[Tab/1-5] Scope | [c] Draft Comment | [C] Dispatch Round | [↑/↓] Hunk | [Esc] Close",
             )]);
             frame.render_widget(Paragraph::new(footer), rows[2]);
+        }
+        ModalState::KanbanBoard { selected } => {
+            let area = centered(frame.area(), 76, 16);
+            frame.render_widget(Clear, area);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title("Kanban Task Board (K)");
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+
+            let mut lines = Vec::new();
+            if app.kanban_tasks.is_empty() {
+                lines.push(Line::from(
+                    "No Kanban tasks found. Create tasks with `agmux task create <ID> <TITLE>`.",
+                ));
+            } else {
+                for (idx, task) in app.kanban_tasks.iter().enumerate() {
+                    let marker = if idx == *selected { "▶" } else { " " };
+                    let holder = task.claimed_by.as_deref().unwrap_or("-");
+                    lines.push(Line::styled(
+                        format!(
+                            "{marker} [{}] {} ({}) — {}",
+                            task.status, task.id, holder, task.title
+                        ),
+                        if idx == *selected {
+                            Style::default().add_modifier(Modifier::REVERSED)
+                        } else {
+                            Style::default()
+                        },
+                    ));
+                }
+            }
+            lines.push(Line::from("[↑/↓] Navigate | [Esc / K] Close"));
+            frame.render_widget(Paragraph::new(lines), inner);
         }
     }
 }

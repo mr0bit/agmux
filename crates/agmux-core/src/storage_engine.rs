@@ -1,5 +1,7 @@
 //! SQLite session metadata repository.
-use agmux_proto::{JournalEvent, ReviewComment, SearchMatch, SessionInfo};
+use agmux_proto::{
+    JournalEvent, KanbanTask, ReviewComment, SearchMatch, SessionInfo, WorkerReport,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 
@@ -43,6 +45,7 @@ impl StorageEngine {
                 "ALTER TABLE sessions ADD COLUMN start_git_sha TEXT; PRAGMA user_version=2;",
             )?;
         }
+        let _ = tx.execute("ALTER TABLE sessions ADD COLUMN cli_session_uuid TEXT", []);
         tx.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS terminal_logs_fts USING fts5(session_id UNINDEXED, line_no UNINDEXED, timestamp UNINDEXED, content, tokenize='trigram');")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS session_snapshots (session_id TEXT PRIMARY KEY, snapshot BLOB, compressed_size INTEGER, uncompressed_size INTEGER, timestamp INTEGER);")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS review_comments (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, file_path TEXT NOT NULL, line_number INTEGER NOT NULL, line_hash TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_review_session_status ON review_comments(session_id, status); CREATE TABLE IF NOT EXISTS review_rounds (session_id TEXT NOT NULL, round_number INTEGER NOT NULL, PRIMARY KEY(session_id, round_number));")?;
@@ -50,6 +53,7 @@ impl StorageEngine {
         tx.execute_batch("CREATE TABLE IF NOT EXISTS named_locks (name TEXT PRIMARY KEY, holder_session_id TEXT NOT NULL, acquired_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_named_locks_holder ON named_locks(holder_session_id);")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS file_reservations (path TEXT PRIMARY KEY, holder_session_id TEXT NOT NULL, acquired_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_file_reservations_holder ON file_reservations(holder_session_id);")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS event_journal (seq INTEGER PRIMARY KEY AUTOINCREMENT, event_type TEXT NOT NULL, session_id TEXT, payload TEXT NOT NULL, timestamp INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_event_journal_seq ON event_journal(seq); CREATE TABLE IF NOT EXISTS event_cursors (cursor_id TEXT PRIMARY KEY, last_seq INTEGER NOT NULL, updated_at INTEGER NOT NULL);")?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS kanban_tasks (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL, claimed_by TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_kanban_tasks_status ON kanban_tasks(status); CREATE TABLE IF NOT EXISTS worker_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, session_id TEXT NOT NULL, summary TEXT NOT NULL, pr_url TEXT, commit_sha TEXT, created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_worker_reports_task ON worker_reports(task_id);")?;
         tx.commit()?;
         Ok(Self { connection })
     }
@@ -469,6 +473,26 @@ impl StorageEngine {
             .optional()?
             .flatten())
     }
+    /// Record the native CLI conversation UUID captured for a session (`REQ-PLUGIN-UUID-CAPTURE-005`).
+    pub fn set_cli_session_uuid(&self, id: &str, uuid: Option<&str>) -> Result<(), StorageError> {
+        self.connection.execute(
+            "UPDATE sessions SET cli_session_uuid=?1 WHERE id=?2",
+            params![uuid, id],
+        )?;
+        Ok(())
+    }
+    /// Read the native CLI conversation UUID captured for a session (`REQ-PLUGIN-UUID-CAPTURE-005`).
+    pub fn get_cli_session_uuid(&self, id: &str) -> Result<Option<String>, StorageError> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT cli_session_uuid FROM sessions WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten())
+    }
     pub fn update_session_state(&self, id: &str, state: &str) -> Result<(), StorageError> {
         self.connection.execute(
             "UPDATE sessions SET state=?1 WHERE id=?2",
@@ -545,6 +569,229 @@ impl StorageEngine {
             Ok(None)
         }
     }
+    /// Create a new Kanban task in `"todo"` status.
+    pub fn create_kanban_task(
+        &self,
+        id: &str,
+        title: &str,
+        description: &str,
+    ) -> Result<KanbanTask, StorageError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.connection.execute(
+            "INSERT INTO kanban_tasks (id, title, description, status, claimed_by, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'todo', NULL, ?4, ?4)
+             ON CONFLICT(id) DO UPDATE SET title = excluded.title, description = excluded.description, updated_at = excluded.updated_at",
+            params![id, title, description, now],
+        )?;
+        self.get_kanban_task(id)?
+            .ok_or_else(|| StorageError::TaskError(format!("Task '{id}' not found after insert")))
+    }
+    /// Retrieve a single Kanban task by ID.
+    pub fn get_kanban_task(&self, id: &str) -> Result<Option<KanbanTask>, StorageError> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT id, title, description, status, claimed_by, created_at, updated_at FROM kanban_tasks WHERE id = ?1",
+                [id],
+                |r| {
+                    Ok(KanbanTask {
+                        id: r.get(0)?,
+                        title: r.get(1)?,
+                        description: r.get(2)?,
+                        status: r.get(3)?,
+                        claimed_by: r.get(4)?,
+                        created_at: r.get(5)?,
+                        updated_at: r.get(6)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+    /// List Kanban tasks, optionally filtered by status.
+    pub fn list_kanban_tasks(&self, status: Option<&str>) -> Result<Vec<KanbanTask>, StorageError> {
+        let mut stmt = self.connection.prepare(
+            "SELECT id, title, description, status, claimed_by, created_at, updated_at
+             FROM kanban_tasks
+             WHERE (?1 IS NULL OR status = ?1)
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([status], |r| {
+            Ok(KanbanTask {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                description: r.get(2)?,
+                status: r.get(3)?,
+                claimed_by: r.get(4)?,
+                created_at: r.get(5)?,
+                updated_at: r.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+    /// Claim a Kanban task for a session. If the task does not yet exist, auto-creates it in `"in_progress"`.
+    pub fn claim_kanban_task(
+        &self,
+        id: &str,
+        session_id: &str,
+    ) -> Result<KanbanTask, StorageError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if let Some(existing) = self.get_kanban_task(id)? {
+            if existing.status == "in_progress"
+                && existing.claimed_by.as_deref() != Some(session_id)
+            {
+                return Err(StorageError::TaskError(format!(
+                    "Task '{id}' is already claimed by '{}'",
+                    existing.claimed_by.unwrap_or_default()
+                )));
+            }
+            if existing.status == "done" {
+                return Err(StorageError::TaskError(format!(
+                    "Task '{id}' is already finished"
+                )));
+            }
+            self.connection.execute(
+                "UPDATE kanban_tasks SET status = 'in_progress', claimed_by = ?1, updated_at = ?2 WHERE id = ?3",
+                params![session_id, now, id],
+            )?;
+        } else {
+            self.connection.execute(
+                "INSERT INTO kanban_tasks (id, title, description, status, claimed_by, created_at, updated_at)
+                 VALUES (?1, ?1, '', 'in_progress', ?2, ?3, ?3)",
+                params![id, session_id, now],
+            )?;
+        }
+        self.get_kanban_task(id)?
+            .ok_or_else(|| StorageError::TaskError(format!("Task '{id}' not found")))
+    }
+    /// Mark a Kanban task as `"done"`.
+    pub fn finish_kanban_task(
+        &self,
+        id: &str,
+        session_id: &str,
+    ) -> Result<KanbanTask, StorageError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let existing = self
+            .get_kanban_task(id)?
+            .ok_or_else(|| StorageError::TaskError(format!("Task '{id}' not found")))?;
+        if let Some(ref holder) = existing.claimed_by
+            && holder != session_id
+        {
+            return Err(StorageError::TaskError(format!(
+                "Task '{id}' is claimed by '{holder}', cannot finish from '{session_id}'"
+            )));
+        }
+        self.connection.execute(
+            "UPDATE kanban_tasks SET status = 'done', claimed_by = COALESCE(claimed_by, ?1), updated_at = ?2 WHERE id = ?3",
+            params![session_id, now, id],
+        )?;
+        self.get_kanban_task(id)?
+            .ok_or_else(|| StorageError::TaskError(format!("Task '{id}' not found")))
+    }
+    /// Release a claimed Kanban task back to `"todo"`.
+    pub fn release_kanban_task(
+        &self,
+        id: &str,
+        session_id: &str,
+    ) -> Result<KanbanTask, StorageError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let existing = self
+            .get_kanban_task(id)?
+            .ok_or_else(|| StorageError::TaskError(format!("Task '{id}' not found")))?;
+        if let Some(ref holder) = existing.claimed_by
+            && holder != session_id
+        {
+            return Err(StorageError::TaskError(format!(
+                "Task '{id}' is claimed by '{holder}', cannot release from '{session_id}'"
+            )));
+        }
+        self.connection.execute(
+            "UPDATE kanban_tasks SET status = 'todo', claimed_by = NULL, updated_at = ?1 WHERE id = ?2",
+            params![now, id],
+        )?;
+        self.get_kanban_task(id)?
+            .ok_or_else(|| StorageError::TaskError(format!("Task '{id}' not found")))
+    }
+    /// Release all `in_progress` Kanban tasks claimed by `session_id` back to `todo` and return their IDs.
+    pub fn release_session_kanban_tasks(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<String>, StorageError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut stmt = self.connection.prepare(
+            "SELECT id FROM kanban_tasks WHERE status = 'in_progress' AND claimed_by = ?1",
+        )?;
+        let rows = stmt.query_map([session_id], |r| r.get(0))?;
+        let ids = rows.collect::<Result<Vec<String>, _>>()?;
+        if !ids.is_empty() {
+            self.connection.execute(
+                "UPDATE kanban_tasks SET status = 'todo', claimed_by = NULL, updated_at = ?1 WHERE status = 'in_progress' AND claimed_by = ?2",
+                params![now, session_id],
+            )?;
+        }
+        Ok(ids)
+    }
+    /// Record a structured worker completion report.
+    pub fn post_worker_report(
+        &self,
+        task_id: &str,
+        session_id: &str,
+        summary: &str,
+        pr_url: Option<&str>,
+        commit_sha: Option<&str>,
+    ) -> Result<WorkerReport, StorageError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.connection.execute(
+            "INSERT INTO worker_reports (task_id, session_id, summary, pr_url, commit_sha, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![task_id, session_id, summary, pr_url, commit_sha, now],
+        )?;
+        Ok(WorkerReport {
+            task_id: task_id.to_string(),
+            session_id: session_id.to_string(),
+            summary: summary.to_string(),
+            pr_url: pr_url.map(|s| s.to_string()),
+            commit_sha: commit_sha.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+    /// Retrieve all structured worker reports for a task in chronological order.
+    pub fn get_worker_reports(&self, task_id: &str) -> Result<Vec<WorkerReport>, StorageError> {
+        let mut stmt = self.connection.prepare(
+            "SELECT task_id, session_id, summary, pr_url, commit_sha, created_at
+             FROM worker_reports
+             WHERE task_id = ?1
+             ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([task_id], |r| {
+            Ok(WorkerReport {
+                task_id: r.get(0)?,
+                session_id: r.get(1)?,
+                summary: r.get(2)?,
+                pr_url: r.get(3)?,
+                commit_sha: r.get(4)?,
+                created_at: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
 }
 /// Storage failures.
 #[derive(Debug, thiserror::Error)]
@@ -555,6 +802,8 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
     #[error("Unsupported database version {0}")]
     UnsupportedVersion(u32),
+    #[error("{0}")]
+    TaskError(String),
 }
 /// Platform data directory for the daemon database.
 pub fn default_database_path() -> PathBuf {

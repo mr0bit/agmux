@@ -46,6 +46,12 @@ pub struct ActivePtySession {
     pub session_id: String,
     /// Child process identifier.
     pub pid: u32,
+    /// Optional working directory for this session.
+    pub cwd: Option<PathBuf>,
+    /// Optional deterministic `PORT` allocated for this session.
+    pub port: Option<u16>,
+    /// Thread-safe handle to the PTY master for terminal resize operations.
+    master: Arc<std::sync::Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
     /// Thread-safe writer connected to PTY master input.
     writer: Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
     /// Broadcast channel for child stdout/stderr output frames.
@@ -58,6 +64,28 @@ pub struct ActivePtySession {
 }
 
 impl ActivePtySession {
+    /// Resize the underlying PTY master (`TIOCSWINSZ`) and in-memory screen buffer.
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), PtyError> {
+        let master = self
+            .master
+            .lock()
+            .map_err(|e| PtyError::PtyAllocation(e.to_string()))?;
+        master
+            .resize(PtySize {
+                rows: rows.max(1),
+                cols: cols.max(1),
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| PtyError::PtyAllocation(e.to_string()))?;
+        drop(master);
+
+        if let Ok(mut sb) = self.screen_buffer.lock() {
+            sb.resize(rows.max(1), cols.max(1));
+        }
+        Ok(())
+    }
+
     /// Send raw keyboard or byte input to the child process stdin.
     pub fn send_input(&self, data: &[u8]) -> Result<(), PtyError> {
         let mut writer = self
@@ -84,6 +112,15 @@ impl ActivePtySession {
         let screen = self.screen_buffer.lock().expect("screen buffer lock");
         let receiver = self.output_tx.subscribe();
         (screen.capture_formatted(), receiver)
+    }
+
+    /// Subscribe to output and capture an atomic `ScreenSyncFrame` at the same output boundary.
+    pub fn subscribe_viewport_sync(
+        &self,
+    ) -> (agmux_proto::ScreenSyncFrame, broadcast::Receiver<Vec<u8>>) {
+        let screen = self.screen_buffer.lock().expect("screen buffer lock");
+        let receiver = self.output_tx.subscribe();
+        (screen.capture_sync_frame(&self.session_id), receiver)
     }
 
     /// Subscribe to delivered input.
@@ -136,6 +173,20 @@ impl PtyManager {
         cwd: Option<PathBuf>,
         port: Option<u16>,
     ) -> Result<Arc<ActivePtySession>, PtyError> {
+        self.spawn_with_env(session_id, command, args, cwd, port, Vec::new())
+            .await
+    }
+
+    /// Spawn a child command inside a newly allocated pseudo-terminal with custom environment variables.
+    pub async fn spawn_with_env(
+        &self,
+        session_id: String,
+        command: String,
+        args: Vec<String>,
+        cwd: Option<PathBuf>,
+        port: Option<u16>,
+        extra_env: Vec<(String, String)>,
+    ) -> Result<Arc<ActivePtySession>, PtyError> {
         let mut sessions_lock = self.sessions.lock().await;
         if sessions_lock.contains_key(&session_id) {
             return Err(PtyError::SessionAlreadyExists(session_id));
@@ -161,6 +212,9 @@ impl PtyManager {
             cmd.env("PORT", port.to_string());
         }
         cmd.env("AGMUX_SESSION_ID", &session_id);
+        for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
 
         let mut child = pair
             .slave
@@ -184,6 +238,8 @@ impl PtyManager {
             .take_writer()
             .map_err(|e| PtyError::PtyAllocation(e.to_string()))?;
 
+        let master = Arc::new(std::sync::Mutex::new(pair.master));
+
         let (output_tx, output_rx) = broadcast::channel(OUTPUT_BROADCAST_CAPACITY);
         let (input_tx, _) = broadcast::channel(64);
         let (exit_tx, exit_rx) = watch::channel(None);
@@ -199,7 +255,7 @@ impl PtyManager {
         // Background reader thread: captures raw output from PTY master
         let reader_task = tokio::task::spawn_blocking(move || {
             use std::io::Read;
-            let mut buf = [0u8; 4096];
+            let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break, // EOF reached when slave closes
@@ -246,6 +302,9 @@ impl PtyManager {
         let session = Arc::new(ActivePtySession {
             session_id: session_id.clone(),
             pid,
+            cwd,
+            port,
+            master,
             writer: Arc::new(std::sync::Mutex::new(writer)),
             output_tx,
             input_tx,
@@ -270,6 +329,15 @@ impl PtyManager {
     pub async fn remove_session(&self, session_id: &str) -> Option<Arc<ActivePtySession>> {
         let mut lock = self.sessions.lock().await;
         lock.remove(session_id)
+    }
+
+    /// Snapshot all currently active `(session_id, pid)` pairs.
+    pub async fn active_pids(&self) -> Vec<(String, u32)> {
+        let lock = self.sessions.lock().await;
+        lock.values()
+            .filter(|s| s.subscribe_exit().borrow().is_none())
+            .map(|s| (s.session_id.clone(), s.pid))
+            .collect()
     }
 }
 

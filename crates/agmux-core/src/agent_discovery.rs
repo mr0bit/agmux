@@ -35,6 +35,32 @@ pub fn discover_installed_agents() -> Vec<DiscoveredAgent> {
     .collect()
 }
 
+/// Discover all 14 built-in first-class CLI tools across custom search directories,
+/// applying OS-aware binary name resolution (`cmd` -> `command-code` on Windows)
+/// and rejecting Windows `System32\cmd.exe` collisions.
+pub fn discover_all_builtin_agents_in_paths(
+    search_dirs: &[PathBuf],
+    is_windows: bool,
+) -> Vec<DiscoveredAgent> {
+    crate::builtin_plugins::all_builtin_plugins()
+        .into_iter()
+        .map(|plugin| {
+            let binary = plugin.binary_name_for_os(is_windows);
+            let found = search_dirs.iter().find_map(|dir| {
+                find_executable(dir, binary).filter(|p| {
+                    !crate::builtin_plugins::is_windows_system_cmd_collision(plugin.id(), p)
+                })
+            });
+            DiscoveredAgent {
+                name: plugin.display_name().to_string(),
+                binary_name: binary.to_string(),
+                available: found.is_some(),
+                path: found,
+            }
+        })
+        .collect()
+}
+
 fn find_executable(dir: &Path, binary: &str) -> Option<PathBuf> {
     #[cfg(windows)]
     let candidates: Vec<PathBuf> = std::env::var_os("PATHEXT")

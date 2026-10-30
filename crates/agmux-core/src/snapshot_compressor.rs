@@ -33,6 +33,15 @@ impl ScreenBuffer {
         self.parser.process(bytes);
     }
 
+    /// Resize the virtual terminal grid and reflow existing contents.
+    pub fn resize(&mut self, rows: u16, cols: u16) {
+        let r = NonZeroU16::new(rows.max(1)).expect("non-zero rows");
+        let c = NonZeroU16::new(cols.max(1)).expect("non-zero cols");
+        let formatted = self.parser.screen().contents_formatted();
+        self.parser = vt100::Parser::new(r, c, 10_000);
+        self.parser.process(formatted.as_bytes());
+    }
+
     /// Capture full formatted ANSI contents.
     pub fn capture_formatted(&self) -> Vec<u8> {
         self.parser.screen().contents_formatted().into_bytes()
@@ -41,6 +50,26 @@ impl ScreenBuffer {
     /// Capture plain text contents.
     pub fn capture_plain(&self) -> String {
         self.parser.screen().contents()
+    }
+
+    /// Capture an atomic `ScreenSyncFrame` with grid dimensions, cursor coordinates, and lines.
+    pub fn capture_sync_frame(&self, session_id: &str) -> agmux_proto::ScreenSyncFrame {
+        let screen = self.parser.screen();
+        let (rows, cols) = screen.size();
+        let (cursor_row, cursor_col) = screen.cursor_position();
+        let scrollback_offset = screen.scrollback();
+        let formatted_screen = screen.contents_formatted().into_bytes();
+        let lines = screen.contents().lines().map(str::to_owned).collect();
+        agmux_proto::ScreenSyncFrame {
+            session_id: session_id.to_string(),
+            rows: rows.get(),
+            cols: cols.get(),
+            cursor_row,
+            cursor_col,
+            scrollback_offset,
+            formatted_screen,
+            lines,
+        }
     }
 }
 
