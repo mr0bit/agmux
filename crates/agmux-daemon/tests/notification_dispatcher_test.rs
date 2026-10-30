@@ -55,7 +55,14 @@ async fn hook_times_out_after_fifteen_seconds() {
         .trim()
         .parse()
         .unwrap();
-    let status = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+    let mut status = String::new();
+    for _ in 0..50 {
+        status = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        if status.is_empty() || status.split_whitespace().nth(2) == Some("Z") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
     assert!(
         status.is_empty() || status.split_whitespace().nth(2) == Some("Z"),
         "descendant still running: {status}"
