@@ -1,6 +1,8 @@
 //! Interactive terminal viewport for daemon sessions.
 
+pub mod search_modal;
 pub mod ui;
+pub mod workspace_hierarchy;
 
 use std::{io, path::Path, time::Duration};
 
@@ -87,6 +89,10 @@ pub enum ModalState {
     QuickPrompt {
         input: String,
     },
+    GroupEditor {
+        input: String,
+    },
+    ForkMenu,
     ReviewDiff {
         session_id: String,
         scope: agmux_proto::DiffScope,
@@ -96,12 +102,33 @@ pub enum ModalState {
     KanbanBoard {
         selected: usize,
     },
+    GlobalSearch {
+        query: String,
+        selected: usize,
+        hits: Vec<agmux_proto::GlobalSearchHit>,
+        error: Option<String>,
+    },
+    Filter,
+    Notes {
+        session_id: String,
+        page: u32,
+        content: String,
+        loaded: bool,
+    },
 }
 
 /// State displayed by the interactive viewport.
 #[derive(Default)]
 pub struct App {
     pub sessions: Vec<SessionInfo>,
+    pub workspace: std::collections::HashMap<String, agmux_proto::WorkspaceMetadata>,
+    pub show_archived: bool,
+    pub pending_selection: Option<String>,
+    pub prompt_tool: usize,
+    pub prompt_model: usize,
+    pub prompt_effort: usize,
+    pub prompt_worktree: bool,
+    pub teardowns: std::collections::HashMap<String, String>,
     pub selected_index: usize,
     pub active_viewport_lines: Vec<String>,
     pub should_quit: bool,
@@ -109,6 +136,8 @@ pub struct App {
     /// When `true`, keystrokes are forwarded directly to the active session's PTY (`Esc` returns to Normal Mode).
     pub input_mode: bool,
     pub attention_filter: bool,
+    /// Display session rows with additional command and directory details.
+    pub comfortable_rows: bool,
     pub split_view: bool,
     pub pinned_session_index: Option<usize>,
     pub pinned_viewport_lines: Vec<String>,
@@ -121,6 +150,9 @@ pub struct App {
     pub repository_root: Option<std::path::PathBuf>,
     /// Pending daemon request produced by an input action.
     pub pending_message: Option<IpcMessage>,
+    pub filter_query: String,
+    pub filter_ids: Option<Vec<String>>,
+    pub feature_error: Option<String>,
 }
 
 impl App {
@@ -183,6 +215,41 @@ impl App {
         let modal = std::mem::take(&mut self.modal);
         self.modal = match modal {
             ModalState::None => {
+                if key == KeyCode::Char('f') && modifiers.contains(KeyModifiers::CONTROL) {
+                    self.input_mode = false;
+                    return self.modal = ModalState::GlobalSearch {
+                        query: String::new(),
+                        selected: 0,
+                        hits: Vec::new(),
+                        error: None,
+                    };
+                }
+                if (matches!(key, KeyCode::PageUp | KeyCode::PageDown)
+                    && modifiers.contains(KeyModifiers::CONTROL))
+                    || (!self.input_mode && key == KeyCode::Char('N'))
+                {
+                    if let Some(session) = self
+                        .sessions
+                        .get(self.selected_index)
+                        .filter(|_| self.session_visible(self.selected_index))
+                    {
+                        let session_id = session.session_id.clone();
+                        let page = 1;
+                        self.pending_message = Some(IpcMessage::SearchNotesRequest(
+                            agmux_proto::SearchNotesRequest::Get {
+                                session_id: session_id.clone(),
+                                page,
+                            },
+                        ));
+                        self.input_mode = false;
+                        return self.modal = ModalState::Notes {
+                            session_id,
+                            page,
+                            content: String::new(),
+                            loaded: false,
+                        };
+                    }
+                }
                 if self.input_mode {
                     if key == KeyCode::Esc {
                         self.input_mode = false;
@@ -201,6 +268,7 @@ impl App {
                 }
 
                 match key {
+                    KeyCode::Char('/') => return self.modal = ModalState::Filter,
                     KeyCode::F(1) | KeyCode::Char(':') => return self.open_palette(),
                     KeyCode::Char('p') if modifiers.contains(KeyModifiers::CONTROL) => {
                         return self.open_palette();
@@ -213,7 +281,7 @@ impl App {
                         self.execute_action("New Session");
                         return;
                     }
-                    KeyCode::Char('t') => {
+                    KeyCode::Char('T') => {
                         if let Some(parent) = self.sessions.get(self.selected_index) {
                             let subtab_id =
                                 format!("{}:shell-{}", parent.session_id, self.subtabs.len() + 1);
@@ -227,11 +295,38 @@ impl App {
                                 },
                             ));
                         }
-                        return;
                     }
+                    KeyCode::Char('t') => {
+                        self.show_archived = !self.show_archived;
+                        self.align_selection();
+                    }
+                    KeyCode::Char('*') => {
+                        let mut meta = self.metadata_for(self.selected_index);
+                        meta.favorite = !meta.favorite;
+                        self.update_workspace(meta);
+                    }
+                    KeyCode::Char('a') | KeyCode::Char('u') => {
+                        let mut meta = self.metadata_for(self.selected_index);
+                        meta.archived = key == KeyCode::Char('a');
+                        self.update_workspace(meta);
+                    }
+                    KeyCode::Char('g') => {
+                        let meta = self.metadata_for(self.selected_index);
+                        return self.modal = ModalState::GroupEditor {
+                            input: format!("{}/{}", meta.project.trim_end_matches('/'), meta.group),
+                        };
+                    }
+                    KeyCode::Char('f') => return self.modal = ModalState::ForkMenu,
                     KeyCode::Char('[') => {
                         if !self.subtabs.is_empty() {
                             self.active_subtab_idx = self.active_subtab_idx.saturating_sub(1);
+                            if let Some(i) = self
+                                .sessions
+                                .iter()
+                                .position(|s| s.session_id == self.subtabs[self.active_subtab_idx])
+                            {
+                                self.selected_index = i;
+                            }
                         }
                         return;
                     }
@@ -239,6 +334,13 @@ impl App {
                         if !self.subtabs.is_empty() {
                             self.active_subtab_idx =
                                 (self.active_subtab_idx + 1).min(self.subtabs.len() - 1);
+                            if let Some(i) = self
+                                .sessions
+                                .iter()
+                                .position(|s| s.session_id == self.subtabs[self.active_subtab_idx])
+                            {
+                                self.selected_index = i;
+                            }
                         }
                         return;
                     }
@@ -286,7 +388,9 @@ impl App {
                                 self.selected_index = index;
                             }
                         }
+                        self.align_selection();
                     }
+                    KeyCode::Char('D') => self.comfortable_rows = !self.comfortable_rows,
                     KeyCode::Char('.') => {
                         if let Some(session) = self.sessions.get_mut(self.selected_index) {
                             if session.state == "FINISHED" {
@@ -297,6 +401,15 @@ impl App {
                                     },
                                 ));
                             }
+                        }
+                    }
+                    KeyCode::Char('c') => {
+                        if let Some(session) = self.sessions.get(self.selected_index) {
+                            self.pending_message =
+                                Some(IpcMessage::TeardownRequest(agmux_proto::TeardownRequest {
+                                    session_id: session.session_id.clone(),
+                                    action: "cancel".into(),
+                                }));
                         }
                     }
                     KeyCode::Char('v') => {
@@ -316,6 +429,144 @@ impl App {
                     _ => {}
                 }
                 ModalState::None
+            }
+            ModalState::GlobalSearch {
+                mut query,
+                mut selected,
+                mut hits,
+                mut error,
+            } => {
+                let mut changed = false;
+                match key {
+                    KeyCode::Esc => return,
+                    KeyCode::Up => selected = selected.saturating_sub(1),
+                    KeyCode::Down => selected = (selected + 1).min(hits.len().saturating_sub(1)),
+                    KeyCode::Backspace => {
+                        query.pop();
+                        changed = true;
+                    }
+                    KeyCode::Char(c)
+                        if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        query.push(c);
+                        changed = true;
+                    }
+                    _ => {}
+                }
+                if changed {
+                    selected = 0;
+                    hits.clear();
+                    error = None;
+                    if !query.is_empty() {
+                        self.pending_message = Some(IpcMessage::SearchNotesRequest(
+                            agmux_proto::SearchNotesRequest::Search {
+                                query: query.clone(),
+                            },
+                        ));
+                    }
+                }
+                ModalState::GlobalSearch {
+                    query,
+                    selected,
+                    hits,
+                    error,
+                }
+            }
+            ModalState::Filter => {
+                match key {
+                    KeyCode::Esc => {
+                        self.filter_query.clear();
+                        self.refresh_filter();
+                        return;
+                    }
+                    KeyCode::Enter => return,
+                    KeyCode::Backspace => {
+                        self.filter_query.pop();
+                        self.refresh_filter();
+                    }
+                    KeyCode::Char(c)
+                        if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        self.filter_query.push(c);
+                        self.refresh_filter();
+                    }
+                    _ => {}
+                }
+                ModalState::Filter
+            }
+            ModalState::Notes {
+                session_id,
+                mut page,
+                mut content,
+                mut loaded,
+            } => {
+                let mut changed = false;
+                match key {
+                    KeyCode::Esc => return,
+                    KeyCode::PageUp if modifiers.contains(KeyModifiers::CONTROL) => {
+                        page = page.saturating_sub(1).max(1);
+                        loaded = false;
+                    }
+                    KeyCode::PageDown if modifiers.contains(KeyModifiers::CONTROL) => {
+                        page = page.saturating_add(1);
+                        loaded = false;
+                    }
+                    KeyCode::F(7) => {
+                        page = page.saturating_sub(1).max(1);
+                        loaded = false;
+                    }
+                    KeyCode::F(8) => {
+                        page = page.saturating_add(1);
+                        loaded = false;
+                    }
+                    KeyCode::BackTab => {
+                        page = page.saturating_sub(1).max(1);
+                        loaded = false;
+                    }
+                    KeyCode::Tab => {
+                        page = page.saturating_add(1);
+                        loaded = false;
+                    }
+                    KeyCode::Backspace if loaded => {
+                        content.pop();
+                        changed = true;
+                    }
+                    KeyCode::Enter if loaded => {
+                        content.push('\n');
+                        changed = true;
+                    }
+                    KeyCode::Char(c)
+                        if loaded
+                            && !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        content.push(c);
+                        changed = true;
+                    }
+                    _ => {}
+                }
+                if !loaded {
+                    content.clear();
+                    self.pending_message = Some(IpcMessage::SearchNotesRequest(
+                        agmux_proto::SearchNotesRequest::Get {
+                            session_id: session_id.clone(),
+                            page,
+                        },
+                    ));
+                } else if changed {
+                    self.pending_message = Some(IpcMessage::SearchNotesRequest(
+                        agmux_proto::SearchNotesRequest::Set {
+                            session_id: session_id.clone(),
+                            page,
+                            content: content.clone(),
+                        },
+                    ));
+                }
+                ModalState::Notes {
+                    session_id,
+                    page,
+                    content,
+                    loaded,
+                }
             }
             ModalState::CommandPalette {
                 mut query,
@@ -390,17 +641,151 @@ impl App {
                 }
                 ModalState::OnboardingWizard { selected }
             }
-            ModalState::QuickPrompt { mut input } => {
+            ModalState::GroupEditor { mut input } => {
                 match key {
                     KeyCode::Esc => return,
                     KeyCode::Enter => {
+                        // The project is the current project root; the entered path names nested groups.
+                        let mut meta = self.metadata_for(self.selected_index);
+                        let prefix = format!("{}/", meta.project.trim_end_matches('/'));
+                        meta.group = input
+                            .strip_prefix(&prefix)
+                            .unwrap_or(&input)
+                            .trim_matches('/')
+                            .to_owned();
+                        self.update_workspace(meta);
+                        return;
+                    }
+                    KeyCode::Backspace => {
+                        input.pop();
+                    }
+                    KeyCode::Char(c)
+                        if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        input.push(c)
+                    }
+                    _ => {}
+                }
+                ModalState::GroupEditor { input }
+            }
+            ModalState::ForkMenu => {
+                if matches!(key, KeyCode::Char('s') | KeyCode::Char('t')) {
+                    if let Some(session) = self.sessions.get(self.selected_index) {
+                        let subtab = key == KeyCode::Char('t');
+                        let suffix = agmux_core::session_tracker::SessionTracker::mint_uuid_v4();
+                        let new_session_id = if subtab {
+                            format!("{}:fork-{suffix}", session.session_id)
+                        } else {
+                            format!("fork-{suffix}")
+                        };
+                        self.pending_selection = Some(new_session_id.clone());
+                        self.pending_message = Some(IpcMessage::WorkspaceRequest(
+                            agmux_proto::WorkspaceRequest::Fork {
+                                session_id: session.session_id.clone(),
+                                new_session_id,
+                                subtab,
+                            },
+                        ));
+                    }
+                    return;
+                }
+                if key == KeyCode::Esc {
+                    return;
+                }
+                ModalState::ForkMenu
+            }
+            ModalState::QuickPrompt { mut input } => {
+                match key {
+                    KeyCode::Esc => return,
+                    KeyCode::Tab => {
+                        self.prompt_tool = (self.prompt_tool + 1) % 3;
+                        if self.prompt_tool == 0 {
+                            self.prompt_model = 0;
+                            self.prompt_effort = 0;
+                            self.prompt_worktree = false;
+                        }
+                    }
+                    KeyCode::Char('l') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.prompt_model = (self.prompt_model + 1) % 3;
+                        if self.prompt_tool == 0 {
+                            self.prompt_tool = 1;
+                        }
+                    }
+                    KeyCode::Char('x') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.prompt_effort = (self.prompt_effort + 1) % 4;
+                        if self.prompt_tool == 0 {
+                            self.prompt_tool = 1;
+                        }
+                    }
+                    KeyCode::Char('t') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.prompt_worktree = !self.prompt_worktree;
+                        if self.prompt_tool == 0 {
+                            self.prompt_tool = 1;
+                        }
+                    }
+                    KeyCode::Enter => {
                         if let Some(session) = self.sessions.get(self.selected_index) {
-                            input.push('\n');
-                            self.pending_message =
-                                Some(IpcMessage::TerminalInputFrame(TerminalInputFrame {
-                                    session_id: session.session_id.clone(),
-                                    data: input.into_bytes(),
-                                }));
+                            if self.prompt_tool == 0
+                                && self.prompt_model == 0
+                                && self.prompt_effort == 0
+                                && !self.prompt_worktree
+                            {
+                                input.push('\n');
+                                self.pending_message =
+                                    Some(IpcMessage::TerminalInputFrame(TerminalInputFrame {
+                                        session_id: session.session_id.clone(),
+                                        data: input.into_bytes(),
+                                    }));
+                            } else {
+                                let id = format!(
+                                    "prompt-{}",
+                                    agmux_core::session_tracker::SessionTracker::mint_uuid_v4()
+                                );
+                                let mut args = Vec::new();
+                                if self.prompt_model != 0 {
+                                    args.extend([
+                                        "--model".into(),
+                                        if self.prompt_tool == 2 {
+                                            ["", "sonnet", "opus"][self.prompt_model]
+                                        } else {
+                                            ["", "gpt-5.4", "gpt-5.3-codex"][self.prompt_model]
+                                        }
+                                        .into(),
+                                    ]);
+                                }
+                                if self.prompt_effort != 0 {
+                                    if self.prompt_tool == 2 {
+                                        args.extend([
+                                            "--effort".into(),
+                                            ["", "low", "medium", "high"][self.prompt_effort]
+                                                .into(),
+                                        ]);
+                                    } else {
+                                        args.extend([
+                                            "-c".into(),
+                                            format!(
+                                                "model_reasoning_effort=\"{}\"",
+                                                ["", "low", "medium", "high"][self.prompt_effort]
+                                            ),
+                                        ]);
+                                    }
+                                }
+                                args.push(input);
+                                self.pending_selection = Some(id.clone());
+                                self.pending_message =
+                                    Some(IpcMessage::SpawnSessionRequest(SpawnSessionRequest {
+                                        session_id: id.clone(),
+                                        command: if self.prompt_tool == 2 {
+                                            "claude"
+                                        } else {
+                                            "codex"
+                                        }
+                                        .into(),
+                                        args,
+                                        cwd: Some(session.cwd.clone()),
+                                        worktree_branch: self.prompt_worktree.then_some(id),
+                                    }));
+                            }
                         }
                         return;
                     }
@@ -573,13 +958,7 @@ impl App {
     }
 
     fn move_selection(&mut self, forward: bool) {
-        let visible: Vec<_> = self
-            .sessions
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| !self.attention_filter || !matches!(s.state.as_str(), "IDLE" | "DEAD"))
-            .map(|(i, _)| i)
-            .collect();
+        let visible = self.workspace_order();
         if visible.is_empty() {
             return;
         }
@@ -613,6 +992,7 @@ impl App {
                         self.selected_index = index;
                     }
                 }
+                self.align_selection();
             }
             "Freeze Session" => {
                 if let Some(session) = self.sessions.get(self.selected_index) {
@@ -704,6 +1084,7 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
             IpcMessage::ListSessionsResponse(response) => {
                 break App {
                     sessions: response.sessions,
+                    teardowns: response.teardowns,
                     ..App::default()
                 };
             }
@@ -713,10 +1094,33 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
             other => bail!("Unexpected list response: {other:?}"),
         }
     };
+    ipc.send(IpcMessage::WorkspaceRequest(
+        agmux_proto::WorkspaceRequest::List,
+    ))
+    .await?;
+    loop {
+        match ipc
+            .next()
+            .await
+            .context("Connection closed during workspace list")??
+        {
+            IpcMessage::WorkspaceResponse(response) => {
+                if let Some(error) = &response.error {
+                    bail!("Workspace list failed: {error}");
+                }
+                app.apply_workspace(response);
+                break;
+            }
+            IpcMessage::SessionStateChangedEvent(_)
+            | IpcMessage::NotificationEvent(_)
+            | IpcMessage::SessionListUpdate(_) => {}
+            other => bail!("Unexpected workspace response: {other:?}"),
+        }
+    }
     if app.sessions.is_empty() && !Path::new("agmux.toml").exists() {
         app.open_onboarding("agmux.toml".into());
     }
-    if let Some(session) = app.sessions.first() {
+    if let Some(session) = app.sessions.get(app.selected_index) {
         ipc.send(IpcMessage::SubscribeViewport {
             session_id: session.session_id.clone(),
         })
@@ -766,10 +1170,12 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                     app.active_viewport_lines = parser.screen().contents().lines().map(str::to_owned).collect();
                 }
                 IpcMessage::SpawnSessionResponse(response) => {
-                    if response.success { ipc.send(IpcMessage::SubscribeViewport { session_id: response.session_id }).await?; }
+                    if !response.success { app.feature_error = response.error; app.pending_selection = None; }
+                    else if response.session_id.contains(":fork-") { if !app.subtabs.contains(&response.session_id) { app.subtabs.push(response.session_id.clone()); } app.active_subtab_idx = app.subtabs.iter().position(|id| id == &response.session_id).unwrap_or(0); }
                     ipc.send(IpcMessage::ListSessionsRequest(ListSessionsRequest {})).await?;
                 }
                 IpcMessage::SpawnSubtabResponse(response) => {
+                    if !response.success { app.feature_error = response.error.clone(); }
                     if response.success {
                         if !app.subtabs.contains(&response.subtab_id) {
                             app.subtabs.push(response.subtab_id.clone());
@@ -789,16 +1195,63 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                         *files = response.files;
                     }
                 }
+                IpcMessage::SearchNotesResponse(response) => {
+                    let previous = app.selected_index;
+                    app.apply_search_notes_response(response);
+                    if previous != app.selected_index {
+                        app.active_viewport_lines.clear();
+                        parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
+                        if let Some(session) = app.sessions.get(app.selected_index) {
+                            ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?;
+                        }
+                    }
+                }
                 IpcMessage::ListSessionsResponse(response) => {
-                    app.sessions = response.sessions;
-                    app.selected_index = app.selected_index.min(app.sessions.len().saturating_sub(1));
+                    app.teardowns = response.teardowns;
+                    ipc.send(IpcMessage::WorkspaceRequest(agmux_proto::WorkspaceRequest::List)).await?;
                 }
                 IpcMessage::SessionListUpdate(update) => {
-                    app.sessions = update.sessions;
-                    app.selected_index = app.selected_index.min(app.sessions.len().saturating_sub(1));
+                    app.teardowns = update.teardowns;
+                    ipc.send(IpcMessage::WorkspaceRequest(agmux_proto::WorkspaceRequest::List)).await?;
+                    if let ModalState::GlobalSearch { query, .. } = &app.modal {
+                        if !query.is_empty() { ipc.send(IpcMessage::SearchNotesRequest(agmux_proto::SearchNotesRequest::Search { query: query.clone() })).await?; }
+                    }
+                }
+                IpcMessage::WorkspaceResponse(response) => {
+                    let selected = app.sessions.get(app.selected_index).map(|s| s.session_id.clone());
+                    if response.error.is_some() {
+                        app.pending_selection = None;
+                        ipc.send(IpcMessage::WorkspaceRequest(agmux_proto::WorkspaceRequest::List)).await?;
+                    }
+                    app.apply_workspace(response);
+                    app.refresh_filter();
+                    if let Some(message) = app.pending_message.take() { ipc.send(message).await?; }
+                    if let Some(id) = app.pending_selection.as_ref() {
+                        if let Some(index) = app.sessions.iter().position(|s| &s.session_id == id) {
+                            if app.session_visible(index) { app.selected_index = index; }
+                            app.pending_selection = None;
+                        }
+                    }
+                    if selected.as_deref() != app.sessions.get(app.selected_index).map(|s| s.session_id.as_str()) {
+                        app.active_viewport_lines.clear();
+                        parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
+                        if let Some(session) = app.sessions.get(app.selected_index) { ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?; }
+                    }
                 }
                 IpcMessage::SessionStateChangedEvent(event) => {
                     if let Some(session) = app.sessions.iter_mut().find(|s| s.session_id == event.session_id) { session.state = event.new_state; }
+                    let previous = app.selected_index;
+                    app.align_selection();
+                    if previous != app.selected_index {
+                        app.active_viewport_lines.clear();
+                        parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
+                        if let Some(session) = app.sessions.get(app.selected_index) { ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?; }
+                    }
+                }
+                IpcMessage::NotificationEvent(event) if event.kind == "search.index" => {
+                    if let ModalState::GlobalSearch { query, .. } = &app.modal {
+                        if !query.is_empty() { ipc.send(IpcMessage::SearchNotesRequest(agmux_proto::SearchNotesRequest::Search { query: query.clone() })).await?; }
+                    }
                 }
                 _ => {}
             }

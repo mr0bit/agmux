@@ -130,8 +130,8 @@ fn test_subtab_spawning_and_cycling() {
         ..App::default()
     };
 
-    // Press 't' -> spawns first shell sub-tab
-    app.handle_key(KeyCode::Char('t'));
+    // Press 'T' -> spawns first shell sub-tab
+    app.handle_key(KeyCode::Char('T'));
     assert_eq!(app.subtabs, vec!["worker-1:shell-1".to_string()]);
     assert_eq!(app.active_subtab_idx, 0);
     match app.pending_message.take() {
@@ -142,8 +142,8 @@ fn test_subtab_spawning_and_cycling() {
         other => panic!("Expected SpawnSubtabRequest, got {other:?}"),
     }
 
-    // Press 't' again -> spawns second shell sub-tab
-    app.handle_key(KeyCode::Char('t'));
+    // Press 'T' again -> spawns second shell sub-tab
+    app.handle_key(KeyCode::Char('T'));
     assert_eq!(app.subtabs.len(), 2);
     assert_eq!(app.active_subtab_idx, 1);
 

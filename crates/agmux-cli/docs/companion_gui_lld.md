@@ -1,0 +1,7 @@
+# Companion bridge
+
+`LLD-GUI-COMPANION-PANELS-002` implements `REQ-GUI-COMPANION-PANELS-002`. The daemon owns persistent panel registrations, notification history and the selected session in SQLite. Authenticated framed IPC registers and queries panels and carries file reads, writes, and replies. File registrations must resolve to existing regular files under the session working directory, and every subsequent access validates the registration and canonical path again. Only HTTP and HTTPS web targets are accepted.
+
+`agmux panels open <target> --session <id>` registers a panel. `agmux open agmux://session/<id>` and `agmux://session/<id>/panel/<numeric-id>` validate and select a registered target. `agmux gui --snapshot --json` prints state; `agmux gui` binds an ephemeral IPv4 loopback port and prints its URL. Its browser dashboard polls the daemon, displays the attention count and viewport, edits registered files, embeds sandboxed web previews, and submits replies to the target PTY through IPC.
+
+The bridge validates its Host header and requires a per-process secret for API access; mutations also require the exact loopback Origin. The secret is embedded in the local HTML and is never the daemon authentication token. The HTTP listener is not a remote service. Tests exercise actual HTTP requests, invalid origins, unregistered files, deep links, reply delivery and restart persistence.

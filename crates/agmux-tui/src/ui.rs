@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
 /// Render an app into any Ratatui backend, including the headless test backend.
@@ -18,41 +18,90 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
         .split(rows[0]);
-    let items: Vec<_> = app
-        .sessions
-        .iter()
-        .enumerate()
-        .filter(|(_, session)| {
-            !app.attention_filter || !matches!(session.state.as_str(), "IDLE" | "DEAD")
-        })
-        .map(|(index, session)| {
-            let (badge, color) = match session.state.as_str() {
-                "RUNNING" => ("RUNNING", Color::Green),
-                "WAITING" | "WAITING_INPUT" => ("WAITING ✉", Color::Yellow),
-                "STUCK" => ("STUCK", Color::Magenta),
-                "DEAD" => ("DEAD", Color::Red),
-                _ => (session.state.as_str(), Color::Cyan),
-            };
-            let style = if index == app.selected_index {
-                Style::default().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::default()
-            };
-            ListItem::new(Line::from(vec![
-                Span::raw(format!("{} {} ", session.session_id, session.command)),
-                Span::styled(format!("[{badge}]"), Style::default().fg(color)),
-            ]))
-            .style(style)
-        })
-        .collect();
-    let sidebar_title = if app.attention_filter {
-        "Sessions [ATTENTION FILTER]"
+    let mut items = Vec::new();
+    let mut selected_row = None;
+    let mut previous_favorite = false;
+    let mut previous_project = String::new();
+    let mut previous_group = String::new();
+    for index in app.workspace_order() {
+        let session = &app.sessions[index];
+        let meta = app.metadata_for(index);
+        if meta.favorite && !previous_favorite {
+            items.push(ListItem::new("⭐ Favorites"));
+        }
+        if !meta.favorite {
+            if previous_favorite || previous_project != meta.project {
+                items.push(ListItem::new(format!("▾ {}", meta.project)));
+                previous_project = meta.project.clone();
+                previous_group.clear();
+            }
+            if previous_group != meta.group {
+                let mut indent = String::new();
+                for component in meta.group.split('/').filter(|s| !s.is_empty()) {
+                    indent.push_str("  ");
+                    items.push(ListItem::new(format!("{indent}▾ {component}")));
+                }
+                previous_group = meta.group.clone();
+            }
+        }
+        previous_favorite = meta.favorite;
+        let style = if index == app.selected_index {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        let indent = if meta.favorite {
+            2
+        } else {
+            2 + meta.group.split('/').filter(|s| !s.is_empty()).count() * 2
+        };
+        let (badge, color) = match session.state.as_str() {
+            "RUNNING" => ("RUNNING", Color::Green),
+            "WAITING" | "WAITING_INPUT" => ("WAITING ✉", Color::Yellow),
+            "STUCK" => ("STUCK", Color::Magenta),
+            "DEAD" => ("DEAD", Color::Red),
+            _ => (session.state.as_str(), Color::Cyan),
+        };
+        let first = Line::from(vec![
+            Span::raw(format!("{}{} ", " ".repeat(indent), session.session_id)),
+            Span::styled(format!("[{badge}]"), Style::default().fg(color)),
+            Span::raw(
+                match app.teardowns.get(&session.session_id).map(String::as_str) {
+                    Some("archive") => " ↓",
+                    Some("kill") => " ■",
+                    _ => "",
+                },
+            ),
+        ]);
+        let lines = if app.comfortable_rows {
+            vec![
+                first,
+                Line::raw(format!("  {}", session.command)),
+                Line::raw(format!("  {}", session.cwd)),
+            ]
+        } else {
+            vec![first]
+        };
+        if index == app.selected_index {
+            selected_row = Some(items.len());
+        }
+        items.push(ListItem::new(lines).style(style));
+    }
+    let sidebar_title = if app.show_archived {
+        "Sessions [ARCHIVED]".into()
+    } else if !app.filter_query.is_empty() || matches!(app.modal, ModalState::Filter) {
+        format!("Sessions /{}", app.filter_query)
+    } else if app.attention_filter {
+        "Sessions [ATTENTION FILTER]".into()
     } else {
-        "Sessions"
+        "Sessions".into()
     };
-    frame.render_widget(
+    let mut list_state = ListState::default();
+    list_state.select(selected_row);
+    frame.render_stateful_widget(
         List::new(items).block(Block::default().borders(Borders::ALL).title(sidebar_title)),
         columns[0],
+        &mut list_state,
     );
 
     if app.split_view {
@@ -121,7 +170,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 "  [n]         Spawn native shell session immediately".to_string(),
                 "  [i / Enter] Enter Interactive Terminal Mode (Esc to return to Normal Mode)"
                     .to_string(),
-                "  [t]         Open interactive shell sub-tab (❯) in session worktree".to_string(),
+                "  [t / T]     Toggle archive / open shell sub-tab".to_string(),
                 "  [Space]     Quick Prompt composer".to_string(),
                 "  [v / m]     Split Compare & Pin viewport".to_string(),
                 "  [K]         Shared Multi-Agent Kanban Board".to_string(),
@@ -142,14 +191,120 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             columns[1],
         );
     }
-    let status_bar = if app.input_mode {
-        "[INTERACTIVE] Esc: normal mode | All keys forwarded to active session PTY"
+    let status_bar = if let Some(error) = &app.feature_error {
+        format!("Error: {error}")
+    } else if app.input_mode {
+        "[INTERACTIVE] Esc: normal | Ctrl+F: search | Ctrl+PgUp/PgDn: notes".into()
     } else {
-        "[NORMAL] q: quit | n: new | i/Enter: interact | t: subtab | K: kanban | Space: prompt | w: filter | .: ack | v: split | m: pin | F1: palette"
+        "[NORMAL] g: group | *: favorite | D: density | a/t/u: archive | f: fork | Space: prompt | /: filter | F1: palette"
+            .into()
     };
     frame.render_widget(Paragraph::new(status_bar), rows[1]);
     match &app.modal {
         ModalState::None => {}
+        ModalState::Filter => {}
+        ModalState::GlobalSearch {
+            query,
+            selected,
+            hits,
+            error,
+        } => {
+            let area = centered(frame.area(), 90, 80);
+            frame.render_widget(Clear, area);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(format!("Global search: {query} (Esc to close)"));
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+            let panes = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+                .split(inner);
+            let offset = selected.saturating_sub(usize::from(panes[0].height).saturating_sub(1));
+            let items: Vec<_> =
+                hits.iter()
+                    .enumerate()
+                    .skip(offset)
+                    .map(|(i, hit)| {
+                        let source = hit.page.map_or_else(
+                            || format!("line {}", hit.line_no),
+                            |page| format!("note {page}:{}", hit.line_no),
+                        );
+                        ListItem::new(format!("{} {source}: {}", hit.session_id, hit.snippet))
+                            .style(if i == *selected {
+                                Style::default().add_modifier(Modifier::REVERSED)
+                            } else {
+                                Style::default()
+                            })
+                    })
+                    .collect();
+            frame.render_widget(
+                List::new(items).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(error.as_deref().unwrap_or("Matches")),
+                ),
+                panes[0],
+            );
+            if let Some(hit) = hits.get(*selected) {
+                let lines: Vec<_> = hit
+                    .context
+                    .iter()
+                    .enumerate()
+                    .map(|(i, text)| {
+                        Line::styled(
+                            text.clone(),
+                            if i == hit.context_match {
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default()
+                            },
+                        )
+                    })
+                    .collect();
+                let scroll = hit
+                    .context_match
+                    .saturating_sub(usize::from(panes[1].height.saturating_sub(2)) / 2)
+                    .min(u16::MAX as usize) as u16;
+                frame.render_widget(
+                    Paragraph::new(lines).scroll((scroll, 0)).block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("Read-only context"),
+                    ),
+                    panes[1],
+                );
+            }
+        }
+        ModalState::Notes {
+            session_id,
+            page,
+            content,
+            loaded,
+        } => {
+            let area = centered(frame.area(), 80, 70);
+            frame.render_widget(Clear, area);
+            let title =
+                format!("Notes {session_id} page {page} | Ctrl+PgUp/PgDn or Tab/Shift+Tab | Esc");
+            let text = if *loaded {
+                content.as_str()
+            } else {
+                "Loading…"
+            };
+            let scroll = text
+                .lines()
+                .count()
+                .saturating_sub(usize::from(area.height.saturating_sub(2)))
+                .min(u16::MAX as usize) as u16;
+            frame.render_widget(
+                Paragraph::new(text)
+                    .scroll((scroll, 0))
+                    .block(Block::default().borders(Borders::ALL).title(title)),
+                area,
+            );
+        }
         ModalState::CommandPalette { query, selected } => {
             let area = centered(frame.area(), 60, 12);
             frame.render_widget(Clear, area);
@@ -227,8 +382,32 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             }
             frame.render_widget(Paragraph::new(lines), inner);
         }
-        ModalState::QuickPrompt { input } => {
+        ModalState::GroupEditor { input } => {
+            let area = centered(frame.area(), 70, 5);
+            frame.render_widget(Clear, area);
+            frame.render_widget(
+                Paragraph::new(input.as_str()).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Group path (Enter to save)"),
+                ),
+                area,
+            );
+        }
+        ModalState::ForkMenu => {
             let area = centered(frame.area(), 60, 5);
+            frame.render_widget(Clear, area);
+            frame.render_widget(
+                Paragraph::new("[s] Standalone   [t] Sub-tab   [Esc] Cancel").block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Fork conversation"),
+                ),
+                area,
+            );
+        }
+        ModalState::QuickPrompt { input } => {
+            let area = centered(frame.area(), 80, 5);
             frame.render_widget(Clear, area);
             let block = Block::default().borders(Borders::ALL).title("Quick Prompt");
             let inner = block.inner(area);
@@ -238,7 +417,24 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 .constraints([Constraint::Min(1), Constraint::Length(1)])
                 .split(inner);
             frame.render_widget(Paragraph::new(input.as_str()), rows[0]);
-            frame.render_widget(Paragraph::new("[Enter] Submit | [Esc] Cancel"), rows[1]);
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "Tab: {} | Ctrl+L: {} | Ctrl+X: {} | Ctrl+T: {}",
+                    ["reply", "codex", "claude"][app.prompt_tool],
+                    if app.prompt_tool == 2 {
+                        ["default", "sonnet", "opus"][app.prompt_model]
+                    } else {
+                        ["default", "gpt-5.4", "gpt-5.3-codex"][app.prompt_model]
+                    },
+                    ["default", "low", "medium", "high"][app.prompt_effort],
+                    if app.prompt_worktree {
+                        "worktree"
+                    } else {
+                        "current dir"
+                    }
+                )),
+                rows[1],
+            );
         }
         ModalState::ReviewDiff {
             scope,

@@ -6,6 +6,7 @@ pub mod config_manager;
 pub mod diff_calculator;
 pub mod prompt_flattener;
 pub mod pty_manager;
+pub mod scratchpad_notes;
 pub mod snapshot_compressor;
 pub mod state_machine;
 pub mod storage_engine;

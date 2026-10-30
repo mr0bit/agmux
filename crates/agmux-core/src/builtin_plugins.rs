@@ -65,6 +65,18 @@ impl AgentPlugin for BuiltinAgentPlugin {
         args
     }
 
+    fn fork_args(&self, session_uuid: &str) -> Option<Vec<String>> {
+        match self.id {
+            "codex" => Some(vec!["fork".into(), session_uuid.into()]),
+            "claude" => Some(vec![
+                "--resume".into(),
+                session_uuid.into(),
+                "--fork-session".into(),
+            ]),
+            _ => None,
+        }
+    }
+
     fn uuid_capture_strategy(&self) -> UuidCaptureStrategy {
         self.uuid_strategy.clone()
     }

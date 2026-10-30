@@ -69,6 +69,11 @@ pub trait AgentPlugin: Send + Sync {
     /// Generate command-line arguments for resuming an existing session by UUID.
     fn resume_args(&self, session_uuid: &str) -> Vec<String>;
 
+    /// Generate a real conversation fork command, or report unsupported.
+    fn fork_args(&self, _session_uuid: &str) -> Option<Vec<String>> {
+        None
+    }
+
     /// Strategy for capturing the native CLI conversation UUID.
     fn uuid_capture_strategy(&self) -> UuidCaptureStrategy {
         UuidCaptureStrategy::None

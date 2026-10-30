@@ -61,6 +61,8 @@ pub struct ActivePtySession {
     input_tx: broadcast::Sender<()>,
     initial_output: std::sync::Mutex<Option<broadcast::Receiver<Vec<u8>>>>,
     screen_buffer: Arc<std::sync::Mutex<crate::snapshot_compressor::ScreenBuffer>>,
+    #[cfg(windows)]
+    killer: std::sync::Mutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>,
 }
 
 impl ActivePtySession {
@@ -143,6 +145,10 @@ impl ActivePtySession {
 
     /// Terminate the underlying child process group.
     pub fn kill(&self) {
+        #[cfg(windows)]
+        if let Ok(mut killer) = self.killer.lock() {
+            let _ = killer.kill();
+        }
         #[cfg(unix)]
         unsafe {
             libc::kill(self.pid as libc::pid_t, libc::SIGTERM);
@@ -274,6 +280,9 @@ impl PtyManager {
             }
         });
 
+        #[cfg(windows)]
+        let killer = std::sync::Mutex::new(child.clone_killer());
+
         // Background child wait thread: monitors exit code
         let session_id_for_exit = session_id.clone();
         tokio::spawn(async move {
@@ -311,6 +320,8 @@ impl PtyManager {
             exit_rx,
             initial_output: std::sync::Mutex::new(Some(output_rx)),
             screen_buffer,
+            #[cfg(windows)]
+            killer,
         });
 
         sessions_lock.insert(session_id, session.clone());

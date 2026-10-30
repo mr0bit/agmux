@@ -68,6 +68,10 @@ impl TerminalHistory {
             Some(String::from_utf8_lossy(&std::mem::take(&mut self.line)).into_owned())
         }
     }
+    /// Current unterminated line, if any, for live search indexing.
+    pub fn pending_line(&self) -> Option<String> {
+        (!self.line.is_empty()).then(|| String::from_utf8_lossy(&self.line).into_owned())
+    }
     /// Snapshot the raw byte stream.
     pub fn raw(&self) -> Vec<u8> {
         self.raw.iter().copied().collect()

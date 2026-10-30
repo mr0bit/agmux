@@ -125,7 +125,10 @@ impl DaemonServer {
         let _config_watch_task = config_watcher.spawn_watch_loop(journal.clone());
         let subscription_manager =
             crate::subscription_manager::SubscriptionManager::new(pty_manager.clone());
-        let event_broadcaster = crate::event_broadcaster::EventBroadcaster::new(storage.clone());
+        let event_broadcaster = crate::event_broadcaster::EventBroadcaster::new(
+            storage.clone(),
+            config_watcher.clone(),
+        );
         let pty_resizer = agmux_core::pty_resizer::PtyResizer::new(pty_manager.clone());
         let subtab_spawner = agmux_core::subtab_spawner::SubtabSpawner::new(pty_manager.clone());
         let hook_listener = crate::hook_listener::HookListener::new(
@@ -133,6 +136,15 @@ impl DaemonServer {
             events.clone(),
             journal.clone(),
             event_broadcaster.clone(),
+            pty_manager.clone(),
+        );
+        let teardown_scheduler = crate::teardown_scheduler::TeardownScheduler::new(
+            storage.clone(),
+            pty_manager.clone(),
+            event_broadcaster.clone(),
+            lock_manager.clone(),
+            file_reservations.clone(),
+            kanban_manager.clone(),
         );
         let ssh_federation = crate::ssh_federation::SshFederationManager::new();
         let network_auth = crate::network_auth::NetworkAuthValidator::new(auth_token.as_str());
@@ -154,6 +166,7 @@ impl DaemonServer {
             pty_resizer,
             subtab_spawner,
             hook_listener,
+            teardown_scheduler,
             ssh_federation,
             network_auth,
             shutdown_tx,
@@ -253,6 +266,7 @@ pub struct DaemonContext {
     pub pty_resizer: agmux_core::pty_resizer::PtyResizer,
     pub subtab_spawner: agmux_core::subtab_spawner::SubtabSpawner,
     pub hook_listener: crate::hook_listener::HookListener,
+    pub teardown_scheduler: crate::teardown_scheduler::TeardownScheduler,
     pub ssh_federation: crate::ssh_federation::SshFederationManager,
     pub network_auth: crate::network_auth::NetworkAuthValidator,
     pub shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -276,6 +290,7 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
         pty_resizer,
         subtab_spawner,
         hook_listener,
+        teardown_scheduler,
         ssh_federation,
         network_auth,
         shutdown_tx,
@@ -367,8 +382,343 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
             }
         };
 
+        // Forks are lowered to the regular spawn path only after validating a real
+        // adapter capability and a captured native conversation identity.
+        let mut fork_parent: Option<String> = None;
+        let mut fork_subtab = false;
+        let message = if let IpcMessage::WorkspaceRequest(agmux_proto::WorkspaceRequest::Fork {
+            session_id,
+            new_session_id,
+            subtab,
+        }) = &message
+        {
+            let resolved = {
+                let db = storage.lock().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                match (
+                    db.get_session(session_id)?,
+                    db.get_cli_session_uuid(session_id)?,
+                ) {
+                    (None, _) => Err("Session not found"),
+                    (Some(parent), uuid) => {
+                        let command = parent.command.split_whitespace().next().unwrap_or("");
+                        let name = std::path::Path::new(command)
+                            .file_stem()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("");
+                        let registry = agmux_core::plugin_api::PluginRegistry::with_builtins();
+                        match (
+                            registry.all().into_iter().find(|p| p.binary_name() == name),
+                            uuid,
+                        ) {
+                            (Some(plugin), Some(uuid)) => match plugin.fork_args(&uuid) {
+                                Some(args) => Ok(agmux_proto::SpawnSessionRequest {
+                                    session_id: new_session_id.clone(),
+                                    command: command.to_owned(),
+                                    args,
+                                    cwd: Some(parent.cwd),
+                                    worktree_branch: None,
+                                }),
+                                None => Err("This adapter does not support conversation forking"),
+                            },
+                            (Some(plugin), None) if plugin.fork_args("").is_some() => {
+                                Err("No native conversation ID captured for this session")
+                            }
+                            _ => Err("This adapter does not support conversation forking"),
+                        }
+                    }
+                }
+            };
+            match resolved {
+                Ok(req) => {
+                    if *subtab && !new_session_id.starts_with(&format!("{session_id}:fork-")) {
+                        out_tx
+                            .send(IpcMessage::WorkspaceResponse(
+                                agmux_proto::WorkspaceResponse {
+                                    sessions: vec![],
+                                    metadata: Default::default(),
+                                    error: Some("Invalid sub-tab identity".into()),
+                                },
+                            ))
+                            .await?;
+                        continue;
+                    }
+                    fork_parent = Some(session_id.clone());
+                    fork_subtab = *subtab;
+                    IpcMessage::SpawnSessionRequest(req)
+                }
+                Err(error) => {
+                    out_tx
+                        .send(IpcMessage::WorkspaceResponse(
+                            agmux_proto::WorkspaceResponse {
+                                sessions: vec![],
+                                metadata: Default::default(),
+                                error: Some(error.into()),
+                            },
+                        ))
+                        .await?;
+                    continue;
+                }
+            }
+        } else {
+            message
+        };
         match message {
-            IpcMessage::SpawnSessionRequest(req) => {
+            IpcMessage::CompanionRequest(agmux_proto::CompanionRequest::Reply {
+                session_id,
+                message,
+            }) => {
+                let error = if message.len() > 65536 {
+                    Some("Reply too large".to_owned())
+                } else {
+                    match pty_manager.get_session(&session_id).await {
+                        Ok(session) => session
+                            .send_input(format!("{message}\n").as_bytes())
+                            .err()
+                            .map(|e| e.to_string()),
+                        Err(e) => Some(e.to_string()),
+                    }
+                };
+                out_tx
+                    .send(IpcMessage::CompanionResponse(
+                        agmux_proto::CompanionResponse {
+                            notifications: vec![],
+                            selected_panel: None,
+                            panels: vec![],
+                            selected: None,
+                            content: None,
+                            error,
+                        },
+                    ))
+                    .await?;
+            }
+            IpcMessage::CompanionRequest(req) => {
+                let db = storage.clone();
+                let response = tokio::task::spawn_blocking(move || {
+                    use agmux_proto::CompanionRequest as R;
+                    let mut response = agmux_proto::CompanionResponse {
+                        notifications: vec![],
+                        selected_panel: None,
+                        panels: vec![],
+                        selected: None,
+                        content: None,
+                        error: None,
+                    };
+                    let result = (|| -> anyhow::Result<()> {
+                        let db = db.lock().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                        match req {
+                            R::Open { session_id, target } => {
+                                let session = db
+                                    .get_session(&session_id)?
+                                    .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
+                                let (kind, target) = if target.starts_with("http://")
+                                    || target.starts_with("https://")
+                                {
+                                    let authority = target
+                                        .split_once("://")
+                                        .map(|(_, v)| v.split('/').next().unwrap_or(""))
+                                        .unwrap_or("");
+                                    anyhow::ensure!(
+                                        !authority.is_empty()
+                                            && !authority.contains(['@', '\n', '\r', ' ']),
+                                        "Invalid URL"
+                                    );
+                                    ("web", target)
+                                } else {
+                                    anyhow::ensure!(!target.contains("://"), "Unsupported scheme");
+                                    let path = std::path::Path::new(&target);
+                                    anyhow::ensure!(
+                                        !path
+                                            .components()
+                                            .any(|c| matches!(c, std::path::Component::ParentDir)),
+                                        "Path traversal rejected"
+                                    );
+                                    let root = std::fs::canonicalize(&session.cwd)?;
+                                    let file = std::fs::canonicalize(if path.is_absolute() {
+                                        path.to_path_buf()
+                                    } else {
+                                        root.join(path)
+                                    })?;
+                                    anyhow::ensure!(
+                                        file.starts_with(&root) && file.is_file(),
+                                        "File outside session workspace"
+                                    );
+                                    ("file", file.to_string_lossy().into_owned())
+                                };
+                                anyhow::ensure!(
+                                    db.register_panel(&session_id, kind, &target)?,
+                                    "Session not found"
+                                );
+                                db.select_companion_session(&session_id)?;
+                            }
+                            R::Select { session_id } => {
+                                anyhow::ensure!(
+                                    db.select_companion_session(&session_id)?,
+                                    "Session not found"
+                                );
+                            }
+                            R::SelectPanel {
+                                session_id,
+                                panel_id,
+                            } => {
+                                anyhow::ensure!(
+                                    db.select_companion_panel(&session_id, panel_id)?,
+                                    "Panel not found"
+                                );
+                                db.select_companion_session(&session_id)?;
+                            }
+                            R::Read { panel_id } | R::Write { panel_id, .. } => {
+                                let panel = db
+                                    .companion_panels()?
+                                    .into_iter()
+                                    .find(|p| p.id == panel_id && p.kind == "file")
+                                    .ok_or_else(|| anyhow::anyhow!("File panel not found"))?;
+                                let session = db
+                                    .get_session(&panel.session_id)?
+                                    .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
+                                let root = std::fs::canonicalize(session.cwd)?;
+                                let file = std::fs::canonicalize(&panel.target)?;
+                                anyhow::ensure!(
+                                    file.starts_with(root)
+                                        && file.to_string_lossy() == panel.target
+                                        && file.is_file(),
+                                    "Panel file changed or outside workspace"
+                                );
+                                match req {
+                                    R::Write { content, .. } => {
+                                        anyhow::ensure!(
+                                            content.len() <= 1_000_000,
+                                            "File too large"
+                                        );
+                                        std::fs::write(file, content)?;
+                                    }
+                                    _ => {
+                                        anyhow::ensure!(
+                                            std::fs::metadata(&file)?.len() <= 1_000_000,
+                                            "File too large"
+                                        );
+                                        response.content = Some(std::fs::read_to_string(file)?);
+                                    }
+                                }
+                            }
+                            R::List => {}
+                            R::Reply { .. } => unreachable!(),
+                        }
+                        response.notifications = db.companion_notifications()?;
+                        response.panels = db.companion_panels()?;
+                        response.selected = db.companion_selection()?;
+                        response.selected_panel = db.companion_selected_panel()?;
+                        Ok(())
+                    })();
+                    if let Err(error) = result {
+                        response.error = Some(error.to_string());
+                    }
+                    response
+                })
+                .await?;
+                out_tx.send(IpcMessage::CompanionResponse(response)).await?;
+            }
+            IpcMessage::WorkspaceRequest(req) => {
+                let changed = matches!(req, agmux_proto::WorkspaceRequest::Set { .. });
+                let (mut sessions, metadata, error) = {
+                    let db = storage.lock().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                    let error = match req {
+                        agmux_proto::WorkspaceRequest::Set {
+                            session_id,
+                            metadata,
+                        } => match db.set_workspace_metadata(&session_id, &metadata) {
+                            Ok(true) => None,
+                            Ok(false) => Some("Session not found".to_string()),
+                            Err(e) => Some(e.to_string()),
+                        },
+                        agmux_proto::WorkspaceRequest::List => None,
+                        agmux_proto::WorkspaceRequest::Fork { .. } => unreachable!(),
+                    };
+                    (
+                        db.list_workspace_sessions()?,
+                        db.workspace_metadata()?,
+                        error,
+                    )
+                };
+                sessions.extend(ssh_federation.list_mounted_sessions().await);
+                out_tx
+                    .send(IpcMessage::WorkspaceResponse(
+                        agmux_proto::WorkspaceResponse {
+                            sessions,
+                            metadata,
+                            error,
+                        },
+                    ))
+                    .await?;
+                if changed {
+                    event_broadcaster.broadcast_session_list().await;
+                }
+            }
+            IpcMessage::ReadSessionRequest(req) => {
+                let result = if let Ok(active) = pty_manager.get_session(&req.session_id).await {
+                    Ok(active.capture_screen())
+                } else {
+                    let db = storage.lock().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                    match db.load_snapshot(&req.session_id) {
+                        Ok(Some(snapshot)) => {
+                            agmux_core::snapshot_compressor::decompress_snapshot(&snapshot)
+                                .map_err(|e| e.to_string())
+                        }
+                        Ok(None) => Err("Session or snapshot not found".to_string()),
+                        Err(e) => Err(e.to_string()),
+                    }
+                };
+                let response = match result {
+                    Ok(bytes) => agmux_proto::ReadSessionResponse {
+                        success: true,
+                        screen: String::from_utf8_lossy(&bytes).into_owned(),
+                        error: None,
+                    },
+                    Err(error) => agmux_proto::ReadSessionResponse {
+                        success: false,
+                        screen: String::new(),
+                        error: Some(error),
+                    },
+                };
+                out_tx
+                    .send(IpcMessage::ReadSessionResponse(response))
+                    .await?;
+            }
+            IpcMessage::TeardownRequest(req) => {
+                let result = teardown_scheduler
+                    .request(&req.session_id, &req.action)
+                    .await;
+                out_tx
+                    .send(IpcMessage::TeardownResponse(
+                        agmux_proto::TeardownResponse {
+                            success: result.is_ok(),
+                            error: result.err(),
+                        },
+                    ))
+                    .await?;
+            }
+            IpcMessage::SpawnSessionRequest(mut req) => {
+                // Claude exposes a deterministic native session ID on fresh launches.
+                let is_claude = std::path::Path::new(&req.command)
+                    .file_stem()
+                    .is_some_and(|n| n == "claude");
+                let native_uuid = if is_claude
+                    && !req
+                        .args
+                        .iter()
+                        .any(|a| matches!(a.as_str(), "--resume" | "--session-id" | "--continue"))
+                {
+                    let uuid = agmux_core::session_tracker::SessionTracker::mint_uuid_v4();
+                    req.args
+                        .splice(0..0, ["--session-id".to_string(), uuid.clone()]);
+                    Some(uuid)
+                } else if is_claude {
+                    req.args
+                        .windows(2)
+                        .find(|w| w[0] == "--session-id")
+                        .map(|w| w[1].clone())
+                } else {
+                    None
+                };
                 let session_id = req.session_id.clone();
                 let command = std::iter::once(req.command.as_str())
                     .chain(req.args.iter().map(String::as_str))
@@ -433,8 +783,23 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
                 })
                 .await?;
+                if fork_subtab && port.is_none() {
+                    if let Some(parent) = fork_parent.as_deref() {
+                        if let Ok(parent_session) = pty_manager.get_session(parent).await {
+                            port = parent_session.port;
+                        }
+                    }
+                }
+                let env = if fork_subtab {
+                    vec![(
+                        "AGMUX_PARENT_SESSION_ID".to_owned(),
+                        fork_parent.clone().unwrap_or_default(),
+                    )]
+                } else {
+                    Vec::new()
+                };
                 match pty_manager
-                    .spawn(session_id.clone(), req.command, req.args, cwd, port)
+                    .spawn_with_env(session_id.clone(), req.command, req.args, cwd, port, env)
                     .await
                 {
                     Ok(session) => {
@@ -452,7 +817,23 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                         let inserted = tokio::task::spawn_blocking(move || {
                             let db = db.lock().map_err(|e| e.to_string())?;
                             db.insert_session(&info).map_err(|e| e.to_string())?;
+                            if let Some(parent) = fork_parent {
+                                let mut metadata = db
+                                    .workspace_metadata()
+                                    .map_err(|e| e.to_string())?
+                                    .remove(&parent)
+                                    .unwrap_or_else(|| agmux_proto::WorkspaceMetadata {
+                                        project: info.cwd.clone(),
+                                        ..Default::default()
+                                    });
+                                metadata.favorite = false;
+                                metadata.archived = false;
+                                db.set_workspace_metadata(&info.session_id, &metadata)
+                                    .map_err(|e| e.to_string())?;
+                            }
                             db.set_start_git_sha(&info.session_id, start_sha.as_deref())
+                                .map_err(|e| e.to_string())?;
+                            db.set_cli_session_uuid(&info.session_id, native_uuid.as_deref())
                                 .map_err(|e| e.to_string())
                         })
                         .await?;
@@ -487,6 +868,7 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                         let journal_fwd = journal.clone();
                         let bcast_fwd = event_broadcaster.clone();
                         let cfg_fwd = config_watcher.clone();
+                        let teardown_fwd = teardown_scheduler.clone();
                         tokio::spawn(async move {
                             let mut output_rx = session.subscribe_output();
                             let mut exit_rx = session.subscribe_exit();
@@ -509,7 +891,11 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                                                 Ok(data) => {
                                                     publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.output(&data), Some(&session_clone), Some(&journal_fwd), Some(&bcast_fwd)).await;
                                                     let lines = history.ingest(&data);
+                                                    let partial = history.pending_line();
+                                                    let indexed = !lines.is_empty() || partial.is_some();
                                                     index_lines(output_db.clone(), &fwd_session_id, &mut line_no, lines).await;
+                                                    if let Some(partial) = partial { let mut partial_line = line_no; index_lines(output_db.clone(), &fwd_session_id, &mut partial_line, vec![partial]).await; }
+                                                    if indexed { bcast_fwd.transcript_indexed(&fwd_session_id); }
                                                     let _ = out_tx_fwd.send(IpcMessage::TerminalOutputFrame(TerminalOutputFrame { session_id: fwd_session_id.clone(), data })).await;
                                                     false
                                                 }
@@ -568,7 +954,17 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                                         .await;
                                     }
                                     let code = *exit_rx.borrow();
-                                    if let Some(code) = code {
+                                    let _ = teardown_fwd.complete(&fwd_session_id).await;
+                                    let is_torn_down = output_db
+                                        .lock()
+                                        .ok()
+                                        .and_then(|db| {
+                                            db.get_session(&fwd_session_id).ok().flatten()
+                                        })
+                                        .is_some_and(|s| {
+                                            matches!(s.state.as_str(), "DEAD" | "ARCHIVED")
+                                        });
+                                    if let Some(code) = code.filter(|_| !is_torn_down) {
                                         publish_transition(
                                             output_db.clone(),
                                             &state_events,
@@ -856,6 +1252,131 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                 };
                 out_tx.send(IpcMessage::GetDiffResponse(response)).await?;
             }
+            IpcMessage::SearchNotesRequest(req) => {
+                let db = storage.clone();
+                let request = req.clone();
+                let response = tokio::task::spawn_blocking(move || {
+                    let mut response = agmux_proto::SearchNotesResponse {
+                        request: req.clone(),
+                        pages: Vec::new(),
+                        hits: Vec::new(),
+                        session_ids: Vec::new(),
+                        error: None,
+                    };
+                    let result = (|| -> Result<(), String> {
+                        let db = db.lock().map_err(|e| e.to_string())?;
+                        match req {
+                            agmux_proto::SearchNotesRequest::Set {
+                                session_id,
+                                page,
+                                content,
+                            } => {
+                                if db
+                                    .get_session(&session_id)
+                                    .map_err(|e| e.to_string())?
+                                    .is_none()
+                                {
+                                    return Err("Unknown session".into());
+                                }
+                                db.set_note(&session_id, page, &content)
+                                    .map_err(|e| e.to_string())?;
+                            }
+                            agmux_proto::SearchNotesRequest::Get { session_id, page } => {
+                                if let Some(content) =
+                                    db.get_note(&session_id, page).map_err(|e| e.to_string())?
+                                {
+                                    response.pages.push((page, content));
+                                }
+                            }
+                            agmux_proto::SearchNotesRequest::List { session_id } => {
+                                response.pages =
+                                    db.list_notes(&session_id).map_err(|e| e.to_string())?;
+                            }
+                            agmux_proto::SearchNotesRequest::Search { query } => {
+                                for hit in db
+                                    .search_terminal_logs(&query, 100)
+                                    .map_err(|e| e.to_string())?
+                                {
+                                    let lines = db
+                                        .transcript_context(&hit.session_id, hit.line_no)
+                                        .map_err(|e| e.to_string())?;
+                                    let context_match = lines
+                                        .iter()
+                                        .position(|(n, _)| *n == hit.line_no)
+                                        .unwrap_or(0);
+                                    response.hits.push(agmux_proto::GlobalSearchHit {
+                                        session_id: hit.session_id,
+                                        page: None,
+                                        line_no: hit.line_no,
+                                        snippet: hit.snippet,
+                                        context: lines.into_iter().map(|(_, line)| line).collect(),
+                                        context_match,
+                                    });
+                                }
+                                for (session_id, page, content) in
+                                    db.search_notes(&query, 100).map_err(|e| e.to_string())?
+                                {
+                                    let lines: Vec<_> =
+                                        content.lines().map(str::to_owned).collect();
+                                    let needle = query.to_lowercase();
+                                    let index = lines
+                                        .iter()
+                                        .position(|line| line.to_lowercase().contains(&needle))
+                                        .unwrap_or(0);
+                                    response.hits.push(agmux_proto::GlobalSearchHit {
+                                        session_id,
+                                        page: Some(page),
+                                        line_no: index as u64 + 1,
+                                        snippet: lines.get(index).cloned().unwrap_or_default(),
+                                        context: lines,
+                                        context_match: index,
+                                    });
+                                }
+                            }
+                            agmux_proto::SearchNotesRequest::Filter { query } => {
+                                let needle = query.to_lowercase();
+                                let note_sessions: std::collections::HashSet<_> = db
+                                    .search_notes(&query, 10000)
+                                    .map_err(|e| e.to_string())?
+                                    .into_iter()
+                                    .map(|(id, _, _)| id)
+                                    .collect();
+                                for session in
+                                    db.list_active_sessions().map_err(|e| e.to_string())?
+                                {
+                                    let branch = std::process::Command::new("git")
+                                        .args(["-C", &session.cwd, "branch", "--show-current"])
+                                        .output()
+                                        .ok()
+                                        .filter(|o| o.status.success())
+                                        .map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase())
+                                        .unwrap_or_default();
+                                    if needle.is_empty()
+                                        || session.session_id.to_lowercase().contains(&needle)
+                                        || session.command.to_lowercase().contains(&needle)
+                                        || branch.contains(&needle)
+                                        || note_sessions.contains(&session.session_id)
+                                    {
+                                        response.session_ids.push(session.session_id);
+                                    }
+                                }
+                            }
+                        }
+                        Ok(())
+                    })();
+                    response.error = result.err();
+                    response
+                })
+                .await?;
+                let changed = matches!(request, agmux_proto::SearchNotesRequest::Set { .. })
+                    && response.error.is_none();
+                out_tx
+                    .send(IpcMessage::SearchNotesResponse(response))
+                    .await?;
+                if changed {
+                    event_broadcaster.broadcast_session_list().await;
+                }
+            }
             IpcMessage::SearchLogsRequest(req) => {
                 let db = storage.clone();
                 let matches = tokio::task::spawn_blocking(move || {
@@ -1003,9 +1524,14 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                 .map_err(anyhow::Error::msg)?;
                 let remote_sessions = ssh_federation.list_mounted_sessions().await;
                 sessions.extend(remote_sessions);
+                let teardowns = storage
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?
+                    .list_teardowns()?;
                 out_tx
                     .send(IpcMessage::ListSessionsResponse(ListSessionsResponse {
                         sessions,
+                        teardowns,
                     }))
                     .await?;
             }
@@ -1424,7 +1950,7 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                 let response = match result {
                     Ok(Ok(())) => {
                         let _ = events.send(SessionStateChangedEvent {
-                            session_id: req.session_id,
+                            session_id: req.session_id.clone(),
                             old_state: "FINISHED".into(),
                             new_state: "IDLE".into(),
                             reason: "user acknowledged".into(),
@@ -1443,6 +1969,11 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                         error: Some(e.to_string()),
                     },
                 };
+                if response.success {
+                    if let Err(error) = teardown_scheduler.complete(&req.session_id).await {
+                        tracing::error!("Teardown failed: {error}");
+                    }
+                }
                 out_tx
                     .send(IpcMessage::AcknowledgeSessionResponse(response))
                     .await?;
@@ -1614,6 +2145,17 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                                 }
                             })
                             .await;
+                            let subtab_scheduler = teardown_scheduler.clone();
+                            let subtab_id = req.subtab_id.clone();
+                            let mut subtab_exit = session.subscribe_exit();
+                            tokio::spawn(async move {
+                                if subtab_exit.borrow().is_none() {
+                                    let _ = subtab_exit.changed().await;
+                                }
+                                if let Err(error) = subtab_scheduler.complete(&subtab_id).await {
+                                    tracing::error!("Subtab teardown failed: {error}");
+                                }
+                            });
                             event_broadcaster.broadcast_session_list().await;
                             agmux_proto::SpawnSubtabResponse {
                                 success: true,
@@ -1655,6 +2197,13 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                         error: Some(error),
                     },
                 };
+                if resp.success
+                    && matches!(resp.new_state.as_str(), "COMPLETED" | "IDLE" | "FINISHED")
+                {
+                    if let Err(error) = teardown_scheduler.complete(&req.session_id).await {
+                        tracing::error!("Teardown failed: {error}");
+                    }
+                }
                 out_tx.send(IpcMessage::InternalHookResponse(resp)).await?;
             }
             IpcMessage::ConnectRemoteRequest(req) => {
@@ -1704,8 +2253,12 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                 let _ = shutdown_tx.send(true);
                 break;
             }
-            IpcMessage::ConnectRemoteResponse(_)
+            IpcMessage::CompanionResponse(_)
+            | IpcMessage::ConnectRemoteResponse(_)
+            | IpcMessage::WorkspaceResponse(_)
             | IpcMessage::ListRemotesResponse(_)
+            | IpcMessage::ReadSessionResponse(_)
+            | IpcMessage::TeardownResponse(_)
             | IpcMessage::ResizeSessionResponse(_)
             | IpcMessage::SpawnSubtabResponse(_)
             | IpcMessage::InternalHookResponse(_)
@@ -1740,6 +2293,7 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
             | IpcMessage::FreezeSessionResponse(_)
             | IpcMessage::ResumeSessionResponse(_)
             | IpcMessage::HandshakeResponse(_)
+            | IpcMessage::SearchNotesResponse(_)
             | IpcMessage::SearchLogsResponse(_)
             | IpcMessage::ListSessionsResponse(_)
             | IpcMessage::SpawnSessionResponse(_)
@@ -1808,11 +2362,11 @@ async fn publish_transition(
             db_update
                 .lock()
                 .map_err(|e| e.to_string())?
-                .update_session_state(&db_id, new.as_str())
+                .update_live_session_state(&db_id, new.as_str())
                 .map_err(|e| e.to_string())
         })
         .await;
-        if matches!(result, Ok(Ok(()))) {
+        if matches!(result, Ok(Ok(true))) {
             let _ = events.send(SessionStateChangedEvent {
                 session_id: session_id.clone(),
                 old_state: old.as_str().into(),
@@ -1821,8 +2375,23 @@ async fn publish_transition(
             });
 
             if let Some(b) = broadcaster {
-                b.notify_transition(&session_id, old.as_str(), new.as_str(), reason)
-                    .await;
+                b.notify_transition(
+                    &session_id,
+                    old.as_str(),
+                    new.as_str(),
+                    reason,
+                    &session
+                        .map(|s| {
+                            s.subscribe_viewport_sync()
+                                .0
+                                .lines
+                                .join("\n")
+                                .trim_end()
+                                .to_owned()
+                        })
+                        .unwrap_or_default(),
+                )
+                .await;
             }
 
             if let Some(j) = journal {
