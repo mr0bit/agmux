@@ -128,5 +128,6 @@ fn test_event_watch_reconnection_replay_with_cursor() {
     );
 
     let _ = daemon.kill();
+    let _ = daemon.wait();
     let _ = std::fs::remove_dir_all(&root);
 }

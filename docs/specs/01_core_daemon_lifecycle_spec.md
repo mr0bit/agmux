@@ -38,11 +38,11 @@ This specification defines the lifecycle, process supervision, signal propagatio
 * **Text:** As a system administrator terminating `agmuxd` via SIGTERM or SIGINT, the system shall gracefully propagate SIGHUP followed by SIGTERM to all active child agent process groups before exiting, preventing orphaned runaway agent processes that leak memory and API tokens.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-daemon::shutdown_coordinator`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Launch 3 active agent sessions with running child build processes; send SIGTERM to `agmuxd`. Verify via OS process inspection that within 3 seconds, all 3 agent processes and their child build trees are reaped and no zombie processes remain.
 * **Downstream Req:** `LLD-DAEMON-SHUTDOWN-SIG-003`
 * **Downstream Test:** `TEST-VER-DAEMON-003`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 
@@ -51,11 +51,11 @@ This specification defines the lifecycle, process supervision, signal propagatio
 * **Text:** As a user starting `agmuxd`, the system shall enforce single-instance execution per user account using a cross-platform filesystem lock (`agmuxd.pid` / flock / LockFileEx), refusing duplicate daemon instances and routing calls to the existing daemon.
 * **Criticality:** Medium
 * **SW Component:** `crates/agmux-daemon::instance_lock`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Attempt to run `agmuxd` while an instance is already active. Verify that the second command exits cleanly with code 0 or an informative message without corrupting sockets or SQLite locks.
 * **Downstream Req:** `LLD-DAEMON-LOCKFILE-004`
 * **Downstream Test:** `TEST-VER-DAEMON-004`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 
@@ -64,8 +64,8 @@ This specification defines the lifecycle, process supervision, signal propagatio
 * **Text:** As a user recovering from an ungraceful daemon crash or system reboot, `agmuxd` on startup shall scan the SQLite database for orphaned sessions previously marked `WORKING` or `WAITING` and transition their state to `DEAD`, preserving their ANSI scrollback snapshots for post-mortem inspection.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-daemon::recovery_manager`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Simulate a sudden power kill (`kill -9`) of `agmuxd` during an active agent turn. Restart `agmuxd`. Verify that all orphaned sessions are safely marked `DEAD` with snapshot inspection available and zero hanging lock records.
 * **Downstream Req:** `LLD-DAEMON-RECOVERY-005`
 * **Downstream Test:** `TEST-VER-DAEMON-005`
-* **Test Status:** Failed
+* **Test Status:** Passed

@@ -5,9 +5,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::UnixStream;
 
-use agmux_proto::{HandshakeRequest, IpcMessage, SpawnSessionRequest, new_framed};
+use agmux_proto::{HandshakeRequest, IpcMessage, SpawnSessionRequest, connect_ipc, new_framed};
 
 /// Connect to daemon IPC, spawn a command inside a new PTY session,
 /// and stream child stdout/stderr directly to the user's terminal until exit.
@@ -18,7 +17,7 @@ pub async fn run_command(
     args: Vec<String>,
     worktree_branch: Option<String>,
 ) -> Result<i32> {
-    let stream = UnixStream::connect(socket_path).await.with_context(|| {
+    let stream = connect_ipc(socket_path).await.with_context(|| {
         format!(
             "Failed to connect to daemon socket {}",
             socket_path.display()
@@ -82,7 +81,12 @@ pub async fn run_command(
             .await
             .context("Connection closed by daemon during spawn request")?
             .context("Framing error reading spawn response")?;
-        if !matches!(message, IpcMessage::SessionStateChangedEvent(_)) {
+        if !matches!(
+            message,
+            IpcMessage::SessionStateChangedEvent(_)
+                | IpcMessage::NotificationEvent(_)
+                | IpcMessage::SessionListUpdate(_)
+        ) {
             break message;
         }
     };
@@ -128,7 +132,7 @@ pub async fn list_sessions(
     socket_path: &Path,
     token: &str,
 ) -> Result<Vec<agmux_proto::SessionInfo>> {
-    let stream = UnixStream::connect(socket_path)
+    let stream = connect_ipc(socket_path)
         .await
         .context("Failed to connect to daemon")?;
     let mut framed = new_framed(stream);
@@ -156,7 +160,12 @@ pub async fn list_sessions(
             .next()
             .await
             .context("Connection closed during list request")??;
-        if !matches!(message, IpcMessage::SessionStateChangedEvent(_)) {
+        if !matches!(
+            message,
+            IpcMessage::SessionStateChangedEvent(_)
+                | IpcMessage::NotificationEvent(_)
+                | IpcMessage::SessionListUpdate(_)
+        ) {
             break message;
         }
     };
@@ -174,7 +183,7 @@ pub async fn search_logs(
     session_id: Option<String>,
     limit: u32,
 ) -> Result<Vec<agmux_proto::SearchMatch>> {
-    let stream = UnixStream::connect(socket_path)
+    let stream = connect_ipc(socket_path)
         .await
         .context("Failed to connect to daemon")?;
     let mut framed = new_framed(stream);
@@ -206,7 +215,12 @@ pub async fn search_logs(
             .next()
             .await
             .context("Connection closed during search")??;
-        if !matches!(message, IpcMessage::SessionStateChangedEvent(_)) {
+        if !matches!(
+            message,
+            IpcMessage::SessionStateChangedEvent(_)
+                | IpcMessage::NotificationEvent(_)
+                | IpcMessage::SessionListUpdate(_)
+        ) {
             break message;
         }
     };
@@ -222,7 +236,7 @@ pub async fn freeze_session(
     token: &str,
     session_id: String,
 ) -> Result<agmux_proto::FreezeSessionResponse> {
-    let stream = UnixStream::connect(socket_path)
+    let stream = connect_ipc(socket_path)
         .await
         .context("Failed to connect to daemon")?;
     let mut framed = new_framed(stream);
@@ -250,7 +264,12 @@ pub async fn freeze_session(
             .next()
             .await
             .context("Connection closed during freeze request")??;
-        if !matches!(message, IpcMessage::SessionStateChangedEvent(_)) {
+        if !matches!(
+            message,
+            IpcMessage::SessionStateChangedEvent(_)
+                | IpcMessage::NotificationEvent(_)
+                | IpcMessage::SessionListUpdate(_)
+        ) {
             break message;
         }
     };
@@ -266,7 +285,7 @@ pub async fn resume_session(
     token: &str,
     session_id: String,
 ) -> Result<agmux_proto::ResumeSessionResponse> {
-    let stream = UnixStream::connect(socket_path)
+    let stream = connect_ipc(socket_path)
         .await
         .context("Failed to connect to daemon")?;
     let mut framed = new_framed(stream);
@@ -294,7 +313,12 @@ pub async fn resume_session(
             .next()
             .await
             .context("Connection closed during resume request")??;
-        if !matches!(message, IpcMessage::SessionStateChangedEvent(_)) {
+        if !matches!(
+            message,
+            IpcMessage::SessionStateChangedEvent(_)
+                | IpcMessage::NotificationEvent(_)
+                | IpcMessage::SessionListUpdate(_)
+        ) {
             break message;
         }
     };
@@ -311,7 +335,7 @@ pub async fn remove_session(
     session_id: String,
     force: bool,
 ) -> Result<agmux_proto::RemoveSessionResponse> {
-    let stream = UnixStream::connect(socket_path)
+    let stream = connect_ipc(socket_path)
         .await
         .context("Failed to connect to daemon")?;
     let mut framed = new_framed(stream);
@@ -341,7 +365,9 @@ pub async fn remove_session(
             .context("Connection closed during removal")??
         {
             IpcMessage::RemoveSessionResponse(response) => return Ok(response),
-            IpcMessage::SessionStateChangedEvent(_) => continue,
+            IpcMessage::SessionStateChangedEvent(_)
+            | IpcMessage::NotificationEvent(_)
+            | IpcMessage::SessionListUpdate(_) => continue,
             other => bail!("Unexpected removal response: {other:?}"),
         }
     }
@@ -353,7 +379,7 @@ pub async fn get_diff(
     token: &str,
     request: agmux_proto::GetDiffRequest,
 ) -> Result<Vec<agmux_proto::FileDiff>> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -381,7 +407,9 @@ pub async fn get_diff(
                 }
                 return Ok(response.files);
             }
-            IpcMessage::SessionStateChangedEvent(_) => continue,
+            IpcMessage::SessionStateChangedEvent(_)
+            | IpcMessage::NotificationEvent(_)
+            | IpcMessage::SessionListUpdate(_) => continue,
             other => bail!("Unexpected diff response: {other:?}"),
         }
     }
@@ -393,7 +421,7 @@ pub async fn review_request(
     token: &str,
     request: IpcMessage,
 ) -> Result<IpcMessage> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -414,7 +442,12 @@ pub async fn review_request(
             .next()
             .await
             .context("Connection closed during review request")??;
-        if !matches!(message, IpcMessage::SessionStateChangedEvent(_)) {
+        if !matches!(
+            message,
+            IpcMessage::SessionStateChangedEvent(_)
+                | IpcMessage::NotificationEvent(_)
+                | IpcMessage::SessionListUpdate(_)
+        ) {
             return Ok(message);
         }
     }
@@ -428,7 +461,7 @@ pub async fn acquire_lock(
     session_id: String,
     wait: bool,
 ) -> Result<agmux_proto::AcquireLockResponse> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -459,7 +492,9 @@ pub async fn acquire_lock(
             .context("Connection closed waiting for lock response")??
         {
             IpcMessage::AcquireLockResponse(resp) => return Ok(resp),
-            IpcMessage::SessionStateChangedEvent(_) => continue,
+            IpcMessage::SessionStateChangedEvent(_)
+            | IpcMessage::NotificationEvent(_)
+            | IpcMessage::SessionListUpdate(_) => continue,
             other => bail!("Unexpected response: {other:?}"),
         }
     }
@@ -472,7 +507,7 @@ pub async fn release_lock(
     lock_name: String,
     session_id: String,
 ) -> Result<agmux_proto::ReleaseLockResponse> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -502,7 +537,9 @@ pub async fn release_lock(
             .context("Connection closed waiting for lock release response")??
         {
             IpcMessage::ReleaseLockResponse(resp) => return Ok(resp),
-            IpcMessage::SessionStateChangedEvent(_) => continue,
+            IpcMessage::SessionStateChangedEvent(_)
+            | IpcMessage::NotificationEvent(_)
+            | IpcMessage::SessionListUpdate(_) => continue,
             other => bail!("Unexpected response: {other:?}"),
         }
     }
@@ -510,7 +547,7 @@ pub async fn release_lock(
 
 /// Request active lock list over authenticated IPC.
 pub async fn list_locks(socket_path: &Path, token: &str) -> Result<agmux_proto::ListLocksResponse> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -537,7 +574,9 @@ pub async fn list_locks(socket_path: &Path, token: &str) -> Result<agmux_proto::
             .context("Connection closed waiting for lock list response")??
         {
             IpcMessage::ListLocksResponse(resp) => return Ok(resp),
-            IpcMessage::SessionStateChangedEvent(_) => continue,
+            IpcMessage::SessionStateChangedEvent(_)
+            | IpcMessage::NotificationEvent(_)
+            | IpcMessage::SessionListUpdate(_) => continue,
             other => bail!("Unexpected response: {other:?}"),
         }
     }
@@ -606,7 +645,7 @@ pub async fn reserve_files(
     session_id: String,
     paths: Vec<String>,
 ) -> Result<agmux_proto::ReserveFilesResponse> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -633,7 +672,9 @@ pub async fn reserve_files(
             .context("Connection closed waiting for reserve response")??
         {
             IpcMessage::ReserveFilesResponse(resp) => return Ok(resp),
-            IpcMessage::SessionStateChangedEvent(_) => continue,
+            IpcMessage::SessionStateChangedEvent(_)
+            | IpcMessage::NotificationEvent(_)
+            | IpcMessage::SessionListUpdate(_) => continue,
             other => bail!("Unexpected response: {other:?}"),
         }
     }
@@ -646,7 +687,7 @@ pub async fn release_files(
     session_id: String,
     paths: Vec<String>,
 ) -> Result<agmux_proto::ReleaseFilesResponse> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -673,7 +714,9 @@ pub async fn release_files(
             .context("Connection closed waiting for release response")??
         {
             IpcMessage::ReleaseFilesResponse(resp) => return Ok(resp),
-            IpcMessage::SessionStateChangedEvent(_) => continue,
+            IpcMessage::SessionStateChangedEvent(_)
+            | IpcMessage::NotificationEvent(_)
+            | IpcMessage::SessionListUpdate(_) => continue,
             other => bail!("Unexpected response: {other:?}"),
         }
     }
@@ -684,7 +727,7 @@ pub async fn list_reservations(
     socket_path: &Path,
     token: &str,
 ) -> Result<agmux_proto::ListReservationsResponse> {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -711,7 +754,9 @@ pub async fn list_reservations(
             .context("Connection closed waiting for reservations list")??
         {
             IpcMessage::ListReservationsResponse(resp) => return Ok(resp),
-            IpcMessage::SessionStateChangedEvent(_) => continue,
+            IpcMessage::SessionStateChangedEvent(_)
+            | IpcMessage::NotificationEvent(_)
+            | IpcMessage::SessionListUpdate(_) => continue,
             other => bail!("Unexpected response: {other:?}"),
         }
     }
@@ -729,7 +774,7 @@ pub async fn watch_events<F>(
 where
     F: FnMut(agmux_proto::WatchEventFrame) -> Result<bool>,
 {
-    let mut framed = new_framed(UnixStream::connect(socket_path).await?);
+    let mut framed = new_framed(connect_ipc(socket_path).await?);
     framed
         .send(IpcMessage::HandshakeRequest(HandshakeRequest {
             client_version: env!("CARGO_PKG_VERSION").into(),
@@ -764,9 +809,290 @@ where
                     break;
                 }
             }
-            IpcMessage::SessionStateChangedEvent(_) => continue,
+            IpcMessage::SessionStateChangedEvent(_)
+            | IpcMessage::NotificationEvent(_)
+            | IpcMessage::SessionListUpdate(_) => continue,
             other => bail!("Unexpected frame in watch stream: {other:?}"),
         }
     }
     Ok(())
+}
+
+/// Create a Kanban task over authenticated IPC.
+pub async fn create_task(
+    socket_path: &Path,
+    token: &str,
+    task_id: String,
+    title: String,
+    description: String,
+) -> Result<agmux_proto::CreateTaskResponse> {
+    match review_request(
+        socket_path,
+        token,
+        IpcMessage::CreateTaskRequest(agmux_proto::CreateTaskRequest {
+            task_id,
+            title,
+            description,
+        }),
+    )
+    .await?
+    {
+        IpcMessage::CreateTaskResponse(resp) => Ok(resp),
+        other => bail!("Unexpected response: {other:?}"),
+    }
+}
+
+/// List Kanban tasks over authenticated IPC.
+pub async fn list_tasks(
+    socket_path: &Path,
+    token: &str,
+    status: Option<String>,
+) -> Result<agmux_proto::ListTasksResponse> {
+    match review_request(
+        socket_path,
+        token,
+        IpcMessage::ListTasksRequest(agmux_proto::ListTasksRequest { status }),
+    )
+    .await?
+    {
+        IpcMessage::ListTasksResponse(resp) => Ok(resp),
+        other => bail!("Unexpected response: {other:?}"),
+    }
+}
+
+/// Claim a Kanban task over authenticated IPC.
+pub async fn claim_task(
+    socket_path: &Path,
+    token: &str,
+    task_id: String,
+    session_id: String,
+) -> Result<agmux_proto::ClaimTaskResponse> {
+    match review_request(
+        socket_path,
+        token,
+        IpcMessage::ClaimTaskRequest(agmux_proto::ClaimTaskRequest {
+            task_id,
+            session_id,
+        }),
+    )
+    .await?
+    {
+        IpcMessage::ClaimTaskResponse(resp) => Ok(resp),
+        other => bail!("Unexpected response: {other:?}"),
+    }
+}
+
+/// Finish a Kanban task over authenticated IPC.
+pub async fn finish_task(
+    socket_path: &Path,
+    token: &str,
+    task_id: String,
+    session_id: String,
+) -> Result<agmux_proto::FinishTaskResponse> {
+    match review_request(
+        socket_path,
+        token,
+        IpcMessage::FinishTaskRequest(agmux_proto::FinishTaskRequest {
+            task_id,
+            session_id,
+        }),
+    )
+    .await?
+    {
+        IpcMessage::FinishTaskResponse(resp) => Ok(resp),
+        other => bail!("Unexpected response: {other:?}"),
+    }
+}
+
+/// Release a Kanban task over authenticated IPC.
+pub async fn release_task(
+    socket_path: &Path,
+    token: &str,
+    task_id: String,
+    session_id: String,
+) -> Result<agmux_proto::ReleaseTaskResponse> {
+    match review_request(
+        socket_path,
+        token,
+        IpcMessage::ReleaseTaskRequest(agmux_proto::ReleaseTaskRequest {
+            task_id,
+            session_id,
+        }),
+    )
+    .await?
+    {
+        IpcMessage::ReleaseTaskResponse(resp) => Ok(resp),
+        other => bail!("Unexpected response: {other:?}"),
+    }
+}
+
+/// Post a structured worker report over authenticated IPC.
+pub async fn post_report(
+    socket_path: &Path,
+    token: &str,
+    task_id: String,
+    session_id: String,
+    summary: String,
+    pr_url: Option<String>,
+    commit_sha: Option<String>,
+) -> Result<agmux_proto::PostReportResponse> {
+    match review_request(
+        socket_path,
+        token,
+        IpcMessage::PostReportRequest(agmux_proto::PostReportRequest {
+            task_id,
+            session_id,
+            summary,
+            pr_url,
+            commit_sha,
+        }),
+    )
+    .await?
+    {
+        IpcMessage::PostReportResponse(resp) => Ok(resp),
+        other => bail!("Unexpected response: {other:?}"),
+    }
+}
+
+/// View structured worker reports for a task over authenticated IPC.
+pub async fn view_reports(
+    socket_path: &Path,
+    token: &str,
+    task_id: String,
+) -> Result<agmux_proto::ViewReportResponse> {
+    match review_request(
+        socket_path,
+        token,
+        IpcMessage::ViewReportRequest(agmux_proto::ViewReportRequest { task_id }),
+    )
+    .await?
+    {
+        IpcMessage::ViewReportResponse(resp) => Ok(resp),
+        other => bail!("Unexpected response: {other:?}"),
+    }
+}
+
+/// Request graceful daemon shutdown over authenticated IPC.
+pub async fn shutdown_daemon(
+    socket_path: &Path,
+    token: &str,
+) -> Result<agmux_proto::ShutdownDaemonResponse> {
+    match review_request(
+        socket_path,
+        token,
+        IpcMessage::ShutdownDaemonRequest(agmux_proto::ShutdownDaemonRequest {}),
+    )
+    .await?
+    {
+        IpcMessage::ShutdownDaemonResponse(resp) => Ok(resp),
+        other => bail!("Unexpected response: {other:?}"),
+    }
+}
+
+/// Request a PTY session resize over authenticated IPC.
+pub async fn resize_session(
+    socket_path: &Path,
+    token: &str,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<agmux_proto::ResizeSessionResponse> {
+    match review_request(
+        socket_path,
+        token,
+        IpcMessage::ResizeSessionRequest(agmux_proto::ResizeSessionRequest {
+            session_id,
+            cols,
+            rows,
+        }),
+    )
+    .await?
+    {
+        IpcMessage::ResizeSessionResponse(resp) => Ok(resp),
+        other => bail!("Unexpected response: {other:?}"),
+    }
+}
+
+/// Spawn an interactive shell sub-tab inheriting a parent session's CWD and PORT over authenticated IPC.
+pub async fn spawn_subtab(
+    socket_path: &Path,
+    token: &str,
+    parent_session_id: String,
+    subtab_id: String,
+    shell: Option<String>,
+) -> Result<agmux_proto::SpawnSubtabResponse> {
+    match review_request(
+        socket_path,
+        token,
+        IpcMessage::SpawnSubtabRequest(agmux_proto::SpawnSubtabRequest {
+            parent_session_id,
+            subtab_id,
+            shell,
+        }),
+    )
+    .await?
+    {
+        IpcMessage::SpawnSubtabResponse(resp) => Ok(resp),
+        other => bail!("Unexpected response: {other:?}"),
+    }
+}
+
+/// Emit a Tier 1 deterministic CLI hook event (`working`, `permission_request`, `stop`) over authenticated IPC.
+pub async fn send_internal_hook(
+    socket_path: &Path,
+    token: &str,
+    session_id: String,
+    event: String,
+) -> Result<agmux_proto::InternalHookResponse> {
+    match review_request(
+        socket_path,
+        token,
+        IpcMessage::InternalHookRequest(agmux_proto::InternalHookRequest { session_id, event }),
+    )
+    .await?
+    {
+        IpcMessage::InternalHookResponse(resp) => Ok(resp),
+        other => bail!("Unexpected response: {other:?}"),
+    }
+}
+
+/// Federate and mount a remote daemon over authenticated IPC (`REQ-REMOTE-FEDERATION-SSH-001`).
+pub async fn connect_remote(
+    socket_path: &Path,
+    token: &str,
+    target: String,
+    remote_socket: Option<String>,
+    remote_token: Option<String>,
+) -> Result<agmux_proto::ConnectRemoteResponse> {
+    match review_request(
+        socket_path,
+        token,
+        IpcMessage::ConnectRemoteRequest(agmux_proto::ConnectRemoteRequest {
+            target,
+            remote_socket,
+            remote_token,
+        }),
+    )
+    .await?
+    {
+        IpcMessage::ConnectRemoteResponse(resp) => Ok(resp),
+        other => bail!("Unexpected response: {other:?}"),
+    }
+}
+
+/// List connected remote daemon host labels over authenticated IPC.
+pub async fn list_remotes(
+    socket_path: &Path,
+    token: &str,
+) -> Result<agmux_proto::ListRemotesResponse> {
+    match review_request(
+        socket_path,
+        token,
+        IpcMessage::ListRemotesRequest(agmux_proto::ListRemotesRequest {}),
+    )
+    .await?
+    {
+        IpcMessage::ListRemotesResponse(resp) => Ok(resp),
+        other => bail!("Unexpected response: {other:?}"),
+    }
 }

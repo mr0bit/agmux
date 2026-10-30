@@ -12,7 +12,11 @@ dependencies = [
  "anyhow",
  "clap",
  "futures-util",
+ "libc",
+ "portable-pty",
+ "serde",
  "serde_json",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "tracing",
@@ -81,11 +85,15 @@ dependencies = [
 name = "agmux-verification"
 version = "0.1.0"
 dependencies = [
+ "agmux-cli",
  "agmux-core",
+ "agmux-daemon",
  "agmux-proto",
  "agmux-tui",
+ "anyhow",
  "crossterm",
  "futures-util",
+ "libc",
  "ratatui",
  "rusqlite",
  "serde_json",

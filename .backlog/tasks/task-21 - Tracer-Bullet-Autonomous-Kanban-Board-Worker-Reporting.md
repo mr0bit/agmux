@@ -1,8 +1,10 @@
 ---
 id: TASK-21
 title: 'Tracer Bullet: Autonomous Kanban Board & Worker Reporting'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@codex'
+  - '@agy'
 created_date: '2026-10-29T01:25:00Z'
 labels:
   - tracer-bullet
@@ -27,8 +29,8 @@ Implements `REQ-ORCH-KANBAN-REPORT-005`: provides a shared SQLite-backed Kanban 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Kanban tasks managed with atomic claim, finish, and release operations in SQLite
-- [ ] #2 Structured reports with PR URL, commit SHA, and metrics attached to tasks
-- [ ] #3 CLI commands `agmux task` and `agmux report` supported over IPC
-- [ ] #4 Integration test asserts multi-agent task claiming, report posting, and status transitions
+- [x] #1 Kanban tasks managed with atomic claim, finish, and release operations in SQLite
+- [x] #2 Structured reports with PR URL, commit SHA, and metrics attached to tasks
+- [x] #3 CLI commands `agmux task` and `agmux report` supported over IPC
+- [x] #4 Integration test asserts multi-agent task claiming, report posting, and status transitions
 <!-- AC:END -->

@@ -80,7 +80,7 @@ fn freeze_and_resume_zstd_snapshot() {
     );
 
     // 3. Test explicit freeze of an active long-running session
-    let active_child = Command::new("target/debug/agmux")
+    let mut active_child = Command::new("target/debug/agmux")
         .env("AGMUX_SOCK", &socket)
         .env("AGMUX_AUTH_TOKEN_PATH", &token)
         .args([
@@ -149,6 +149,8 @@ fn freeze_and_resume_zstd_snapshot() {
     let decompressed_str = String::from_utf8_lossy(&decompressed);
     assert!(decompressed_str.contains("SNAPSHOT_MAGIC_PAYLOAD_456"));
 
+    let _ = active_child.kill();
+    let _ = active_child.wait();
     daemon.kill().unwrap();
     daemon.wait().unwrap();
     let _ = std::fs::remove_dir_all(root);

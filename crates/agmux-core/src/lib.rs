@@ -13,12 +13,12 @@ pub mod worktree_manager;
 
 use std::path::PathBuf;
 
-/// Default socket path resolution across Linux/macOS.
+/// Default socket path resolution across Linux/macOS/Windows.
 ///
 /// Priority:
 /// 1. `AGMUX_SOCK` environment variable if set.
-/// 2. `/tmp/agmux-$USER.sock` (or `/tmp/agmux-$UID.sock`).
-/// 3. Fallback to `/tmp/agmux-default.sock`.
+/// 2. `\\.\pipe\agmuxd-%USERNAME%` on Windows, or `/tmp/agmux-$USER.sock` on Unix.
+/// 3. Fallback to `/tmp/agmux-default.sock` or `\\.\pipe\agmuxd-default`.
 pub fn default_socket_path() -> PathBuf {
     if let Ok(val) = std::env::var("AGMUX_SOCK") {
         if !val.is_empty() {
@@ -26,11 +26,20 @@ pub fn default_socket_path() -> PathBuf {
         }
     }
 
-    let user = std::env::var("USER")
-        .or_else(|_| std::env::var("UID"))
-        .unwrap_or_else(|_| "default".to_string());
+    #[cfg(windows)]
+    {
+        let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".to_string());
+        PathBuf::from(format!(r"\\.\pipe\agmuxd-{user}"))
+    }
 
-    PathBuf::from(format!("/tmp/agmux-{user}.sock"))
+    #[cfg(not(windows))]
+    {
+        let user = std::env::var("USER")
+            .or_else(|_| std::env::var("UID"))
+            .unwrap_or_else(|_| "default".to_string());
+
+        PathBuf::from(format!("/tmp/agmux-{user}.sock"))
+    }
 }
 
 pub use auth::{
@@ -59,4 +68,18 @@ pub enum AgmuxError {
 
 pub mod fts_indexer;
 
+pub mod builtin_plugins;
+pub mod child_process_monitor;
+pub mod cli_detector;
 pub mod comment_tracker;
+pub mod debounce_timer;
+pub mod declarative_plugin;
+pub mod plugin_api;
+pub mod pty_resizer;
+pub mod session_tracker;
+pub mod shell_classifier;
+pub mod stuck_detector;
+pub mod subtab_spawner;
+pub mod tail_matcher;
+pub mod vt_parser;
+pub mod wsl_bridge;

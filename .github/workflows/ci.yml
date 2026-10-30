@@ -1,0 +1,165 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - 'feat/**'
+      - 'fix/**'
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Publish as GitHub Release'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  quality-gate:
+    name: Quality & Verification Gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Run .soul V-Cycle Traceability Check
+        run: node .soul/tools/v-cycle-checker.mjs
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify Formatting (cargo fmt)
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy Linter (cargo clippy)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build Debug Binaries for Integration Tests
+        run: cargo build --workspace --bins
+
+      - name: Run Test Suites (cargo test)
+        run: cargo test --workspace --verbose
+
+  build-executables:
+    name: Build (${{ matrix.platform.name }})
+    needs: quality-gate
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: Linux x86_64
+            artifact_slug: agmux-linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive_name: agmux-linux-x86_64.tar.gz
+          - name: Windows x86_64
+            artifact_slug: agmux-windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive_name: agmux-windows-x86_64.zip
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install musl toolchain (Linux)
+        if: matrix.platform.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.target }}
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform.target }}
+
+      - name: Build Release Executables
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+        run: cargo build --release --workspace --bins --target ${{ matrix.platform.target }}
+
+      - name: Package Linux Binaries
+        if: runner.os == 'Linux'
+        run: |
+          cd target/${{ matrix.platform.target }}/release
+          file agmux agmuxd
+          strip agmux agmuxd
+          tar -czvf ../../../${{ matrix.platform.archive_name }} agmux agmuxd
+          cd ../../..
+          sha256sum ${{ matrix.platform.archive_name }} > ${{ matrix.platform.archive_name }}.sha256
+
+      - name: Package Windows Binaries
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = "${{ matrix.platform.archive_name }}"
+          Compress-Archive -Path "target/${{ matrix.platform.target }}/release/agmux.exe", "target/${{ matrix.platform.target }}/release/agmuxd.exe" -DestinationPath $archive
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+          "$hash  $archive" | Out-File -Encoding ascii "$archive.sha256"
+
+      - name: Upload Executable Artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.platform.artifact_slug }}
+          path: |
+            ${{ matrix.platform.archive_name }}
+            ${{ matrix.platform.archive_name }}.sha256
+          retention-days: 30
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-executables
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List downloaded release assets
+        run: ls -la release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            release-assets/agmux-linux-x86_64.tar.gz
+            release-assets/agmux-linux-x86_64.tar.gz.sha256
+            release-assets/agmux-windows-x86_64.zip
+            release-assets/agmux-windows-x86_64.zip.sha256
+          generate_release_notes: true

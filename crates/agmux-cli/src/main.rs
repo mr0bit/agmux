@@ -30,6 +30,16 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Manage shared Kanban tasks.
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
+    /// Manage structured worker completion reports.
+    Report {
+        #[command(subcommand)]
+        command: ReportCommand,
+    },
     /// Manage named resource locks.
     Lock {
         #[command(subcommand)]
@@ -135,6 +145,65 @@ enum Commands {
         /// Session identifier to inspect
         session_id: String,
     },
+    /// Emit a Tier 1 deterministic lifecycle hook event (`working`, `permission_request`, `stop`).
+    InternalHook {
+        /// Session identifier emitting the hook.
+        #[arg(long)]
+        session: Option<String>,
+        /// Hook event type (`working`, `permission_request`, `stop`).
+        #[arg(long)]
+        event: String,
+    },
+    /// Connect to a remote host over SSH or Tailscale (`agmux connect ssh://user@box`).
+    Connect {
+        /// Remote target URI (e.g. `ssh://user@box`).
+        target: String,
+        /// Optional forwarded bridge socket path.
+        #[arg(long)]
+        remote_socket: Option<String>,
+        /// Optional remote daemon authentication token.
+        #[arg(long)]
+        remote_token: Option<String>,
+    },
+    /// Manage federated remote hosts (`agmux remote connect` / `agmux remote list`).
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommand,
+    },
+    /// Run environment diagnostics (`REQ-REMOTE-DOCTOR-REPAIR-004`).
+    Doctor {
+        /// Output diagnostic report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manage or repair the local daemon environment (`agmux daemon repair`).
+    Daemon {
+        #[command(subcommand)]
+        command: DaemonCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum RemoteCommand {
+    /// Connect to a remote host and mount its sessions.
+    Connect {
+        target: String,
+        #[arg(long)]
+        socket: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// List connected remote host labels.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum DaemonCommand {
+    /// Repair broken `daemon.token` permissions (`0600`) and remove stale lockfiles.
+    Repair,
 }
 
 #[derive(Subcommand, Debug)]
@@ -192,6 +261,82 @@ enum LockCommand {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum TaskCommand {
+    /// List Kanban tasks.
+    List {
+        /// Filter by status (todo, in_progress, done).
+        #[arg(long)]
+        status: Option<String>,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a new Kanban task.
+    Create {
+        /// Task identifier (e.g. T-101).
+        task_id: String,
+        /// Task title.
+        title: String,
+        /// Optional task description.
+        #[arg(long, default_value = "")]
+        description: String,
+    },
+    /// Claim a Kanban task.
+    Claim {
+        /// Task identifier.
+        task_id: String,
+        /// Session ID claiming the task.
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// Mark a Kanban task as finished.
+    Finish {
+        /// Task identifier.
+        task_id: String,
+        /// Session ID finishing the task.
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// Release a claimed Kanban task back to todo.
+    Release {
+        /// Task identifier.
+        task_id: String,
+        /// Session ID releasing the task.
+        #[arg(long)]
+        session: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ReportCommand {
+    /// Post a structured worker completion report.
+    Post {
+        /// Task identifier.
+        task_id: String,
+        /// Structured summary of work completed.
+        #[arg(long)]
+        summary: String,
+        /// Optional pull request URL.
+        #[arg(long, alias = "pr")]
+        pr_url: Option<String>,
+        /// Optional head commit SHA.
+        #[arg(long, alias = "sha")]
+        commit_sha: Option<String>,
+        /// Session ID posting the report.
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// View structured worker reports for a task.
+    View {
+        /// Task identifier.
+        task_id: String,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -224,6 +369,61 @@ async fn main() -> Result<()> {
         .token_path
         .unwrap_or_else(agmux_core::default_token_path);
 
+    if let Some(Commands::Doctor { json }) = cli.command {
+        let db_path = if std::env::var_os("AGMUX_DB_PATH").is_some()
+            || socket_path == agmux_core::default_socket_path()
+        {
+            agmux_core::storage_engine::default_database_path()
+        } else {
+            socket_path.with_extension("db")
+        };
+        let active_remotes = if let Ok(tok) = std::fs::read_to_string(&token_path) {
+            agmux_cli::ipc_client::list_remotes(&socket_path, tok.trim())
+                .await
+                .map(|r| r.remotes)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let report = agmux_cli::doctor::run_doctor(&token_path, &db_path, active_remotes);
+        if json {
+            println!("{}", serde_json::to_string(&report)?);
+        } else {
+            println!(
+                "Doctor status: {}",
+                if report.healthy {
+                    "HEALTHY"
+                } else {
+                    "ISSUES_FOUND"
+                }
+            );
+            println!("PTY available: {}", report.pty_available);
+            println!(
+                "Token permissions OK: {} ({:04o})",
+                report.token_permissions_ok, report.token_mode
+            );
+            println!("DB accessible: {}", report.db_accessible);
+            for issue in &report.issues {
+                println!("ISSUE: {issue}");
+            }
+        }
+        if !report.healthy {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    if let Some(Commands::Daemon {
+        command: DaemonCommand::Repair,
+    }) = cli.command
+    {
+        let actions = agmux_cli::doctor::repair_daemon_env(&token_path, &socket_path)?;
+        for action in actions {
+            println!("{action}");
+        }
+        return Ok(());
+    }
+
     // 1. Ensure daemon is running (auto-spawn if not alive)
     ensure_daemon_running(&socket_path, &token_path).await?;
 
@@ -233,6 +433,172 @@ async fn main() -> Result<()> {
 
     // 3. Dispatch subcommand
     match cli.command {
+        Some(Commands::Task { command }) => match command {
+            TaskCommand::List { status, json } => {
+                let resp = agmux_cli::ipc_client::list_tasks(&socket_path, &token, status).await?;
+                if let Some(err) = resp.error {
+                    anyhow::bail!("{err}");
+                }
+                if json {
+                    println!("{}", serde_json::to_string(&resp.tasks)?);
+                } else if resp.tasks.is_empty() {
+                    println!("No tasks found");
+                } else {
+                    println!(
+                        "{:<16} {:<16} {:<20} TITLE",
+                        "TASK ID", "STATUS", "CLAIMED BY"
+                    );
+                    for t in resp.tasks {
+                        println!(
+                            "{:<16} {:<16} {:<20} {}",
+                            t.id,
+                            t.status,
+                            t.claimed_by.as_deref().unwrap_or("-"),
+                            t.title
+                        );
+                    }
+                }
+            }
+            TaskCommand::Create {
+                task_id,
+                title,
+                description,
+            } => {
+                let resp = agmux_cli::ipc_client::create_task(
+                    &socket_path,
+                    &token,
+                    task_id.clone(),
+                    title,
+                    description,
+                )
+                .await?;
+                if resp.success {
+                    println!("Created task '{task_id}'");
+                } else {
+                    anyhow::bail!(
+                        "{}",
+                        resp.error.unwrap_or_else(|| "Failed to create task".into())
+                    );
+                }
+            }
+            TaskCommand::Claim { task_id, session } => {
+                let sid = session
+                    .or_else(|| std::env::var("AGMUX_SESSION_ID").ok())
+                    .unwrap_or_else(|| format!("cli-{}", std::process::id()));
+                let resp = agmux_cli::ipc_client::claim_task(
+                    &socket_path,
+                    &token,
+                    task_id.clone(),
+                    sid.clone(),
+                )
+                .await?;
+                if resp.success {
+                    println!("Task '{task_id}' claimed by session '{sid}'");
+                } else {
+                    anyhow::bail!(
+                        "{}",
+                        resp.error.unwrap_or_else(|| "Failed to claim task".into())
+                    );
+                }
+            }
+            TaskCommand::Finish { task_id, session } => {
+                let sid = session
+                    .or_else(|| std::env::var("AGMUX_SESSION_ID").ok())
+                    .unwrap_or_else(|| format!("cli-{}", std::process::id()));
+                let resp = agmux_cli::ipc_client::finish_task(
+                    &socket_path,
+                    &token,
+                    task_id.clone(),
+                    sid.clone(),
+                )
+                .await?;
+                if resp.success {
+                    println!("Task '{task_id}' finished by session '{sid}'");
+                } else {
+                    anyhow::bail!(
+                        "{}",
+                        resp.error.unwrap_or_else(|| "Failed to finish task".into())
+                    );
+                }
+            }
+            TaskCommand::Release { task_id, session } => {
+                let sid = session
+                    .or_else(|| std::env::var("AGMUX_SESSION_ID").ok())
+                    .unwrap_or_else(|| format!("cli-{}", std::process::id()));
+                let resp = agmux_cli::ipc_client::release_task(
+                    &socket_path,
+                    &token,
+                    task_id.clone(),
+                    sid.clone(),
+                )
+                .await?;
+                if resp.success {
+                    println!("Task '{task_id}' released by session '{sid}'");
+                } else {
+                    anyhow::bail!(
+                        "{}",
+                        resp.error
+                            .unwrap_or_else(|| "Failed to release task".into())
+                    );
+                }
+            }
+        },
+        Some(Commands::Report { command }) => match command {
+            ReportCommand::Post {
+                task_id,
+                summary,
+                pr_url,
+                commit_sha,
+                session,
+            } => {
+                let sid = session
+                    .or_else(|| std::env::var("AGMUX_SESSION_ID").ok())
+                    .unwrap_or_else(|| format!("cli-{}", std::process::id()));
+                let resp = agmux_cli::ipc_client::post_report(
+                    &socket_path,
+                    &token,
+                    task_id.clone(),
+                    sid.clone(),
+                    summary,
+                    pr_url,
+                    commit_sha,
+                )
+                .await?;
+                if resp.success {
+                    println!("Report posted for task '{task_id}' by session '{sid}'");
+                } else {
+                    anyhow::bail!(
+                        "{}",
+                        resp.error.unwrap_or_else(|| "Failed to post report".into())
+                    );
+                }
+            }
+            ReportCommand::View { task_id, json } => {
+                let resp =
+                    agmux_cli::ipc_client::view_reports(&socket_path, &token, task_id.clone())
+                        .await?;
+                if let Some(err) = resp.error {
+                    anyhow::bail!("{err}");
+                }
+                if json {
+                    println!("{}", serde_json::to_string(&resp.reports)?);
+                } else if resp.reports.is_empty() {
+                    println!("No reports found for task '{task_id}'");
+                } else {
+                    for r in resp.reports {
+                        println!(
+                            "Task: {}\nSession: {}\nSummary: {}\nPR URL: {}\nCommit SHA: {}\nCreated At: {}\n---",
+                            r.task_id,
+                            r.session_id,
+                            r.summary,
+                            r.pr_url.as_deref().unwrap_or("-"),
+                            r.commit_sha.as_deref().unwrap_or("-"),
+                            r.created_at
+                        );
+                    }
+                }
+            }
+        },
         Some(Commands::Send { target_id, message }) => {
             let request =
                 agmux_proto::IpcMessage::SendMessageRequest(agmux_proto::SendMessageRequest {
@@ -255,7 +621,7 @@ async fn main() -> Result<()> {
             }
         }
         Some(Commands::Input { session_id, text }) => {
-            let stream = tokio::net::UnixStream::connect(&socket_path)
+            let stream = agmux_proto::connect_ipc(&socket_path)
                 .await
                 .context("Failed to connect to daemon")?;
             let mut framed = agmux_proto::new_framed(stream);
@@ -680,6 +1046,101 @@ async fn main() -> Result<()> {
                 eprintln!("Failed to inspect snapshot for session {}", session_id);
                 std::process::exit(1);
             }
+        }
+        Some(Commands::InternalHook { session, event }) => {
+            let sid = session
+                .or_else(|| std::env::var("AGMUX_SESSION_ID").ok())
+                .unwrap_or_else(|| format!("cli-{}", std::process::id()));
+            let resp = agmux_cli::ipc_client::send_internal_hook(
+                &socket_path,
+                &token,
+                sid.clone(),
+                event.clone(),
+            )
+            .await?;
+            if resp.success {
+                println!(
+                    "Hook '{}' applied to session '{}' -> {}",
+                    event, sid, resp.new_state
+                );
+            } else {
+                anyhow::bail!(
+                    "{}",
+                    resp.error
+                        .unwrap_or_else(|| "Failed to apply internal hook".into())
+                );
+            }
+        }
+        Some(Commands::Connect {
+            target,
+            remote_socket,
+            remote_token,
+        }) => {
+            let resp = agmux_cli::ipc_client::connect_remote(
+                &socket_path,
+                &token,
+                target,
+                remote_socket,
+                remote_token,
+            )
+            .await?;
+            if resp.success {
+                println!(
+                    "Connected to remote '{}' ({} mounted session(s))",
+                    resp.host_label,
+                    resp.mounted_sessions.len()
+                );
+            } else {
+                anyhow::bail!(
+                    "{}",
+                    resp.error
+                        .unwrap_or_else(|| "Failed to connect remote".into())
+                );
+            }
+        }
+        Some(Commands::Remote { command }) => match command {
+            RemoteCommand::Connect {
+                target,
+                socket,
+                token: rem_tok,
+            } => {
+                let resp = agmux_cli::ipc_client::connect_remote(
+                    &socket_path,
+                    &token,
+                    target,
+                    socket,
+                    rem_tok,
+                )
+                .await?;
+                if resp.success {
+                    println!(
+                        "Connected to remote '{}' ({} mounted session(s))",
+                        resp.host_label,
+                        resp.mounted_sessions.len()
+                    );
+                } else {
+                    anyhow::bail!(
+                        "{}",
+                        resp.error
+                            .unwrap_or_else(|| "Failed to connect remote".into())
+                    );
+                }
+            }
+            RemoteCommand::List { json } => {
+                let resp = agmux_cli::ipc_client::list_remotes(&socket_path, &token).await?;
+                if json {
+                    println!("{}", serde_json::to_string(&resp.remotes)?);
+                } else if resp.remotes.is_empty() {
+                    println!("No connected remotes");
+                } else {
+                    for r in resp.remotes {
+                        println!("{r}");
+                    }
+                }
+            }
+        },
+        Some(Commands::Doctor { .. }) | Some(Commands::Daemon { .. }) => {
+            unreachable!("handled before daemon startup")
         }
     }
 

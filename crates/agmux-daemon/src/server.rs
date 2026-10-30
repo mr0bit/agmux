@@ -6,12 +6,12 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::{UnixListener, UnixStream};
 
 use agmux_core::pty_manager::PtyManager;
 use agmux_proto::{
-    HandshakeResponse, IpcMessage, ListSessionsResponse, SearchLogsResponse, SessionExitEvent,
-    SessionInfo, SessionStateChangedEvent, SpawnSessionResponse, TerminalOutputFrame, new_framed,
+    IpcListener, IpcMessage, IpcServerStream, ListSessionsResponse, SearchLogsResponse,
+    SessionExitEvent, SessionInfo, SessionStateChangedEvent, SpawnSessionResponse,
+    TerminalOutputFrame, connect_ipc, new_framed,
 };
 
 pub use agmux_core::default_socket_path;
@@ -35,9 +35,26 @@ impl DaemonServer {
 
     /// Run the IPC listener loop.
     pub async fn run(self) -> Result<()> {
+        #[cfg(unix)]
+        if let Some(parent) = self.socket_path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create socket dir {}", parent.display()))?;
+        }
+
+        // Acquire single-instance lockfile BEFORE touching or removing any socket file!
+        let lock_path = crate::instance_lock::InstanceLock::lock_path_for_socket(&self.socket_path);
+        let _instance_lock =
+            crate::instance_lock::InstanceLock::acquire(&lock_path).with_context(|| {
+                format!(
+                    "Failed to acquire single-instance lock at {}",
+                    lock_path.display()
+                )
+            })?;
+
+        #[cfg(unix)]
         if self.socket_path.exists() {
             // Check if another daemon is already responding
-            if UnixStream::connect(&self.socket_path).await.is_ok() {
+            if connect_ipc(&self.socket_path).await.is_ok() {
                 anyhow::bail!(
                     "Active daemon already running on socket {}",
                     self.socket_path.display()
@@ -47,19 +64,35 @@ impl DaemonServer {
             let _ = fs::remove_file(&self.socket_path);
         }
 
-        if let Some(parent) = self.socket_path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create socket dir {}", parent.display()))?;
+        #[cfg(windows)]
+        {
+            if connect_ipc(&self.socket_path).await.is_ok() {
+                anyhow::bail!(
+                    "Active daemon already running on pipe {}",
+                    self.socket_path.display()
+                );
+            }
         }
 
-        let storage = Arc::new(std::sync::Mutex::new(
-            agmux_core::storage_engine::StorageEngine::open(
-                &agmux_core::storage_engine::default_database_path(),
-            )
-            .context("Failed to open session database")?,
-        ));
+        let db_path = if std::env::var_os("AGMUX_DB_PATH").is_some()
+            || self.socket_path == agmux_core::default_socket_path()
+        {
+            agmux_core::storage_engine::default_database_path()
+        } else {
+            self.socket_path.with_extension("db")
+        };
 
-        let listener = UnixListener::bind(&self.socket_path)
+        let storage_engine = agmux_core::storage_engine::StorageEngine::open(&db_path)
+            .context("Failed to open session database")?;
+        if let Ok(recovered) =
+            crate::recovery_manager::RecoveryManager::recover_orphaned_sessions(&storage_engine)
+            && !recovered.is_empty()
+        {
+            tracing::info!("Recovered {} orphaned session(s) as DEAD", recovered.len());
+        }
+        let storage = Arc::new(std::sync::Mutex::new(storage_engine));
+
+        let listener = IpcListener::bind(&self.socket_path)
             .with_context(|| format!("Failed to bind socket {}", self.socket_path.display()))?;
 
         #[cfg(unix)]
@@ -82,53 +115,172 @@ impl DaemonServer {
         let file_reservations =
             crate::file_reservation_table::FileReservationTable::new(storage.clone());
         let journal = crate::journal_watcher::JournalWatcher::new(storage.clone());
+        let kanban_manager =
+            crate::kanban_manager::KanbanManager::with_journal(storage.clone(), journal.clone());
+        let shutdown_coordinator =
+            crate::shutdown_coordinator::ShutdownCoordinator::new(pty_manager.clone());
+        let config_watcher = crate::config_watcher::ConfigWatcher::new(
+            crate::config_watcher::ConfigWatcher::default_config_path(),
+        );
+        let _config_watch_task = config_watcher.spawn_watch_loop(journal.clone());
+        let subscription_manager =
+            crate::subscription_manager::SubscriptionManager::new(pty_manager.clone());
+        let event_broadcaster = crate::event_broadcaster::EventBroadcaster::new(storage.clone());
+        let pty_resizer = agmux_core::pty_resizer::PtyResizer::new(pty_manager.clone());
+        let subtab_spawner = agmux_core::subtab_spawner::SubtabSpawner::new(pty_manager.clone());
+        let hook_listener = crate::hook_listener::HookListener::new(
+            storage.clone(),
+            events.clone(),
+            journal.clone(),
+            event_broadcaster.clone(),
+        );
+        let ssh_federation = crate::ssh_federation::SshFederationManager::new();
+        let network_auth = crate::network_auth::NetworkAuthValidator::new(auth_token.as_str());
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+
+        let ctx = DaemonContext {
+            pty_manager,
+            expected_token: auth_token,
+            storage,
+            events,
+            lock_manager,
+            file_reservations,
+            journal,
+            kanban_manager,
+            shutdown_coordinator: shutdown_coordinator.clone(),
+            config_watcher,
+            subscription_manager,
+            event_broadcaster,
+            pty_resizer,
+            subtab_spawner,
+            hook_listener,
+            ssh_federation,
+            network_auth,
+            shutdown_tx,
+        };
+
+        #[cfg(unix)]
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        #[cfg(unix)]
+        let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
 
         loop {
-            match listener.accept().await {
-                Ok((stream, _addr)) => {
-                    let pty_mgr = pty_manager.clone();
-                    let expected_token = auth_token.clone();
-                    let storage = storage.clone();
-                    let events = events.clone();
-                    let lock_manager = lock_manager.clone();
-                    let file_reservations = file_reservations.clone();
-                    let journal = journal.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_client(
-                            stream,
-                            pty_mgr,
-                            expected_token,
-                            storage,
-                            events,
-                            lock_manager,
-                            file_reservations,
-                            journal,
-                        )
-                        .await
-                        {
-                            tracing::debug!("Client session ended: {e:#}");
+            #[cfg(unix)]
+            tokio::select! {
+                accept_res = listener.accept_stream() => {
+                    match accept_res {
+                        Ok(stream) => {
+                            let ctx = ctx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = handle_client(stream, ctx).await {
+                                    tracing::debug!("Client session ended: {e:#}");
+                                }
+                            });
                         }
-                    });
+                        Err(e) => {
+                            tracing::error!("Error accepting IPC client connection: {e}");
+                        }
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("Error accepting IPC client connection: {e}");
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        break;
+                    }
+                }
+                _ = sigterm.recv() => {
+                    let _ = shutdown_coordinator.shutdown_all().await;
+                    break;
+                }
+                _ = sighup.recv() => {
+                    let _ = shutdown_coordinator.shutdown_all().await;
+                    break;
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    let _ = shutdown_coordinator.shutdown_all().await;
+                    break;
+                }
+            }
+
+            #[cfg(not(unix))]
+            tokio::select! {
+                accept_res = listener.accept_stream() => {
+                    match accept_res {
+                        Ok(stream) => {
+                            let ctx = ctx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = handle_client(stream, ctx).await {
+                                    tracing::debug!("Client session ended: {e:#}");
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!("Error accepting IPC client connection: {e}");
+                        }
+                    }
+                }
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        break;
+                    }
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    let _ = shutdown_coordinator.shutdown_all().await;
+                    break;
                 }
             }
         }
+
+        Ok(())
     }
 }
 
+/// Shared daemon service contexts passed to client session handlers.
+#[derive(Clone)]
+pub struct DaemonContext {
+    pub pty_manager: PtyManager,
+    pub expected_token: Arc<String>,
+    pub storage: Arc<std::sync::Mutex<agmux_core::storage_engine::StorageEngine>>,
+    pub events: tokio::sync::broadcast::Sender<SessionStateChangedEvent>,
+    pub lock_manager: crate::lock_manager::LockManager,
+    pub file_reservations: crate::file_reservation_table::FileReservationTable,
+    pub journal: crate::journal_watcher::JournalWatcher,
+    pub kanban_manager: crate::kanban_manager::KanbanManager,
+    pub shutdown_coordinator: crate::shutdown_coordinator::ShutdownCoordinator,
+    pub config_watcher: crate::config_watcher::ConfigWatcher,
+    pub subscription_manager: crate::subscription_manager::SubscriptionManager,
+    pub event_broadcaster: crate::event_broadcaster::EventBroadcaster,
+    pub pty_resizer: agmux_core::pty_resizer::PtyResizer,
+    pub subtab_spawner: agmux_core::subtab_spawner::SubtabSpawner,
+    pub hook_listener: crate::hook_listener::HookListener,
+    pub ssh_federation: crate::ssh_federation::SshFederationManager,
+    pub network_auth: crate::network_auth::NetworkAuthValidator,
+    pub shutdown_tx: tokio::sync::watch::Sender<bool>,
+}
+
 /// Process an individual client connection through handshake and session streaming.
-async fn handle_client(
-    stream: UnixStream,
-    pty_manager: PtyManager,
-    expected_token: Arc<String>,
-    storage: Arc<std::sync::Mutex<agmux_core::storage_engine::StorageEngine>>,
-    events: tokio::sync::broadcast::Sender<SessionStateChangedEvent>,
-    lock_manager: crate::lock_manager::LockManager,
-    file_reservations: crate::file_reservation_table::FileReservationTable,
-    journal: crate::journal_watcher::JournalWatcher,
-) -> Result<()> {
+async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()> {
+    let DaemonContext {
+        pty_manager,
+        expected_token: _,
+        storage,
+        events,
+        lock_manager,
+        file_reservations,
+        journal,
+        kanban_manager,
+        shutdown_coordinator,
+        config_watcher,
+        subscription_manager,
+        event_broadcaster,
+        pty_resizer,
+        subtab_spawner,
+        hook_listener,
+        ssh_federation,
+        network_auth,
+        shutdown_tx,
+    } = ctx;
+
     let framed = new_framed(stream);
     let (mut sink, mut reader) = framed.split();
 
@@ -141,23 +293,15 @@ async fn handle_client(
 
     match first_msg {
         IpcMessage::HandshakeRequest(req) => {
-            let is_valid = agmux_core::validate_token(&expected_token, &req.token);
-            if !is_valid {
-                let response = IpcMessage::HandshakeResponse(HandshakeResponse {
-                    success: false,
-                    daemon_version: env!("CARGO_PKG_VERSION").to_string(),
-                    error: Some("Unauthorized: invalid authentication token".to_string()),
-                });
-                let _ = sink.send(response).await;
+            let handshake_resp = network_auth.verify_handshake(&req);
+            if !handshake_resp.success {
+                let _ = sink
+                    .send(IpcMessage::HandshakeResponse(handshake_resp))
+                    .await;
                 anyhow::bail!("Client authentication failed: invalid token");
             }
 
-            let response = IpcMessage::HandshakeResponse(HandshakeResponse {
-                success: true,
-                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
-                error: None,
-            });
-            sink.send(response)
+            sink.send(IpcMessage::HandshakeResponse(handshake_resp))
                 .await
                 .context("Failed to send handshake response")?;
         }
@@ -178,21 +322,37 @@ async fn handle_client(
     });
 
     let mut event_rx = events.subscribe();
+    let mut bcast_rx = event_broadcaster.subscribe();
     let event_out = out_tx.clone();
     let event_task = tokio::spawn(async move {
         loop {
-            match event_rx.recv().await {
-                Ok(event) => {
-                    if event_out
-                        .send(IpcMessage::SessionStateChangedEvent(event))
-                        .await
-                        .is_err()
-                    {
-                        break;
+            tokio::select! {
+                res = event_rx.recv() => {
+                    match res {
+                        Ok(event) => {
+                            if event_out
+                                .send(IpcMessage::SessionStateChangedEvent(event))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
                     }
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(_) => break,
+                res = bcast_rx.recv() => {
+                    match res {
+                        Ok(msg) => {
+                            if event_out.send(msg).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
             }
         }
     });
@@ -323,16 +483,15 @@ async fn handle_client(
                         let session_clone = session.clone();
                         let lock_mgr_fwd = lock_manager.clone();
                         let file_res_fwd = file_reservations.clone();
+                        let kanban_mgr_fwd = kanban_manager.clone();
                         let journal_fwd = journal.clone();
+                        let bcast_fwd = event_broadcaster.clone();
+                        let cfg_fwd = config_watcher.clone();
                         tokio::spawn(async move {
                             let mut output_rx = session.subscribe_output();
                             let mut exit_rx = session.subscribe_exit();
                             let mut input_rx = session.subscribe_input();
-                            let threshold = std::env::var("AGMUX_STUCK_TIMEOUT_MS")
-                                .ok()
-                                .and_then(|v| v.parse::<u64>().ok())
-                                .filter(|v| *v > 0)
-                                .unwrap_or(120_000);
+                            let threshold = cfg_fwd.get().idle_after_ms;
                             let mut classifier = agmux_core::state_machine::Classifier::new(
                                 std::time::Duration::from_millis(threshold),
                             );
@@ -348,7 +507,7 @@ async fn handle_client(
                                         result = output_rx.recv() => {
                                             match result {
                                                 Ok(data) => {
-                                                    publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.output(&data), Some(&session_clone), Some(&journal_fwd)).await;
+                                                    publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.output(&data), Some(&session_clone), Some(&journal_fwd), Some(&bcast_fwd)).await;
                                                     let lines = history.ingest(&data);
                                                     index_lines(output_db.clone(), &fwd_session_id, &mut line_no, lines).await;
                                                     let _ = out_tx_fwd.send(IpcMessage::TerminalOutputFrame(TerminalOutputFrame { session_id: fwd_session_id.clone(), data })).await;
@@ -359,11 +518,11 @@ async fn handle_client(
                                             }
                                         }
                                         _ = input_rx.recv() => {
-                                            publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.input(), Some(&session_clone), Some(&journal_fwd)).await;
+                                            publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.input(), Some(&session_clone), Some(&journal_fwd), Some(&bcast_fwd)).await;
                                             false
                                         }
                                         _ = tokio::time::sleep_until(classifier.deadline().into()), if classifier.state() == agmux_core::state_machine::SessionState::Running => {
-                                            publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.timeout(), Some(&session_clone), Some(&journal_fwd)).await;
+                                            publish_transition(output_db.clone(), &state_events, &fwd_session_id, classifier.timeout(), Some(&session_clone), Some(&journal_fwd), Some(&bcast_fwd)).await;
                                             false
                                         }
                                         _ = exit_rx.changed() => true,
@@ -379,6 +538,7 @@ async fn handle_client(
                                             classifier.output(&data),
                                             Some(&session_clone),
                                             Some(&journal_fwd),
+                                            Some(&bcast_fwd),
                                         )
                                         .await;
                                         let lines = history.ingest(&data);
@@ -416,6 +576,7 @@ async fn handle_client(
                                             classifier.exit(code),
                                             Some(&session_clone),
                                             Some(&journal_fwd),
+                                            Some(&bcast_fwd),
                                         )
                                         .await;
                                     }
@@ -434,9 +595,10 @@ async fn handle_client(
                                         )
                                         .await;
 
-                                    // Evict named locks and file reservations held by the session
+                                    // Evict named locks, file reservations, and Kanban tasks held by the session
                                     lock_mgr_fwd.evict_session(&fwd_session_id).await;
                                     file_res_fwd.evict_session(&fwd_session_id).await;
+                                    let _ = kanban_mgr_fwd.evict_session(&fwd_session_id).await;
 
                                     // Snapshot terminal grid and drop active PTY session memory
                                     let screen = session_clone.capture_screen();
@@ -718,8 +880,11 @@ async fn handle_client(
                 if let Some(task) = viewport_task.take() {
                     task.abort();
                 }
-                if let Ok(session) = pty_manager.get_session(&session_id).await {
-                    let (snapshot, mut output) = session.subscribe_viewport();
+                if let Ok((sync_frame, mut output)) =
+                    subscription_manager.subscribe_viewport(&session_id).await
+                {
+                    let snapshot = sync_frame.formatted_screen.clone();
+                    out_tx.send(IpcMessage::ScreenSyncFrame(sync_frame)).await?;
                     out_tx
                         .send(IpcMessage::TerminalOutputFrame(TerminalOutputFrame {
                             session_id: session_id.clone(),
@@ -801,6 +966,7 @@ async fn handle_client(
                     Ok(Ok(stash_created)) => {
                         lock_manager.evict_session(&req.session_id).await;
                         file_reservations.evict_session(&req.session_id).await;
+                        let _ = kanban_manager.evict_session(&req.session_id).await;
                         if let Some(session) = pty_manager.remove_session(&req.session_id).await {
                             session.kill();
                         }
@@ -827,7 +993,7 @@ async fn handle_client(
             }
             IpcMessage::ListSessionsRequest(_) => {
                 let db = storage.clone();
-                let sessions = tokio::task::spawn_blocking(move || {
+                let mut sessions = tokio::task::spawn_blocking(move || {
                     db.lock()
                         .map_err(|e| e.to_string())?
                         .list_active_sessions()
@@ -835,6 +1001,8 @@ async fn handle_client(
                 })
                 .await?
                 .map_err(anyhow::Error::msg)?;
+                let remote_sessions = ssh_federation.list_mounted_sessions().await;
+                sessions.extend(remote_sessions);
                 out_tx
                     .send(IpcMessage::ListSessionsResponse(ListSessionsResponse {
                         sessions,
@@ -1137,7 +1305,19 @@ async fn handle_client(
                     .await?;
             }
             IpcMessage::TerminalInputFrame(input) => {
-                if let Ok(session) = pty_manager.get_session(&input.session_id).await {
+                if crate::ssh_federation::SshFederationManager::parse_mounted_id(&input.session_id)
+                    .is_some()
+                {
+                    if let Err(e) = ssh_federation
+                        .forward_input(&input.session_id, &input.data)
+                        .await
+                    {
+                        tracing::warn!(
+                            "Failed forwarding input to remote session {}: {e}",
+                            input.session_id
+                        );
+                    }
+                } else if let Ok(session) = pty_manager.get_session(&input.session_id).await {
                     if let Err(e) = session.send_input(&input.data) {
                         tracing::warn!(
                             "Failed delivering input to session {}: {e}",
@@ -1267,7 +1447,280 @@ async fn handle_client(
                     .send(IpcMessage::AcknowledgeSessionResponse(response))
                     .await?;
             }
-            IpcMessage::WatchEventFrame(_)
+            IpcMessage::CreateTaskRequest(req) => {
+                let km = kanban_manager.clone();
+                let resp = match km
+                    .create_task(&req.task_id, &req.title, &req.description)
+                    .await
+                {
+                    Ok(task) => agmux_proto::CreateTaskResponse {
+                        success: true,
+                        task: Some(task),
+                        error: None,
+                    },
+                    Err(error) => agmux_proto::CreateTaskResponse {
+                        success: false,
+                        task: None,
+                        error: Some(error),
+                    },
+                };
+                out_tx.send(IpcMessage::CreateTaskResponse(resp)).await?;
+            }
+            IpcMessage::ListTasksRequest(req) => {
+                let km = kanban_manager.clone();
+                let resp = match km.list_tasks(req.status.as_deref()).await {
+                    Ok(tasks) => agmux_proto::ListTasksResponse { tasks, error: None },
+                    Err(error) => agmux_proto::ListTasksResponse {
+                        tasks: Vec::new(),
+                        error: Some(error),
+                    },
+                };
+                out_tx.send(IpcMessage::ListTasksResponse(resp)).await?;
+            }
+            IpcMessage::ClaimTaskRequest(req) => {
+                let km = kanban_manager.clone();
+                let resp = match km.claim_task(&req.task_id, &req.session_id).await {
+                    Ok(task) => agmux_proto::ClaimTaskResponse {
+                        success: true,
+                        task: Some(task),
+                        error: None,
+                    },
+                    Err(error) => agmux_proto::ClaimTaskResponse {
+                        success: false,
+                        task: None,
+                        error: Some(error),
+                    },
+                };
+                out_tx.send(IpcMessage::ClaimTaskResponse(resp)).await?;
+            }
+            IpcMessage::FinishTaskRequest(req) => {
+                let km = kanban_manager.clone();
+                let resp = match km.finish_task(&req.task_id, &req.session_id).await {
+                    Ok(task) => agmux_proto::FinishTaskResponse {
+                        success: true,
+                        task: Some(task),
+                        error: None,
+                    },
+                    Err(error) => agmux_proto::FinishTaskResponse {
+                        success: false,
+                        task: None,
+                        error: Some(error),
+                    },
+                };
+                out_tx.send(IpcMessage::FinishTaskResponse(resp)).await?;
+            }
+            IpcMessage::ReleaseTaskRequest(req) => {
+                let km = kanban_manager.clone();
+                let resp = match km.release_task(&req.task_id, &req.session_id).await {
+                    Ok(task) => agmux_proto::ReleaseTaskResponse {
+                        success: true,
+                        task: Some(task),
+                        error: None,
+                    },
+                    Err(error) => agmux_proto::ReleaseTaskResponse {
+                        success: false,
+                        task: None,
+                        error: Some(error),
+                    },
+                };
+                out_tx.send(IpcMessage::ReleaseTaskResponse(resp)).await?;
+            }
+            IpcMessage::PostReportRequest(req) => {
+                let km = kanban_manager.clone();
+                let resp = match km
+                    .post_report(
+                        &req.task_id,
+                        &req.session_id,
+                        &req.summary,
+                        req.pr_url.as_deref(),
+                        req.commit_sha.as_deref(),
+                    )
+                    .await
+                {
+                    Ok(report) => agmux_proto::PostReportResponse {
+                        success: true,
+                        report: Some(report),
+                        error: None,
+                    },
+                    Err(error) => agmux_proto::PostReportResponse {
+                        success: false,
+                        report: None,
+                        error: Some(error),
+                    },
+                };
+                out_tx.send(IpcMessage::PostReportResponse(resp)).await?;
+            }
+            IpcMessage::ViewReportRequest(req) => {
+                let km = kanban_manager.clone();
+                let resp = match km.view_reports(&req.task_id).await {
+                    Ok(reports) => agmux_proto::ViewReportResponse {
+                        success: true,
+                        reports,
+                        error: None,
+                    },
+                    Err(error) => agmux_proto::ViewReportResponse {
+                        success: false,
+                        reports: Vec::new(),
+                        error: Some(error),
+                    },
+                };
+                out_tx.send(IpcMessage::ViewReportResponse(resp)).await?;
+            }
+            IpcMessage::ResizeSessionRequest(req) => {
+                let resizer = pty_resizer.clone();
+                let resp = match resizer
+                    .resize_session(&req.session_id, req.cols, req.rows)
+                    .await
+                {
+                    Ok(()) => agmux_proto::ResizeSessionResponse {
+                        success: true,
+                        cols: req.cols,
+                        rows: req.rows,
+                        error: None,
+                    },
+                    Err(e) => agmux_proto::ResizeSessionResponse {
+                        success: false,
+                        cols: 0,
+                        rows: 0,
+                        error: Some(e.to_string()),
+                    },
+                };
+                out_tx.send(IpcMessage::ResizeSessionResponse(resp)).await?;
+            }
+            IpcMessage::SpawnSubtabRequest(req) => {
+                let spawner = subtab_spawner.clone();
+                let db = storage.clone();
+                let cfg_res = spawner
+                    .build_config(&req.parent_session_id, &req.subtab_id, req.shell, None)
+                    .await;
+                let resp = match cfg_res {
+                    Ok(cfg) => match spawner.spawn_subtab(&cfg).await {
+                        Ok(session) => {
+                            let cwd_str = cfg.cwd.display().to_string();
+                            let info = SessionInfo {
+                                session_id: req.subtab_id.clone(),
+                                pid: session.pid,
+                                cwd: cwd_str.clone(),
+                                command: cfg.shell.clone(),
+                                created_at: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs(),
+                                state: "IDLE".into(),
+                            };
+                            let _ = tokio::task::spawn_blocking(move || {
+                                if let Ok(db) = db.lock() {
+                                    let _ = db.insert_session(&info);
+                                }
+                            })
+                            .await;
+                            event_broadcaster.broadcast_session_list().await;
+                            agmux_proto::SpawnSubtabResponse {
+                                success: true,
+                                subtab_id: req.subtab_id,
+                                cwd: cwd_str,
+                                port: cfg.port,
+                                error: None,
+                            }
+                        }
+                        Err(e) => agmux_proto::SpawnSubtabResponse {
+                            success: false,
+                            subtab_id: req.subtab_id,
+                            cwd: String::new(),
+                            port: 0,
+                            error: Some(e.to_string()),
+                        },
+                    },
+                    Err(e) => agmux_proto::SpawnSubtabResponse {
+                        success: false,
+                        subtab_id: req.subtab_id,
+                        cwd: String::new(),
+                        port: 0,
+                        error: Some(e.to_string()),
+                    },
+                };
+                out_tx.send(IpcMessage::SpawnSubtabResponse(resp)).await?;
+            }
+            IpcMessage::InternalHookRequest(req) => {
+                let hl = hook_listener.clone();
+                let resp = match hl.handle_hook(&req.session_id, &req.event).await {
+                    Ok(new_state) => agmux_proto::InternalHookResponse {
+                        success: true,
+                        new_state,
+                        error: None,
+                    },
+                    Err(error) => agmux_proto::InternalHookResponse {
+                        success: false,
+                        new_state: String::new(),
+                        error: Some(error),
+                    },
+                };
+                out_tx.send(IpcMessage::InternalHookResponse(resp)).await?;
+            }
+            IpcMessage::ConnectRemoteRequest(req) => {
+                let fed = ssh_federation.clone();
+                let resp = match fed
+                    .connect_remote(
+                        &req.target,
+                        req.remote_socket.map(PathBuf::from),
+                        req.remote_token,
+                    )
+                    .await
+                {
+                    Ok((host_label, mounted_sessions)) => agmux_proto::ConnectRemoteResponse {
+                        success: true,
+                        host_label,
+                        mounted_sessions,
+                        error: None,
+                    },
+                    Err(error) => agmux_proto::ConnectRemoteResponse {
+                        success: false,
+                        host_label: String::new(),
+                        mounted_sessions: Vec::new(),
+                        error: Some(error),
+                    },
+                };
+                out_tx.send(IpcMessage::ConnectRemoteResponse(resp)).await?;
+            }
+            IpcMessage::ListRemotesRequest(_) => {
+                let remotes = ssh_federation.list_remotes();
+                out_tx
+                    .send(IpcMessage::ListRemotesResponse(
+                        agmux_proto::ListRemotesResponse { remotes },
+                    ))
+                    .await?;
+            }
+            IpcMessage::ShutdownDaemonRequest(_) => {
+                let terminated_sessions = shutdown_coordinator.shutdown_all().await;
+                let _ = out_tx
+                    .send(IpcMessage::ShutdownDaemonResponse(
+                        agmux_proto::ShutdownDaemonResponse {
+                            success: true,
+                            terminated_sessions,
+                        },
+                    ))
+                    .await;
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                let _ = shutdown_tx.send(true);
+                break;
+            }
+            IpcMessage::ConnectRemoteResponse(_)
+            | IpcMessage::ListRemotesResponse(_)
+            | IpcMessage::ResizeSessionResponse(_)
+            | IpcMessage::SpawnSubtabResponse(_)
+            | IpcMessage::InternalHookResponse(_)
+            | IpcMessage::ShutdownDaemonResponse(_)
+            | IpcMessage::ScreenSyncFrame(_)
+            | IpcMessage::NotificationEvent(_)
+            | IpcMessage::SessionListUpdate(_)
+            | IpcMessage::CreateTaskResponse(_)
+            | IpcMessage::ListTasksResponse(_)
+            | IpcMessage::ClaimTaskResponse(_)
+            | IpcMessage::FinishTaskResponse(_)
+            | IpcMessage::ReleaseTaskResponse(_)
+            | IpcMessage::PostReportResponse(_)
+            | IpcMessage::ViewReportResponse(_)
+            | IpcMessage::WatchEventFrame(_)
             | IpcMessage::AckCursorResponse(_)
             | IpcMessage::ReserveFilesResponse(_)
             | IpcMessage::ReleaseFilesResponse(_)
@@ -1345,6 +1798,7 @@ async fn publish_transition(
     )>,
     session: Option<&Arc<agmux_core::pty_manager::ActivePtySession>>,
     journal: Option<&crate::journal_watcher::JournalWatcher>,
+    broadcaster: Option<&crate::event_broadcaster::EventBroadcaster>,
 ) {
     if let Some((old, new, reason)) = transition {
         let session_id = id.to_owned();
@@ -1365,6 +1819,11 @@ async fn publish_transition(
                 new_state: new.as_str().into(),
                 reason: reason.into(),
             });
+
+            if let Some(b) = broadcaster {
+                b.notify_transition(&session_id, old.as_str(), new.as_str(), reason)
+                    .await;
+            }
 
             if let Some(j) = journal {
                 let _ = j

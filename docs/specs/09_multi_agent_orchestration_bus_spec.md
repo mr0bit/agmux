@@ -64,8 +64,8 @@ This specification details the autonomous multi-agent orchestration primitives, 
 * **Text:** As autonomous agents coordinate complex workflows, the system shall provide shared Kanban task management (`agmux task {list|create|claim|finish|release}`) and structured worker reporting (`agmux report`) persisted in SQLite and queryable via CLI and opt-in MCP.
 * **Criticality:** Medium
 * **SW Component:** `crates/agmux-daemon::kanban_manager`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Agent 1 claims task `T-101`; posts a structured report with PR URL and head commit SHA; marks task finished. Verify that the task status and report are queryable via `agmux task list --json` and `agmux report view T-101`.
 * **Downstream Req:** `LLD-ORCH-KANBAN-REPORT-005`
 * **Downstream Test:** `TEST-VER-ORCH-005`
-* **Test Status:** Failed
+* **Test Status:** Passed

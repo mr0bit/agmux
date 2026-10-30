@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use agmux_proto::connect_ipc;
 use anyhow::{Context, Result, bail};
-use tokio::net::UnixStream;
 
 /// Locate the `agmuxd` daemon binary on the host system.
 pub fn find_daemon_binary() -> Result<PathBuf> {
@@ -15,10 +15,12 @@ pub fn find_daemon_binary() -> Result<PathBuf> {
         }
     }
 
+    let exe_name = format!("agmuxd{}", std::env::consts::EXE_SUFFIX);
+
     // Check directory of the currently running executable
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(parent) = current_exe.parent() {
-            let candidate = parent.join("agmuxd");
+            let candidate = parent.join(&exe_name);
             if candidate.exists() {
                 return Ok(candidate);
             }
@@ -26,7 +28,9 @@ pub fn find_daemon_binary() -> Result<PathBuf> {
     }
 
     // Check target/debug or target/release if developing locally
-    for fallback in &["target/debug/agmuxd", "target/release/agmuxd"] {
+    let debug_fallback = format!("target/debug/{}", exe_name);
+    let release_fallback = format!("target/release/{}", exe_name);
+    for fallback in &[&debug_fallback, &release_fallback] {
         let p = PathBuf::from(fallback);
         if p.exists() {
             return Ok(p);
@@ -34,7 +38,7 @@ pub fn find_daemon_binary() -> Result<PathBuf> {
     }
 
     // Fall back to searching PATH
-    Ok(PathBuf::from("agmuxd"))
+    Ok(PathBuf::from(exe_name))
 }
 
 /// Ensure the background daemon process is alive, spawning it detached if inactive.
@@ -42,7 +46,7 @@ pub fn find_daemon_binary() -> Result<PathBuf> {
 /// If the daemon socket is not responsive, this spawns `agmuxd` detached
 /// and polls for readiness every 50ms up to 3 seconds.
 pub async fn ensure_daemon_running(socket_path: &Path, token_path: &Path) -> Result<()> {
-    if UnixStream::connect(socket_path).await.is_ok() {
+    if connect_ipc(socket_path).await.is_ok() {
         return Ok(());
     }
 
@@ -74,7 +78,7 @@ pub async fn ensure_daemon_running(socket_path: &Path, token_path: &Path) -> Res
     for attempt in 1..=max_attempts {
         tokio::time::sleep(poll_interval).await;
 
-        if UnixStream::connect(socket_path).await.is_ok() {
+        if connect_ipc(socket_path).await.is_ok() {
             tracing::info!(
                 "Daemon successfully auto-spawned and ready after {}ms",
                 attempt * 50

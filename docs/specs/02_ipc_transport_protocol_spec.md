@@ -38,11 +38,11 @@ This specification defines the framed inter-process communication protocol (`agm
 * **Text:** As a CLI subcommand invocation (`agmux task`, `agmux lock`, `agmux report`, `agmux reserve`), the system shall execute state operations exclusively by sending typed IPC requests to `agmuxd` over the socket, never opening or writing to `state.db` directly.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-cli::ipc_client`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Execute 50 concurrent CLI commands while `agmuxd` is actively flushing FTS batches. Verify zero `SQLITE_BUSY` database lock errors and complete synchronization of event journals across all invocations.
 * **Downstream Req:** `LLD-IPC-SINGLE-WRITER-003`
 * **Downstream Test:** `TEST-VER-IPC-003`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 
@@ -51,11 +51,11 @@ This specification defines the framed inter-process communication protocol (`agm
 * **Text:** As a TUI or GUI frontend subscribing to a session viewport (`SubscribeViewport`), `agmuxd` shall immediately return an atomic `ScreenSyncFrame` containing the entire active VT100 character and attribute matrix, cursor position, and scrollback offset, guaranteeing zero-flicker reattachment.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-daemon::subscription_manager`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Detach the TUI while an agent is generating continuous fast output; re-attach after 10 seconds. Verify that the TUI renders the exact latest screen grid instantly within a single render cycle (<16ms) without missing or garbled characters.
 * **Downstream Req:** `LLD-IPC-SYNC-FRAME-004`
 * **Downstream Test:** `TEST-VER-IPC-004`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 
@@ -64,8 +64,8 @@ This specification defines the framed inter-process communication protocol (`agm
 * **Text:** As an attached frontend client, the system shall receive asynchronous `NotificationEvent` and `SessionListUpdate` push messages over the IPC stream whenever session state transitions occur, without requiring client polling loops.
 * **Criticality:** Medium
 * **SW Component:** `crates/agmux-daemon::event_broadcaster`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Trigger a session state transition in the daemon via background timer; verify that subscribed clients receive the notification event within 1ms and update their visual state badges without issuing pull requests.
 * **Downstream Req:** `LLD-IPC-EVENT-DISPATCH-005`
 * **Downstream Test:** `TEST-VER-IPC-005`
-* **Test Status:** Failed
+* **Test Status:** Passed
