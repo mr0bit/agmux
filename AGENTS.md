@@ -23,41 +23,9 @@ Guidelines and constraints for AI agents (Codex, Antigravity/AGY, and orchestrat
 
 ## 2. Core Agent Operating System (`.soul/`)
 
-All software engineering processes, behavioral heuristics, requirement management rules, architectural invariants, and testing standards are governed by **The Soul** located in the [`.soul/`](.soul/) directory.
+All engineering processes, behavioral heuristics, architectural invariants, and testing standards are governed by **The Soul**:
 
-Before planning, modifying code, or running tests at the start of any session or task:
-
-👉 **[`.soul/INDEX.md`](.soul/INDEX.md)** — The Master Agent Operating System Index
-
-Agents must consult [`.soul/INDEX.md`](.soul/INDEX.md) to inspect the full operating system index and dynamically select which modules to read for their current task (with [`.soul/guidelines/karpathy-guidelines.md`](.soul/guidelines/karpathy-guidelines.md) serving as the universal behavioral baseline for thinking, simplicity, surgical changes, and goal-driven verification).
-
-### Summary of Governing Modules in `.soul/`:
-* **Behavioral Guidelines ([`.soul/guidelines/`](.soul/guidelines/)):**
-  * [`karpathy-guidelines.md`](.soul/guidelines/karpathy-guidelines.md): Non-negotiable cognitive posture (Think Before Coding, Simplicity First, Surgical Changes, Goal-Driven Execution).
-* **Self-Evolution & Firewall ([`.soul/evolution/`](.soul/evolution/)):**
-  * [`portability-firewall.md`](.soul/evolution/portability-firewall.md): Defending `.soul` portability via the 4-Gate Test.
-  * [`evolution-protocol.md`](.soul/evolution/evolution-protocol.md): The 5-phase learning loop for continuous self-evolution.
-  * [`anti-patterns-catalog.md`](.soul/evolution/anti-patterns-catalog.md): Reusable failure modes to avoid across tasks.
-  * [`learning-record.md`](.soul/evolution/learning-record.md): Permanent log of codified learnings and promoted rules.
-* **Engineering Process ([`.soul/process/`](.soul/process/)):**
-  * [`v-cycle.md`](.soul/process/v-cycle.md): 5-level V-Model and traceability chain.
-  * [`backlog-workflow.md`](.soul/process/backlog-workflow.md): Task lifecycle via `npx backlog.md` and Definition of Done.
-  * [`agent-execution-rules.md`](.soul/process/agent-execution-rules.md): The 3-step rhythm (Inspect ➔ Implement & Trace ➔ Verify Gates).
-  * [`delegation-discipline.md`](.soul/process/delegation-discipline.md): Multi-agent fleet & setup prerequisite.
-* **Requirements Management ([`.soul/requirements/`](.soul/requirements/)):**
-  * [`attributes-schema.md`](.soul/requirements/attributes-schema.md): 9 mandatory attributes for atomic requirements.
-  * [`state-transitions.md`](.soul/requirements/state-transitions.md): Exact protocol for updating requirement states (`Not implemented` ➔ `Implemented` ➔ `Verified`).
-* **Architecture Discipline ([`.soul/architecture/`](.soul/architecture/)):**
-  * [`module-root-of-trust.md`](.soul/architecture/module-root-of-trust.md): Strictly bounded module creation without speculative helpers.
-  * [`deep-modules-and-seams.md`](.soul/architecture/deep-modules-and-seams.md): Deep module interfaces and minimal testing seams.
-* **Testing Standards ([`.soul/testing/`](.soul/testing/)):**
-  * [`testing-seams.md`](.soul/testing/testing-seams.md): Testing public seams (IPC boundary) without internal mocks.
-  * [`unit-vs-verification.md`](.soul/testing/unit-vs-verification.md): SUT (`crates/*/tests/`) vs SVT (`tests/`).
-  * [`test-reports.md`](.soul/testing/test-reports.md): Traceable markdown test report formatting.
-* **Code Quality & Standards ([`.soul/code-quality/`](.soul/code-quality/) & [`.soul/languages/`](.soul/languages/)):**
-  * [`code-conventions.md`](.soul/code-quality/code-conventions.md): Universal error boundaries, compiler gates, and async discipline.
-  * [`performance-invariants.md`](.soul/code-quality/performance-invariants.md): Zero-allocation hot loops, memory budgets, and 0 MB dead-session RAM.
-  * [`languages/rust.md`](.soul/languages/rust.md): Language-specific conventions for modern Rust (2024 Edition).
+👉 **At the start of any session or task, read [`.soul/INDEX.md`](.soul/INDEX.md) to navigate and dynamically load the relevant operating system modules.**
 
 ---
 
