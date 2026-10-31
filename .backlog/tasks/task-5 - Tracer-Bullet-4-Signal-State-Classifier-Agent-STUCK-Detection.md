@@ -29,8 +29,8 @@ Daemon evaluates terminal byte stream, child exit codes, and timing signals thro
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 4-signal engine classifies process states with zero CPU polling
-- [ ] #2 Inactive agent session transitions to STUCK when threshold elapsed
-- [ ] #3 agmux list and JSON IPC payload reflect real-time session state
-- [ ] #4 SVT test verifies state transitions across simulated terminal sessions
+- [x] #1 4-signal engine classifies process states with zero CPU polling
+- [x] #2 Inactive agent session transitions to STUCK when threshold elapsed
+- [x] #3 agmux list and JSON IPC payload reflect real-time session state
+- [x] #4 SVT test verifies state transitions across simulated terminal sessions
 <!-- AC:END -->

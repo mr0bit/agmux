@@ -29,8 +29,8 @@ Daemon initializes SQLite in WAL mode with atomic schema migrations and register
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 SQLite WAL database initializes with atomic migration table
-- [ ] #2 Spawned PTY sessions persist metadata into sessions table
-- [ ] #3 CLI agmux list displays table of running sessions queried via IPC
-- [ ] #4 SUT tests verify database transactions and CLI list rendering
+- [x] #1 SQLite WAL database initializes with atomic migration table
+- [x] #2 Spawned PTY sessions persist metadata into sessions table
+- [x] #3 CLI agmux list displays table of running sessions queried via IPC
+- [x] #4 SUT tests verify database transactions and CLI list rendering
 <!-- AC:END -->

@@ -29,8 +29,8 @@ Daemon splits PTY byte stream into raw ANSI buffer and stripped plaintext buffer
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Dual ring-buffer ingests PTY output without blocking terminal throughput
-- [ ] #2 SQLite FTS5 table indexes terminal text with trigram tokenizer
-- [ ] #3 CLI agmux search returns matching lines with timestamps and session context
-- [ ] #4 Automated benchmark verifies zero-allocation hot loop under 50 MB/s burst
+- [x] #1 Dual ring-buffer ingests PTY output without blocking terminal throughput
+- [x] #2 SQLite FTS5 table indexes terminal text with trigram tokenizer
+- [x] #3 CLI agmux search returns matching lines with timestamps and session context
+- [x] #4 Automated benchmark verifies zero-allocation hot loop under 50 MB/s burst
 <!-- AC:END -->
