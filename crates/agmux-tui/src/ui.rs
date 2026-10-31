@@ -21,6 +21,24 @@ pub fn layout_areas(area: Rect) -> (Rect, Rect, Rect) {
     (columns[0], columns[1], rows[1])
 }
 
+/// Compute the inner (cols, rows) dimensions of the active terminal viewport.
+pub fn active_viewport_inner_size(area: Rect, split_view: bool) -> (u16, u16) {
+    let (_, viewport_area, _) = layout_areas(area);
+    let target_area = if split_view {
+        let split_panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(viewport_area);
+        split_panes[1]
+    } else {
+        viewport_area
+    };
+    (
+        target_area.width.saturating_sub(2).max(1),
+        target_area.height.saturating_sub(2).max(1),
+    )
+}
+
 /// Render an app into any Ratatui backend, including the headless test backend.
 pub fn render(frame: &mut Frame<'_>, app: &App) {
     let (sidebar_area, viewport_area, status_area) = layout_areas(frame.area());
@@ -135,14 +153,39 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             .get(app.selected_index)
             .map_or("Live Session", |s| s.session_id.as_str());
 
-        frame.render_widget(
-            Paragraph::new(app.active_viewport_lines.join("\n")).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!("{live_title} [LIVE]")),
-            ),
-            split_panes[1],
-        );
+        let inner_width = split_panes[1].width.saturating_sub(2);
+        let inner_height = split_panes[1].height.saturating_sub(2);
+
+        if !app.active_viewport_styled.is_empty() {
+            frame.render_widget(
+                Paragraph::new(app.active_viewport_styled.clone()).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(format!("{live_title} [LIVE]")),
+                ),
+                split_panes[1],
+            );
+        } else {
+            frame.render_widget(
+                Paragraph::new(app.active_viewport_lines.join("\n")).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(format!("{live_title} [LIVE]")),
+                ),
+                split_panes[1],
+            );
+        }
+
+        if app.input_mode
+            && let Some((cursor_col, cursor_row)) = app.cursor_position
+            && cursor_col < inner_width
+            && cursor_row < inner_height
+        {
+            frame.set_cursor_position((
+                split_panes[1].x + 1 + cursor_col,
+                split_panes[1].y + 1 + cursor_row,
+            ));
+        }
     } else {
         let base_title = app
             .sessions
@@ -165,39 +208,62 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             format!("{base_title}{subtab_suffix}")
         };
 
-        let body_text = if app.sessions.is_empty()
+        let inner_width = viewport_area.width.saturating_sub(2);
+        let inner_height = viewport_area.height.saturating_sub(2);
+
+        if app.sessions.is_empty()
             && app.active_viewport_lines.is_empty()
             && matches!(app.modal, ModalState::None)
         {
-            vec![
-                "Welcome to Agmux — Agentic Terminal Multiplexer & Orchestrator".to_string(),
-                String::new(),
-                "Quick-Start Hotkeys:".to_string(),
-                "  [s / n]     Spawn native shell session immediately".to_string(),
-                "  [i / Enter] Enter Interactive Terminal Mode (Esc to return to Normal Mode)"
-                    .to_string(),
-                "  [?]         Open Keyboard Shortcuts & Architecture Guide".to_string(),
-                "  [t / T]     Toggle archive / open shell sub-tab".to_string(),
-                "  [Space]     Quick Prompt composer".to_string(),
-                "  [v / m]     Split Compare & Pin viewport".to_string(),
-                "  [K]         Shared Multi-Agent Kanban Board".to_string(),
-                "  [Ctrl+R]    5-Scope Git Code Review Diff Engine".to_string(),
-                "  [F1 / :]    Command Palette".to_string(),
-                "  [q]         Quit agmux".to_string(),
-                String::new(),
-                "14 Supported Agent Profiles:".to_string(),
-                "  claude, agy, gemini, codex, opencode, aider, cursor-agent,".to_string(),
-                "  grok, q, pi, omp, cmd (command-code), hermes, muse".to_string(),
-            ]
-            .join("\n")
+            let welcome = vec![
+                Line::from("Welcome to Agmux — Agentic Terminal Multiplexer & Orchestrator"),
+                Line::from(""),
+                Line::from("Quick-Start Hotkeys:"),
+                Line::from("  [s / n]     Spawn native shell session immediately"),
+                Line::from(
+                    "  [i / Enter] Enter Interactive Terminal Mode (Esc to return to Normal Mode)",
+                ),
+                Line::from("  [?]         Open Keyboard Shortcuts & Architecture Guide"),
+                Line::from("  [t / T]     Toggle archive / open shell sub-tab"),
+                Line::from("  [Space]     Quick Prompt composer"),
+                Line::from("  [v / m]     Split Compare & Pin viewport"),
+                Line::from("  [K]         Shared Multi-Agent Kanban Board"),
+                Line::from("  [Ctrl+R]    5-Scope Git Code Review Diff Engine"),
+                Line::from("  [F1 / :]    Command Palette"),
+                Line::from("  [q]         Quit agmux"),
+                Line::from(""),
+                Line::from("14 Supported Agent Profiles:"),
+                Line::from("  claude, agy, gemini, codex, opencode, aider, cursor-agent,"),
+                Line::from("  grok, q, pi, omp, cmd (command-code), hermes, muse"),
+            ];
+            frame.render_widget(
+                Paragraph::new(welcome).block(Block::default().borders(Borders::ALL).title(title)),
+                viewport_area,
+            );
+        } else if !app.active_viewport_styled.is_empty() {
+            frame.render_widget(
+                Paragraph::new(app.active_viewport_styled.clone())
+                    .block(Block::default().borders(Borders::ALL).title(title)),
+                viewport_area,
+            );
         } else {
-            app.active_viewport_lines.join("\n")
-        };
+            frame.render_widget(
+                Paragraph::new(app.active_viewport_lines.join("\n"))
+                    .block(Block::default().borders(Borders::ALL).title(title)),
+                viewport_area,
+            );
+        }
 
-        frame.render_widget(
-            Paragraph::new(body_text).block(Block::default().borders(Borders::ALL).title(title)),
-            viewport_area,
-        );
+        if app.input_mode
+            && let Some((cursor_col, cursor_row)) = app.cursor_position
+            && cursor_col < inner_width
+            && cursor_row < inner_height
+        {
+            frame.set_cursor_position((
+                viewport_area.x + 1 + cursor_col,
+                viewport_area.y + 1 + cursor_row,
+            ));
+        }
     }
     let status_bar: Line = if let Some(error) = &app.feature_error {
         Line::from(vec![

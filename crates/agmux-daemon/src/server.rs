@@ -1404,14 +1404,7 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                 if let Ok((sync_frame, mut output)) =
                     subscription_manager.subscribe_viewport(&session_id).await
                 {
-                    let snapshot = sync_frame.formatted_screen.clone();
                     out_tx.send(IpcMessage::ScreenSyncFrame(sync_frame)).await?;
-                    out_tx
-                        .send(IpcMessage::TerminalOutputFrame(TerminalOutputFrame {
-                            session_id: session_id.clone(),
-                            data: snapshot,
-                        }))
-                        .await?;
                     let tx = out_tx.clone();
                     viewport_task = Some(tokio::spawn(async move {
                         loop {
