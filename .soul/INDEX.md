@@ -1,6 +1,6 @@
 # The Soul — Core Agent Operating System
 
-Welcome, Agent. This `.soul` directory defines the foundational, project-agnostic software engineering methodology, requirements management discipline, architectural invariants, testing standards, and self-evolution protocols.
+Welcome, Agent. This `.soul` directory defines the foundational, project-agnostic software engineering methodology, requirements management discipline, architectural invariants, testing standards, self-evolution protocols, and behavioral cognitive guidelines.
 
 **The Golden Law:** `.soul` is strictly portable. It actively rejects project-specific customizations, names, and assumptions. All project-specific context belongs in the host repository's `AGENTS.md` and `docs/`, never in `.soul`.
 
@@ -8,6 +8,10 @@ Welcome, Agent. This `.soul` directory defines the foundational, project-agnosti
 flowchart TD
     Soul["The Soul (.soul/INDEX.md)"]
     
+    subgraph Guidelines["6. Behavioral Guidelines (.soul/guidelines/)"]
+        Karpathy["karpathy-guidelines.md (Think, Simplify, Surgical, Goal-Driven)"]
+    end
+
     subgraph Evolution["0. Self-Evolution & Firewall (.soul/evolution/)"]
         Firewall["portability-firewall.md (4-Gate Portability Filter)"]
         Protocol["evolution-protocol.md (5-Phase Learning Loop)"]
@@ -45,6 +49,7 @@ flowchart TD
         LangProfiles["languages/ (Opt-in Language Specific Profiles)"]
     end
 
+    Soul --> Guidelines
     Soul --> Evolution
     Soul --> Process
     Soul --> Requirements
@@ -55,7 +60,26 @@ flowchart TD
 
 ---
 
+## Agent Dynamic Reading & Selection Protocol
+
+When entering a session or tackling any task, **do not read the entire operating system all at once**. Instead, use this directory index to selectively load what is relevant:
+
+1. **Foundational Behavioral Baseline (Always Read):**
+   * [`guidelines/karpathy-guidelines.md`](./guidelines/karpathy-guidelines.md): Non-negotiable cognitive posture (Think Before Coding, Simplicity First, Surgical Changes, Goal-Driven Execution).
+2. **Task-Specific Execution Selection:**
+   * **Implementing a feature, bugfix, or refactor:** Read [`process/agent-execution-rules.md`](./process/agent-execution-rules.md) and [`process/backlog-workflow.md`](./process/backlog-workflow.md).
+   * **Writing tests or verifying behavior:** Read [`testing/testing-seams.md`](./testing/testing-seams.md) and [`testing/unit-vs-verification.md`](./testing/unit-vs-verification.md).
+   * **Modifying or adding architectural boundaries/modules:** Read [`architecture/module-root-of-trust.md`](./architecture/module-root-of-trust.md) and [`architecture/deep-modules-and-seams.md`](./architecture/deep-modules-and-seams.md).
+   * **Writing code or refining error paths:** Read [`code-quality/code-conventions.md`](./code-quality/code-conventions.md) and the relevant profile in [`languages/`](./languages/).
+   * **Requirements & Spec synchronization:** Read [`requirements/attributes-schema.md`](./requirements/attributes-schema.md) and [`requirements/state-transitions.md`](./requirements/state-transitions.md).
+   * **Subagent or fleet delegation:** Read [`process/delegation-discipline.md`](./process/delegation-discipline.md).
+
+---
+
 ## Directory Navigation
+
+### 6. Behavioral Guidelines ([`.soul/guidelines/`](./guidelines/))
+* [`guidelines/karpathy-guidelines.md`](./guidelines/karpathy-guidelines.md): Universal LLM behavioral heuristics—Think Before Coding, Simplicity First, Surgical Changes, Goal-Driven Execution.
 
 ### 0. Self-Evolution & The Portability Firewall ([`.soul/evolution/`](./evolution/))
 * [`evolution/portability-firewall.md`](./evolution/portability-firewall.md): The core law defending `.soul` against project-specific leaks; defines the 4-Gate Portability Test.
