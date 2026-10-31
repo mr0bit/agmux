@@ -9,7 +9,7 @@
 
 use agmux_proto::{IpcMessage, KanbanTask, SessionInfo};
 use agmux_tui::{App, ModalState, default_shell, encode_key_to_pty_bytes, ui};
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{Terminal, backend::TestBackend};
 
 fn render_to_string(app: &App) -> String {
@@ -229,5 +229,134 @@ fn test_help_modal_and_keyboard_cheatsheet() {
     app.handle_key(KeyCode::Char('?'));
     assert_eq!(app.modal, ModalState::Help);
     app.handle_key(KeyCode::Esc);
+    assert_eq!(app.modal, ModalState::None);
+}
+
+#[test]
+fn test_mouse_accessibility_sidebar_selection_and_viewport_focus() {
+    let mut app = App {
+        sessions: vec![
+            SessionInfo {
+                session_id: "agent-0".to_string(),
+                pid: 1001,
+                cwd: "/ws".to_string(),
+                command: "bash".to_string(),
+                created_at: 1,
+                state: "RUNNING".to_string(),
+            },
+            SessionInfo {
+                session_id: "agent-1".to_string(),
+                pid: 1002,
+                cwd: "/ws".to_string(),
+                command: "bash".to_string(),
+                created_at: 2,
+                state: "RUNNING".to_string(),
+            },
+            SessionInfo {
+                session_id: "agent-2".to_string(),
+                pid: 1003,
+                cwd: "/ws".to_string(),
+                command: "bash".to_string(),
+                created_at: 3,
+                state: "RUNNING".to_string(),
+            },
+        ],
+        active_viewport_lines: vec!["bash$ ".to_string()],
+        ..App::default()
+    };
+
+    assert_eq!(app.selected_index, 0);
+    assert!(!app.input_mode);
+
+    // 1. Click sidebar on session-1 (row 3 inside content, after project header at row 1)
+    app.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        },
+        100,
+        30,
+    );
+    assert_eq!(app.selected_index, 1);
+    assert!(!app.input_mode);
+
+    // 2. ScrollDown on sidebar moves selection down to session-2
+    app.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 5,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        },
+        100,
+        30,
+    );
+    assert_eq!(app.selected_index, 2);
+
+    // 3. ScrollUp on sidebar moves selection up to session-1
+    app.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 5,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        },
+        100,
+        30,
+    );
+    assert_eq!(app.selected_index, 1);
+
+    // 4. Click viewport (column: 50, row: 10) enters Interactive Mode
+    app.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 50,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        },
+        100,
+        30,
+    );
+    assert!(app.input_mode);
+
+    // 5. Click status bar (row 29) exits Interactive Mode back to Normal Mode
+    app.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 50,
+            row: 29,
+            modifiers: KeyModifiers::NONE,
+        },
+        100,
+        30,
+    );
+    assert!(!app.input_mode);
+
+    // 6. Click '?' on status bar (column: 5, row: 29) opens Help modal
+    app.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 29,
+            modifiers: KeyModifiers::NONE,
+        },
+        100,
+        30,
+    );
+    assert_eq!(app.modal, ModalState::Help);
+
+    // 7. Click anywhere closes Help modal
+    app.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 50,
+            row: 15,
+            modifiers: KeyModifiers::NONE,
+        },
+        100,
+        30,
+    );
     assert_eq!(app.modal, ModalState::None);
 }

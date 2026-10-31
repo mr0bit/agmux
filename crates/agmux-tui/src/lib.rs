@@ -17,7 +17,10 @@ use agmux_proto::{
 };
 use anyhow::{Context, Result, bail};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+        MouseButton, MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -205,6 +208,290 @@ impl App {
             .into_iter()
             .filter(|action| action.to_lowercase().contains(&query))
             .collect()
+    }
+
+    /// Returns the session index corresponding to the given vertical offset inside the sidebar list content, if any.
+    pub fn session_at_sidebar_row(&self, row_offset: usize) -> Option<usize> {
+        let mut current_line = 0;
+        let mut previous_favorite = false;
+        let mut previous_project = String::new();
+        let mut previous_group = String::new();
+
+        for index in self.workspace_order() {
+            let meta = self.metadata_for(index);
+            if meta.favorite && !previous_favorite {
+                current_line += 1;
+            }
+            if !meta.favorite {
+                if previous_favorite || previous_project != meta.project {
+                    current_line += 1;
+                    previous_project = meta.project.clone();
+                    previous_group.clear();
+                }
+                if previous_group != meta.group {
+                    for _ in meta.group.split('/').filter(|s| !s.is_empty()) {
+                        current_line += 1;
+                    }
+                    previous_group = meta.group.clone();
+                }
+            }
+            previous_favorite = meta.favorite;
+
+            let item_height = if self.comfortable_rows { 3 } else { 1 };
+            if row_offset >= current_line && row_offset < current_line + item_height {
+                return Some(index);
+            }
+            current_line += item_height;
+        }
+        None
+    }
+
+    /// Handle terminal mouse events (clicks, scrolls) across sidebar, viewport, and modals.
+    pub fn handle_mouse(&mut self, mouse: MouseEvent, screen_width: u16, screen_height: u16) {
+        let screen = ratatui::layout::Rect::new(0, 0, screen_width, screen_height);
+        let (sidebar_area, viewport_area, status_area) = ui::layout_areas(screen);
+
+        let modal = std::mem::take(&mut self.modal);
+        self.modal = match modal {
+            ModalState::Help => {
+                if matches!(mouse.kind, MouseEventKind::Down(_)) {
+                    ModalState::None
+                } else {
+                    ModalState::Help
+                }
+            }
+            ModalState::OnboardingWizard { mut selected } => {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        selected = selected.saturating_sub(1);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        selected =
+                            (selected + 1).min(self.onboarding_commands().len().saturating_sub(1));
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        let modal_area = ui::centered(screen, 70, 22);
+                        if mouse.column < modal_area.x
+                            || mouse.column >= modal_area.x + modal_area.width
+                            || mouse.row < modal_area.y
+                            || mouse.row >= modal_area.y + modal_area.height
+                        {
+                            return;
+                        } else {
+                            self.modal = ModalState::OnboardingWizard { selected };
+                            self.handle_key(KeyCode::Enter);
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+                ModalState::OnboardingWizard { selected }
+            }
+            ModalState::CommandPalette {
+                query,
+                mut selected,
+            } => {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        selected = selected.saturating_sub(1);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        let actions_len = self.palette_actions(&query).len();
+                        selected = (selected + 1).min(actions_len.saturating_sub(1));
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        let modal_area = ui::centered(screen, 60, 12);
+                        if mouse.column < modal_area.x
+                            || mouse.column >= modal_area.x + modal_area.width
+                            || mouse.row < modal_area.y
+                            || mouse.row >= modal_area.y + modal_area.height
+                        {
+                            return;
+                        } else if mouse.row > modal_area.y + 2 {
+                            let click_offset = (mouse.row - (modal_area.y + 2)) as usize;
+                            let actions = self.palette_actions(&query);
+                            if let Some(action) = actions.get(click_offset).cloned() {
+                                self.execute_action(&action);
+                                return;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                ModalState::CommandPalette { query, selected }
+            }
+            ModalState::GlobalSearch {
+                query,
+                mut selected,
+                hits,
+                error,
+            } => {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        selected = selected.saturating_sub(1);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        selected = (selected + 1).min(hits.len().saturating_sub(1));
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        let modal_area = ui::centered(screen, 90, 80);
+                        if mouse.column < modal_area.x
+                            || mouse.column >= modal_area.x + modal_area.width
+                            || mouse.row < modal_area.y
+                            || mouse.row >= modal_area.y + modal_area.height
+                        {
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+                ModalState::GlobalSearch {
+                    query,
+                    selected,
+                    hits,
+                    error,
+                }
+            }
+            ModalState::KanbanBoard { mut selected } => {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        selected = selected.saturating_sub(1);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        selected = selected.saturating_add(1);
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        let modal_area = ui::centered(screen, 90, 80);
+                        if mouse.column < modal_area.x
+                            || mouse.column >= modal_area.x + modal_area.width
+                            || mouse.row < modal_area.y
+                            || mouse.row >= modal_area.y + modal_area.height
+                        {
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+                ModalState::KanbanBoard { selected }
+            }
+            ModalState::ReviewDiff {
+                session_id,
+                scope,
+                mut selected_hunk,
+                files,
+            } => {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        selected_hunk = selected_hunk.saturating_sub(1);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        let total_hunks: usize = files.iter().map(|f| f.hunks.len()).sum();
+                        if total_hunks > 0 {
+                            selected_hunk = (selected_hunk + 1).min(total_hunks - 1);
+                        }
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        let modal_area = ui::centered(screen, 90, 80);
+                        if mouse.column < modal_area.x
+                            || mouse.column >= modal_area.x + modal_area.width
+                            || mouse.row < modal_area.y
+                            || mouse.row >= modal_area.y + modal_area.height
+                        {
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+                ModalState::ReviewDiff {
+                    session_id,
+                    scope,
+                    selected_hunk,
+                    files,
+                }
+            }
+            ModalState::Notes { .. }
+            | ModalState::ForkMenu
+            | ModalState::GroupEditor { .. }
+            | ModalState::QuickPrompt { .. }
+            | ModalState::Filter => {
+                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    let is_outside = mouse.column >= viewport_area.x + viewport_area.width
+                        || mouse.row >= status_area.y;
+                    if is_outside { ModalState::None } else { modal }
+                } else {
+                    modal
+                }
+            }
+            ModalState::None => {
+                // Check status bar first
+                if mouse.row == status_area.y {
+                    if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                        if self.input_mode {
+                            self.input_mode = false;
+                        } else if mouse.column < 12 {
+                            return self.modal = ModalState::Help;
+                        } else if mouse.column >= 12 && mouse.column < 32 {
+                            self.execute_action("New Session");
+                        } else if mouse.column >= screen_width.saturating_sub(12) {
+                            self.should_quit = true;
+                        }
+                    }
+                    return;
+                }
+
+                // Check sidebar
+                if mouse.column >= sidebar_area.x
+                    && mouse.column < sidebar_area.x + sidebar_area.width
+                    && mouse.row >= sidebar_area.y
+                    && mouse.row < sidebar_area.y + sidebar_area.height
+                {
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => {
+                            self.move_selection(false);
+                        }
+                        MouseEventKind::ScrollDown => {
+                            self.move_selection(true);
+                        }
+                        MouseEventKind::Down(MouseButton::Left)
+                            if mouse.row > sidebar_area.y
+                                && mouse.row < sidebar_area.y + sidebar_area.height - 1 =>
+                        {
+                            let row_offset = (mouse.row - (sidebar_area.y + 1)) as usize;
+                            if let Some(target_index) = self.session_at_sidebar_row(row_offset) {
+                                if self.selected_index == target_index {
+                                    self.input_mode = true;
+                                } else {
+                                    self.selected_index = target_index;
+                                    self.input_mode = false;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+
+                // Check viewport
+                if mouse.column >= viewport_area.x
+                    && mouse.column < viewport_area.x + viewport_area.width
+                    && mouse.row >= viewport_area.y
+                    && mouse.row < viewport_area.y + viewport_area.height
+                {
+                    match mouse.kind {
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            if !self.input_mode && !self.sessions.is_empty() {
+                                self.input_mode = true;
+                            }
+                        }
+                        MouseEventKind::ScrollUp if self.split_view => {
+                            self.split_view = false;
+                        }
+                        _ => {}
+                    }
+                }
+                ModalState::None
+            }
+        };
     }
 
     /// Handle a key without modifiers.
@@ -1073,8 +1360,8 @@ impl App {
 struct TerminalGuard;
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
     }
 }
 
@@ -1152,7 +1439,7 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
     }
     enable_raw_mode()?;
     let _guard = TerminalGuard;
-    execute!(io::stdout(), EnterAlternateScreen)?;
+    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let mut parser = vt100::Parser::new(
         std::num::NonZeroU16::new(24).expect("nonzero rows"),
@@ -1165,19 +1452,36 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
             _ = tick.tick() => {
                 terminal.draw(|frame| ui::render(frame, &app))?;
                 while event::poll(Duration::ZERO)? {
-                    if let Event::Key(key) = event::read()? {
-                        if key.kind != KeyEventKind::Press { continue; }
-                        let previous = app.selected_index;
-                        app.handle_key_with_modifiers(key.code, key.modifiers);
-                        if let Some(message) = app.pending_message.take() { ipc.send(message).await?; }
-                        if app.should_quit { return Ok(()); }
-                        if previous != app.selected_index {
-                            parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
-                            app.active_viewport_lines.clear();
-                            if let Some(session) = app.sessions.get(app.selected_index) {
-                                ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?;
+                    match event::read()? {
+                        Event::Key(key) => {
+                            if key.kind != KeyEventKind::Press { continue; }
+                            let previous = app.selected_index;
+                            app.handle_key_with_modifiers(key.code, key.modifiers);
+                            if let Some(message) = app.pending_message.take() { ipc.send(message).await?; }
+                            if app.should_quit { return Ok(()); }
+                            if previous != app.selected_index {
+                                parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
+                                app.active_viewport_lines.clear();
+                                if let Some(session) = app.sessions.get(app.selected_index) {
+                                    ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?;
+                                }
                             }
                         }
+                        Event::Mouse(mouse) => {
+                            let previous = app.selected_index;
+                            let size = terminal.size()?;
+                            app.handle_mouse(mouse, size.width, size.height);
+                            if let Some(message) = app.pending_message.take() { ipc.send(message).await?; }
+                            if app.should_quit { return Ok(()); }
+                            if previous != app.selected_index {
+                                parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
+                                app.active_viewport_lines.clear();
+                                if let Some(session) = app.sessions.get(app.selected_index) {
+                                    ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?;
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }

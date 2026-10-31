@@ -8,16 +8,22 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
-/// Render an app into any Ratatui backend, including the headless test backend.
-pub fn render(frame: &mut Frame<'_>, app: &App) {
+/// Compute the primary screen layout slices: (sidebar, viewport, status_bar).
+pub fn layout_areas(area: Rect) -> (Rect, Rect, Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(1)])
-        .split(frame.area());
+        .split(area);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
         .split(rows[0]);
+    (columns[0], columns[1], rows[1])
+}
+
+/// Render an app into any Ratatui backend, including the headless test backend.
+pub fn render(frame: &mut Frame<'_>, app: &App) {
+    let (sidebar_area, viewport_area, status_area) = layout_areas(frame.area());
     let mut items = Vec::new();
     let mut selected_row = None;
     let mut previous_favorite = false;
@@ -100,7 +106,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     list_state.select(selected_row);
     frame.render_stateful_widget(
         List::new(items).block(Block::default().borders(Borders::ALL).title(sidebar_title)),
-        columns[0],
+        sidebar_area,
         &mut list_state,
     );
 
@@ -108,7 +114,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         let split_panes = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(columns[1]);
+            .split(viewport_area);
 
         let pinned_title = app
             .pinned_session_index
@@ -190,7 +196,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
 
         frame.render_widget(
             Paragraph::new(body_text).block(Block::default().borders(Borders::ALL).title(title)),
-            columns[1],
+            viewport_area,
         );
     }
     let status_bar: Line = if let Some(error) = &app.feature_error {
@@ -315,7 +321,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                         ),
                         Span::raw("Typing into terminal  •  "),
                         Span::styled(
-                            "Press [Esc] for agmux controls",
+                            "Click status or [Esc] for agmux controls",
                             Style::default()
                                 .fg(Color::Yellow)
                                 .add_modifier(Modifier::BOLD),
@@ -343,15 +349,13 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                                 .fg(Color::Green)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::raw(
-                            "  •  Enter: type in terminal  •  Space: prompt  •  F1: palette  •  q: quit",
-                        ),
+                        Span::raw("  •  Enter/Click: type in terminal  •  q: quit"),
                     ])
                 }
             }
         }
     };
-    frame.render_widget(Paragraph::new(status_bar), rows[1]);
+    frame.render_widget(Paragraph::new(status_bar), status_area);
     match &app.modal {
         ModalState::None => {}
         ModalState::Filter => {}
@@ -806,7 +810,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     }
 }
 
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
+pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width);
     let height = height.min(area.height);
     Rect::new(
