@@ -79,6 +79,7 @@ pub fn encode_key_to_pty_bytes(key: KeyCode, modifiers: KeyModifiers) -> Option<
 pub enum ModalState {
     #[default]
     None,
+    Help,
     CommandPalette {
         query: String,
         selected: usize,
@@ -186,6 +187,7 @@ impl App {
     /// Actions matching the palette query, in display order.
     pub fn palette_actions(&self, query: &str) -> Vec<String> {
         let mut actions = vec![
+            "Help / Cheatsheet (?)".to_owned(),
             "New Session".to_owned(),
             "Review Changes (Ctrl+R)".to_owned(),
             "Freeze Session".to_owned(),
@@ -268,6 +270,7 @@ impl App {
                 }
 
                 match key {
+                    KeyCode::Char('?') => return self.modal = ModalState::Help,
                     KeyCode::Char('/') => return self.modal = ModalState::Filter,
                     KeyCode::F(1) | KeyCode::Char(':') => return self.open_palette(),
                     KeyCode::Char('p') if modifiers.contains(KeyModifiers::CONTROL) => {
@@ -600,6 +603,15 @@ impl App {
                 }
                 ModalState::CommandPalette { query, selected }
             }
+            ModalState::Help => {
+                match key {
+                    KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter => {
+                        return;
+                    }
+                    _ => {}
+                }
+                ModalState::Help
+            }
             ModalState::OnboardingWizard { mut selected } => {
                 match key {
                     KeyCode::Up => selected = selected.saturating_sub(1),
@@ -607,36 +619,45 @@ impl App {
                         selected = (selected + 1).min(self.onboarding_commands().len() - 1)
                     }
                     KeyCode::Esc => {
-                        self.should_quit = true;
+                        return;
                     }
-                    KeyCode::Enter => match ensure_config_exists(&self.config_path) {
-                        Ok(_) => {
-                            let command = self.onboarding_commands()
-                                [selected.min(self.onboarding_commands().len() - 1)]
-                            .clone();
-                            let id = format!(
-                                "session-{}",
-                                std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis()
-                            );
-                            self.pending_message =
-                                Some(IpcMessage::SpawnSessionRequest(SpawnSessionRequest {
-                                    session_id: id,
-                                    command,
-                                    args: vec![],
-                                    cwd: self
-                                        .repository_root
-                                        .as_ref()
-                                        .map(|p| p.to_string_lossy().into_owned()),
-                                    worktree_branch: None,
-                                }));
-                            self.onboarding_error = None;
-                            return;
+                    KeyCode::Char('q') => {
+                        self.should_quit = true;
+                        return;
+                    }
+                    KeyCode::Char('?') => {
+                        return self.modal = ModalState::Help;
+                    }
+                    KeyCode::Enter | KeyCode::Char('s') | KeyCode::Char('n') => {
+                        match ensure_config_exists(&self.config_path) {
+                            Ok(_) => {
+                                let command = self.onboarding_commands()
+                                    [selected.min(self.onboarding_commands().len() - 1)]
+                                .clone();
+                                let id = format!(
+                                    "session-{}",
+                                    std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis()
+                                );
+                                self.pending_message =
+                                    Some(IpcMessage::SpawnSessionRequest(SpawnSessionRequest {
+                                        session_id: id,
+                                        command,
+                                        args: vec![],
+                                        cwd: self
+                                            .repository_root
+                                            .as_ref()
+                                            .map(|p| p.to_string_lossy().into_owned()),
+                                        worktree_branch: None,
+                                    }));
+                                self.onboarding_error = None;
+                                return;
+                            }
+                            Err(error) => self.onboarding_error = Some(error.to_string()),
                         }
-                        Err(error) => self.onboarding_error = Some(error.to_string()),
-                    },
+                    }
                     _ => {}
                 }
                 ModalState::OnboardingWizard { selected }
@@ -1018,6 +1039,9 @@ impl App {
                         files: Vec::new(),
                     };
                 }
+            }
+            "Help / Cheatsheet (?)" => {
+                self.modal = ModalState::Help;
             }
             "New Session" => {
                 let id = format!(

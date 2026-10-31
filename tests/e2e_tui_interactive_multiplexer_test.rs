@@ -204,3 +204,30 @@ fn test_kanban_board_overlay_modal() {
     app.handle_key(KeyCode::Esc);
     assert_eq!(app.modal, ModalState::None);
 }
+
+#[test]
+fn test_help_modal_and_keyboard_cheatsheet() {
+    let mut app = App::default();
+    assert_eq!(app.modal, ModalState::None);
+
+    // Press '?' in Normal Mode -> opens Help modal
+    app.handle_key(KeyCode::Char('?'));
+    assert_eq!(app.modal, ModalState::Help);
+
+    let rendered = render_to_string(&app);
+    assert!(rendered.contains("Keyboard Shortcuts & Mode Guide"));
+    assert!(rendered.contains("MODAL MODES:"));
+    assert!(rendered.contains("NORMAL MODE"));
+    assert!(rendered.contains("INTERACTIVE MODE"));
+    assert!(rendered.contains("[HELP]"));
+
+    // Press '?' again to toggle close
+    app.handle_key(KeyCode::Char('?'));
+    assert_eq!(app.modal, ModalState::None);
+
+    // Reopen and close with Esc
+    app.handle_key(KeyCode::Char('?'));
+    assert_eq!(app.modal, ModalState::Help);
+    app.handle_key(KeyCode::Esc);
+    assert_eq!(app.modal, ModalState::None);
+}

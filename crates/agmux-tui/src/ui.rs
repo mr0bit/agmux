@@ -167,15 +167,17 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 "Welcome to Agmux — Agentic Terminal Multiplexer & Orchestrator".to_string(),
                 String::new(),
                 "Quick-Start Hotkeys:".to_string(),
-                "  [n]         Spawn native shell session immediately".to_string(),
+                "  [s / n]     Spawn native shell session immediately".to_string(),
                 "  [i / Enter] Enter Interactive Terminal Mode (Esc to return to Normal Mode)"
                     .to_string(),
+                "  [?]         Open Keyboard Shortcuts & Architecture Guide".to_string(),
                 "  [t / T]     Toggle archive / open shell sub-tab".to_string(),
                 "  [Space]     Quick Prompt composer".to_string(),
                 "  [v / m]     Split Compare & Pin viewport".to_string(),
                 "  [K]         Shared Multi-Agent Kanban Board".to_string(),
                 "  [Ctrl+R]    5-Scope Git Code Review Diff Engine".to_string(),
                 "  [F1 / :]    Command Palette".to_string(),
+                "  [q]         Quit agmux".to_string(),
                 String::new(),
                 "14 Supported Agent Profiles:".to_string(),
                 "  claude, agy, gemini, codex, opencode, aider, cursor-agent,".to_string(),
@@ -191,13 +193,163 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
             columns[1],
         );
     }
-    let status_bar = if let Some(error) = &app.feature_error {
-        format!("Error: {error}")
-    } else if app.input_mode {
-        "[INTERACTIVE] Esc: normal | Ctrl+F: search | Ctrl+PgUp/PgDn: notes".into()
+    let status_bar: Line = if let Some(error) = &app.feature_error {
+        Line::from(vec![
+            Span::styled(
+                "Error: ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(error.as_str()),
+        ])
     } else {
-        "[NORMAL] n/s: new session | Space: prompt | F1: palette | g: group | *: fav | D: density | a/t/u: archive | f: fork | /: filter"
-            .into()
+        match &app.modal {
+            ModalState::Help => Line::from(vec![
+                Span::styled(
+                    "[HELP] ",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("Esc / ? / q: close help"),
+            ]),
+            ModalState::OnboardingWizard { .. } => Line::from(vec![
+                Span::styled(
+                    "[FIRST-RUN SETUP] ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("↑/↓: select  •  Enter / s / n: launch  •  Esc: skip to dashboard"),
+            ]),
+            ModalState::CommandPalette { .. } => Line::from(vec![
+                Span::styled(
+                    "[PALETTE] ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("type action  •  ↑/↓: select  •  Enter: run  •  Esc: close"),
+            ]),
+            ModalState::GlobalSearch { .. } => Line::from(vec![
+                Span::styled(
+                    "[GLOBAL SEARCH] ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("type query  •  ↑/↓: select  •  Esc: close"),
+            ]),
+            ModalState::Notes { page, .. } => Line::from(vec![
+                Span::styled(
+                    format!("[NOTES - PAGE {page}] "),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("Tab / Shift+Tab: next/prev page  •  Esc: close"),
+            ]),
+            ModalState::KanbanBoard { .. } => Line::from(vec![
+                Span::styled(
+                    "[KANBAN BOARD] ",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("h/j/k/l: move task/col  •  Space: edit  •  Esc: close"),
+            ]),
+            ModalState::ReviewDiff { .. } => Line::from(vec![
+                Span::styled(
+                    "[GIT REVIEW] ",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("1-5: scope  •  j/k: hunk  •  c: comment  •  C: round  •  Esc: close"),
+            ]),
+            ModalState::ForkMenu => Line::from(vec![
+                Span::styled(
+                    "[FORK SESSION] ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("s: new session  •  t: sub-tab  •  Esc: cancel"),
+            ]),
+            ModalState::GroupEditor { .. } => Line::from(vec![
+                Span::styled(
+                    "[EDIT GROUP] ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("type path  •  Enter: save  •  Esc: cancel"),
+            ]),
+            ModalState::QuickPrompt { .. } => Line::from(vec![
+                Span::styled(
+                    "[PROMPT COMPOSER] ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(
+                    "Enter: send  •  Tab: tool  •  Ctrl+L: model  •  Ctrl+X: effort  •  Esc: cancel",
+                ),
+            ]),
+            ModalState::Filter => Line::from(vec![
+                Span::styled(
+                    "[FILTER] ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("type filter query  •  Enter: apply  •  Esc: clear"),
+            ]),
+            ModalState::None => {
+                if app.input_mode {
+                    Line::from(vec![
+                        Span::styled(
+                            "[INTERACTIVE] ",
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw("Typing into terminal  •  "),
+                        Span::styled(
+                            "Press [Esc] for agmux controls",
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw("  •  Ctrl+F: search"),
+                    ])
+                } else {
+                    Line::from(vec![
+                        Span::styled(
+                            "[NORMAL] ",
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            "?: help",
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw("  •  "),
+                        Span::styled(
+                            "s/n: new session",
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(
+                            "  •  Enter: type in terminal  •  Space: prompt  •  F1: palette  •  q: quit",
+                        ),
+                    ])
+                }
+            }
+        }
     };
     frame.render_widget(Paragraph::new(status_bar), rows[1]);
     match &app.modal {
@@ -305,6 +457,76 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                 area,
             );
         }
+        ModalState::Help => {
+            let area = centered(frame.area(), 80, 24);
+            frame.render_widget(Clear, area);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Keyboard Shortcuts & Mode Guide (? or Esc to close) ");
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+
+            let help_lines = vec![
+                Line::from(vec![Span::styled(
+                    "MODAL MODES:",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )]),
+                Line::from(
+                    "  • NORMAL MODE:      agmux shortcuts active (select sessions, search, prompt)",
+                ),
+                Line::from(
+                    "  • INTERACTIVE MODE: Keystrokes forwarded to shell PTY (press [Esc] to return)",
+                ),
+                Line::from(""),
+                Line::from(vec![Span::styled(
+                    "SESSIONS & NAVIGATION (NORMAL MODE):",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )]),
+                Line::from("  s / n           Spawn a new shell session immediately"),
+                Line::from("  Enter / i       Enter INTERACTIVE MODE (type into terminal shell)"),
+                Line::from("  ↑ / ↓ or j / k  Select session in sidebar"),
+                Line::from(
+                    "  Space           Quick Prompt composer (dispatch AI agents with flags)",
+                ),
+                Line::from("  F1 / :          Command Palette"),
+                Line::from("  ?               Toggle this Help cheatsheet"),
+                Line::from("  q               Quit agmux"),
+                Line::from(""),
+                Line::from(vec![Span::styled(
+                    "MULTI-AGENT & WORKSPACE MANAGEMENT:",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                )]),
+                Line::from(
+                    "  Ctrl+F          Global search across all session scrollbacks & notes",
+                ),
+                Line::from("  Ctrl+R          5-Scope Git Code Review Diff Engine"),
+                Line::from("  K               Shared Multi-Agent Kanban Board"),
+                Line::from("  v / m           Toggle Split View comparison / Pin session"),
+                Line::from("  f               Fork session into new session (s) or sub-tab (t)"),
+                Line::from(
+                    "  T               Open new shell sub-tab in current session; [ / ] to cycle",
+                ),
+                Line::from("  g               Edit project & nested group path"),
+                Line::from("  *               Toggle Favorite ⭐ (pinned at top of sidebar)"),
+                Line::from("  t / a / u       Toggle archive view / Archive / Unarchive session"),
+                Line::from("  w               Toggle Attention Filter (active & waiting sessions)"),
+                Line::from("  /               Filter sessions by name in sidebar"),
+                Line::from("  D               Toggle comfortable metadata density"),
+                Line::from(""),
+                Line::from(vec![Span::styled(
+                    "Press [Esc], [?], or [q] to close this help dialog",
+                    Style::default().fg(Color::DarkGray),
+                )]),
+            ];
+
+            frame.render_widget(Paragraph::new(help_lines), inner);
+        }
         ModalState::CommandPalette { query, selected } => {
             let area = centered(frame.area(), 60, 12);
             frame.render_widget(Clear, area);
@@ -373,7 +595,9 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
                     },
                 ));
             }
-            lines.push(Line::from("[↑/↓] Select  [Enter] Launch  [Esc] Quit"));
+            lines.push(Line::from(
+                "[↑/↓] Select  [Enter] Launch  [s/n] Quick Launch  [Esc] Skip to Dashboard",
+            ));
             if let Some(error) = &app.onboarding_error {
                 lines.push(Line::styled(
                     error.as_str(),
