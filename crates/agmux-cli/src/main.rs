@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use futures_util::SinkExt;
 
 use agmux_cli::{ensure_daemon_running, run_command};
@@ -24,12 +24,48 @@ struct Cli {
     #[arg(short, long)]
     token_path: Option<PathBuf>,
 
+    /// Serve MCP over stdio.
+    #[arg(long)]
+    enable_mcp: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Register a workspace panel.
+    Panels {
+        #[command(subcommand)]
+        command: PanelCommand,
+    },
+    /// Resolve a session or panel deep link.
+    Open { uri: String },
+    /// Serve the local companion dashboard or print its state.
+    Gui {
+        #[arg(long)]
+        snapshot: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manage numbered session scratchpad pages.
+    Note {
+        #[command(subcommand)]
+        command: NoteCommand,
+    },
+    /// Serve the MCP protocol over stdio.
+    Mcp,
+    /// Schedule archive on turn completion.
+    ArchiveSelf { session_id: Option<String> },
+    /// Schedule termination on turn completion.
+    KillSelf { session_id: Option<String> },
+    /// Cancel a pending teardown.
+    CancelTeardown { session_id: Option<String> },
+    /// Discover commands and their usage.
+    AgentContext {
+        #[arg(long)]
+        command: Option<String>,
+    },
     /// Manage shared Kanban tasks.
     Task {
         #[command(subcommand)]
@@ -118,6 +154,9 @@ enum Commands {
     },
     /// Spawn a command inside a new PTY session and attach to its output stream
     Run {
+        /// Register the Agmux MCP server for a supported agent (claude or codex).
+        #[arg(long)]
+        enable_mcp: bool,
         /// Create an isolated worktree for this branch.
         #[arg(long)]
         worktree: Option<String>,
@@ -181,6 +220,29 @@ enum Commands {
         #[command(subcommand)]
         command: DaemonCommand,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum PanelCommand {
+    Open {
+        target: String,
+        #[arg(long)]
+        session: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum NoteCommand {
+    /// Replace a page's text.
+    Set {
+        session_id: String,
+        page: u32,
+        content: String,
+    },
+    /// Print a page.
+    Get { session_id: String, page: u32 },
+    /// Print all pages in order.
+    List { session_id: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -340,6 +402,7 @@ enum ReportCommand {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
@@ -347,6 +410,28 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    if cli.enable_mcp && cli.command.is_some() {
+        anyhow::bail!(
+            "--enable-mcp in server mode cannot be combined with a subcommand; use run --enable-mcp for an agent"
+        );
+    }
+    if let Some(Commands::AgentContext { ref command }) = cli.command {
+        if let Some(name) = command {
+            let mut root = Cli::command();
+            let subcommand = root
+                .find_subcommand_mut(name)
+                .ok_or_else(|| anyhow::anyhow!("Unknown command: {name}"))?;
+            subcommand.print_long_help()?;
+            for nested in subcommand.get_subcommands_mut() {
+                println!("\n");
+                nested.print_long_help()?;
+            }
+            println!("\n\n{}", agmux_cli::agent_context::examples(name));
+        } else {
+            println!("{}", agmux_cli::agent_context::OVERVIEW);
+        }
+        return Ok(());
+    }
     if matches!(cli.command, Some(Commands::Init)) {
         let agents = agmux_core::agent_discovery::discover_installed_agents();
         let path =
@@ -432,7 +517,114 @@ async fn main() -> Result<()> {
         .with_context(|| format!("Failed to read auth token from {}", token_path.display()))?;
 
     // 3. Dispatch subcommand
+    if cli.enable_mcp {
+        return agmux_cli::mcp_server::serve(&socket_path, &token).await;
+    }
     match cli.command {
+        Some(Commands::Panels {
+            command: PanelCommand::Open { target, session },
+        }) => {
+            let session_id = session
+                .or_else(|| std::env::var("AGMUX_SESSION_ID").ok())
+                .context("Specify --session or AGMUX_SESSION_ID")?;
+            let result = agmux_cli::companion_gui::request(
+                &socket_path,
+                &token,
+                agmux_proto::CompanionRequest::Open { session_id, target },
+            )
+            .await?;
+            println!("{}", serde_json::to_string(&result)?);
+        }
+        Some(Commands::Open { uri }) => {
+            agmux_cli::companion_gui::open_link(&socket_path, &token, &uri).await?
+        }
+        Some(Commands::Gui { snapshot, json: _ }) => {
+            if snapshot {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &agmux_cli::companion_gui::snapshot(&socket_path, &token).await?
+                    )?
+                );
+            } else {
+                agmux_cli::companion_gui::serve(socket_path.clone(), token.clone()).await?;
+            }
+        }
+        Some(Commands::Note { command }) => {
+            let request = match command {
+                NoteCommand::Set {
+                    session_id,
+                    page,
+                    content,
+                } => agmux_proto::SearchNotesRequest::Set {
+                    session_id,
+                    page,
+                    content,
+                },
+                NoteCommand::Get { session_id, page } => {
+                    agmux_proto::SearchNotesRequest::Get { session_id, page }
+                }
+                NoteCommand::List { session_id } => {
+                    agmux_proto::SearchNotesRequest::List { session_id }
+                }
+            };
+            let list = matches!(request, agmux_proto::SearchNotesRequest::List { .. });
+            match agmux_cli::ipc_client::review_request(
+                &socket_path,
+                &token,
+                agmux_proto::IpcMessage::SearchNotesRequest(request),
+            )
+            .await?
+            {
+                agmux_proto::IpcMessage::SearchNotesResponse(response) => {
+                    if let Some(error) = response.error {
+                        anyhow::bail!("{error}");
+                    }
+                    for (page, content) in response.pages {
+                        if list {
+                            println!("[{page}]\n{content}");
+                        } else {
+                            println!("{content}");
+                        }
+                    }
+                }
+                other => anyhow::bail!("Unexpected note response: {other:?}"),
+            }
+        }
+        Some(Commands::Mcp) => agmux_cli::mcp_server::serve(&socket_path, &token).await?,
+        Some(
+            cmd @ (Commands::ArchiveSelf { .. }
+            | Commands::KillSelf { .. }
+            | Commands::CancelTeardown { .. }),
+        ) => {
+            let (action, session_id) = match cmd {
+                Commands::ArchiveSelf { session_id } => ("archive", session_id),
+                Commands::KillSelf { session_id } => ("kill", session_id),
+                Commands::CancelTeardown { session_id } => ("cancel", session_id),
+                _ => unreachable!(),
+            };
+            let id = session_id
+                .or_else(|| std::env::var("AGMUX_SESSION_ID").ok())
+                .ok_or_else(|| anyhow::anyhow!("Session ID is required"))?;
+            let response = agmux_cli::ipc_client::review_request(
+                &socket_path,
+                &token,
+                agmux_proto::IpcMessage::TeardownRequest(agmux_proto::TeardownRequest {
+                    session_id: id,
+                    action: action.into(),
+                }),
+            )
+            .await?;
+            match response {
+                agmux_proto::IpcMessage::TeardownResponse(r) if r.success => {
+                    println!("Teardown {action} accepted")
+                }
+                agmux_proto::IpcMessage::TeardownResponse(r) => {
+                    anyhow::bail!("{}", r.error.unwrap_or_default())
+                }
+                _ => anyhow::bail!("Unexpected teardown response"),
+            }
+        }
         Some(Commands::Task { command }) => match command {
             TaskCommand::List { status, json } => {
                 let resp = agmux_cli::ipc_client::list_tasks(&socket_path, &token, status).await?;
@@ -905,6 +1097,9 @@ async fn main() -> Result<()> {
                 other => anyhow::bail!("Unexpected review response: {other:?}"),
             }
         }
+        Some(Commands::AgentContext { .. }) => {
+            unreachable!("agent-context handled before daemon startup")
+        }
         Some(Commands::Init) => unreachable!("init handled before daemon startup"),
         None | Some(Commands::Tui) => agmux_tui::run_tui(&socket_path, &token).await?,
         Some(Commands::Diff {
@@ -1007,7 +1202,13 @@ async fn main() -> Result<()> {
             command,
             args,
             worktree,
+            enable_mcp,
         }) => {
+            let args = if enable_mcp {
+                agmux_cli::mcp_server::agent_arguments(&command, args, &socket_path, &token_path)?
+            } else {
+                args
+            };
             let exit_code = run_command(&socket_path, &token, command, args, worktree).await?;
             std::process::exit(exit_code);
         }

@@ -15,9 +15,10 @@ impl RecoveryManager {
         for session in active {
             if matches!(
                 session.state.as_str(),
-                "RUNNING" | "WORKING" | "WAITING" | "WAITING_INPUT" | "STUCK"
+                "RUNNING" | "WORKING" | "WAITING" | "WAITING_INPUT" | "STUCK" | "IDLE" | "FINISHED"
             ) {
                 db.update_session_state(&session.session_id, "DEAD")?;
+                db.set_teardown(&session.session_id, None)?;
                 let _ = db.release_session_locks(&session.session_id)?;
                 let _ = db.release_session_reservations(&session.session_id)?;
                 let _ = db.release_session_kanban_tasks(&session.session_id)?;
@@ -28,6 +29,23 @@ impl RecoveryManager {
                 )?;
                 recovered.push(session.session_id);
             }
+        }
+        // No PTYs survive a daemon restart. Clear any pending actions even when
+        // their previous turn had already reached COMPLETED.
+        for (id, _) in db.list_teardowns()? {
+            if let Some(session) = db.get_session(&id)? {
+                if !matches!(
+                    session.state.as_str(),
+                    "DEAD" | "ARCHIVED" | "FAILED" | "ERRORED"
+                ) {
+                    db.update_session_state(&id, "DEAD")?;
+                    let _ = db.release_session_locks(&id)?;
+                    let _ = db.release_session_reservations(&id)?;
+                    let _ = db.release_session_kanban_tasks(&id)?;
+                    recovered.push(id.clone());
+                }
+            }
+            db.set_teardown(&id, None)?;
         }
         Ok(recovered)
     }

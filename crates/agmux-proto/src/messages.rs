@@ -105,6 +105,8 @@ pub struct SessionInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListSessionsResponse {
     pub sessions: Vec<SessionInfo>,
+    #[serde(default)]
+    pub teardowns: std::collections::HashMap<String, String>,
 }
 
 /// Search request, optionally restricted to one session.
@@ -126,6 +128,50 @@ pub struct SearchMatch {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SearchLogsResponse {
     pub matches: Vec<SearchMatch>,
+}
+
+/// Scratchpad and interactive search operations.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SearchNotesRequest {
+    Set {
+        session_id: String,
+        page: u32,
+        content: String,
+    },
+    Get {
+        session_id: String,
+        page: u32,
+    },
+    List {
+        session_id: String,
+    },
+    Search {
+        query: String,
+    },
+    Filter {
+        query: String,
+    },
+}
+
+/// A transcript or scratchpad match and surrounding read-only context.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GlobalSearchHit {
+    pub session_id: String,
+    pub page: Option<u32>,
+    pub line_no: u64,
+    pub snippet: String,
+    pub context: Vec<String>,
+    pub context_match: usize,
+}
+
+/// Correlated response for notes, search and filtering.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchNotesResponse {
+    pub request: SearchNotesRequest,
+    pub pages: Vec<(u32, String)>,
+    pub hits: Vec<GlobalSearchHit>,
+    pub session_ids: Vec<String>,
+    pub error: Option<String>,
 }
 
 /// Request to persist and stop an active session.
@@ -618,6 +664,8 @@ pub struct NotificationEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionListUpdate {
     pub sessions: Vec<SessionInfo>,
+    #[serde(default)]
+    pub teardowns: std::collections::HashMap<String, String>,
 }
 
 /// Request to resize a PTY session grid and propagate `TIOCSWINSZ`.
@@ -699,10 +747,103 @@ pub struct ListRemotesResponse {
     pub remotes: Vec<String>,
 }
 
+/// Schedule or cancel a deferred session teardown.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TeardownRequest {
+    pub session_id: String,
+    /// One of `archive`, `kill`, or `cancel`.
+    pub action: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TeardownResponse {
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReadSessionRequest {
+    pub session_id: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReadSessionResponse {
+    pub success: bool,
+    pub screen: String,
+    pub error: Option<String>,
+}
+
+/// Persisted organization and visibility for a session.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceMetadata {
+    pub project: String,
+    /// Slash-separated nested group path.
+    pub group: String,
+    pub favorite: bool,
+    pub archived: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum WorkspaceRequest {
+    List,
+    Set {
+        session_id: String,
+        metadata: WorkspaceMetadata,
+    },
+    Fork {
+        session_id: String,
+        new_session_id: String,
+        subtab: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceResponse {
+    pub sessions: Vec<SessionInfo>,
+    pub metadata: std::collections::HashMap<String, WorkspaceMetadata>,
+    pub error: Option<String>,
+}
+
+/// A persistent panel registered in a session workspace.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompanionPanel {
+    pub id: i64,
+    pub session_id: String,
+    pub kind: String,
+    pub target: String,
+}
+
+/// Authenticated companion operations.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CompanionRequest {
+    Open { session_id: String, target: String },
+    Select { session_id: String },
+    SelectPanel { session_id: String, panel_id: i64 },
+    List,
+    Reply { session_id: String, message: String },
+    Read { panel_id: i64 },
+    Write { panel_id: i64, content: String },
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompanionResponse {
+    pub notifications: Vec<NotificationEvent>,
+    pub selected_panel: Option<i64>,
+    pub panels: Vec<CompanionPanel>,
+    pub selected: Option<String>,
+    pub content: Option<String>,
+    pub error: Option<String>,
+}
+
 /// Unified framed IPC message envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload")]
 pub enum IpcMessage {
+    CompanionRequest(CompanionRequest),
+    CompanionResponse(CompanionResponse),
+    WorkspaceRequest(WorkspaceRequest),
+    WorkspaceResponse(WorkspaceResponse),
+    ReadSessionRequest(ReadSessionRequest),
+    ReadSessionResponse(ReadSessionResponse),
+    TeardownRequest(TeardownRequest),
+    TeardownResponse(TeardownResponse),
     ConnectRemoteRequest(ConnectRemoteRequest),
     ConnectRemoteResponse(ConnectRemoteResponse),
     ListRemotesRequest(ListRemotesRequest),
@@ -791,6 +932,10 @@ pub enum IpcMessage {
     SessionStateChangedEvent(SessionStateChangedEvent),
     AcknowledgeSessionRequest(AcknowledgeSessionRequest),
     AcknowledgeSessionResponse(AcknowledgeSessionResponse),
+    /// Search and scratchpad request.
+    SearchNotesRequest(SearchNotesRequest),
+    /// Search and scratchpad response.
+    SearchNotesResponse(SearchNotesResponse),
 }
 
 impl From<HandshakeRequest> for IpcMessage {

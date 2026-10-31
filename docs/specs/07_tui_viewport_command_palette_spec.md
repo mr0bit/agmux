@@ -82,3 +82,44 @@ This specification details the Ratatui terminal user interface (`agmux-tui`), si
 * **Downstream Req:** `LLD-TUI-COLD-START-006`
 * **Downstream Test:** `TEST-VER-TUI-006`
 * **Test Status:** Passed
+
+---
+
+### REQ-TUI-GLOBAL-SEARCH-007
+* **Unique ID:** `REQ-TUI-GLOBAL-SEARCH-007`
+* **Text:** As a user pressing `Ctrl+F` or `/` in `agmux-tui`, the system shall provide an interactive Global Search modal (`Ctrl+F`) with a right-hand read-only context preview pane auto-scrolled to the matched transcript line across live and `DEAD` sessions, alongside a `/` quick sidebar filter bar filtering sessions by name, branch, or notes.
+* **Criticality:** High
+* **SW Component:** `crates/agmux-tui::search_modal`
+* **Implementation Status:** Verified
+* **Verification Criteria:** Open the Global Search modal via `Ctrl+F`, enter a query, verify matching transcript hits and right-hand context preview rendering; activate `/` filter in the sidebar and verify live filtering of the session list.
+* **Downstream Req:** `LLD-TUI-GLOBAL-SEARCH-007`
+* **Downstream Test:** `TEST-VER-TUI-007`
+* **Test Status:** Passed
+
+---
+
+### REQ-TUI-SCRATCHPAD-NOTES-008
+* **Unique ID:** `REQ-TUI-SCRATCHPAD-NOTES-008`
+* **Text:** As a user tracking context per agent session, the system shall support persistent multi-page scratchpad notes attached to any session (`Ctrl+PgUp` / `Ctrl+PgDn` in TUI and `agmux note` in CLI), persisted in SQLite and searchable via `/` and `Ctrl+F`.
+* **Criticality:** Medium
+* **SW Component:** `crates/agmux-core::scratchpad_notes`
+* **Implementation Status:** Verified
+* **Verification Criteria:** Attach multi-page notes to a session via CLI/IPC and TUI (`Ctrl+PgDn`); verify persistence across daemon queries and verify that filtering via `/` or searching matches the attached note content.
+* **Downstream Req:** `LLD-TUI-SCRATCHPAD-NOTES-008`
+* **Downstream Test:** `TEST-VER-TUI-008`
+* **Test Status:** Passed
+
+---
+
+### REQ-TUI-WORKSPACE-HIERARCHY-009
+* **Unique ID:** `REQ-TUI-WORKSPACE-HIERARCHY-009`
+* **Text:** As a power user organizing many concurrent agents, `agmux-tui` shall support the 3-tier hierarchy (Project -> Group `g` -> Session), `⭐ Favorites` pinning (`*`), Compact (1-line) vs. Comfortable (3-line) row density toggle (`D`), Archive/Restore (`a` / `u` / `t`), Conversation Forking (`f` -> standalone `s` or sub-tab `t`), and Quick Prompt inline modifiers (`Tab` tool, `Ctrl+L` model, `Ctrl+X` effort, `Ctrl+T` worktree).
+* **Criticality:** High
+* **SW Component:** `crates/agmux-tui::workspace_hierarchy`
+* **Implementation Status:** Verified
+* **Verification Criteria:** Pin a favorite session (`*`), toggle Comfortable 3-line density, archive (`a`) and toggle archived view (`t`) then restore (`u`), open the Fork modal (`f`) to fork into a standalone session or sub-tab, and cycle Quick Prompt modifiers (`Tab`, `Ctrl+L`, `Ctrl+X`, `Ctrl+T`).
+* **Downstream Req:** `LLD-TUI-WORKSPACE-HIERARCHY-009`
+* **Downstream Test:** `TEST-VER-TUI-009`
+* **Test Status:** Passed
+
+* **Evidence:** `tests/e2e_tui_workspace_hierarchy_test.rs`, `crates/agmux-tui/tests/workspace_hierarchy_test.rs`, and `tests/reports/tui_workspace_hierarchy_test_report.md`.

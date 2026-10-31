@@ -62,6 +62,45 @@ impl RuntimeConfig {
     }
 }
 
+/// Read the configured notification hook as a TOML basic or literal string.
+pub fn notification_hook(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "notification_hook" {
+            continue;
+        }
+        let value = value.trim_start();
+        if let Some(rest) = value.strip_prefix('\'') {
+            let (literal, tail) = rest.split_once('\'')?;
+            if tail.trim().is_empty() || tail.trim_start().starts_with('#') {
+                return Some(literal.to_owned());
+            }
+            return None;
+        }
+        if value.starts_with('"') {
+            let mut escaped = false;
+            for (i, c) in value.char_indices().skip(1) {
+                if c == '"' && !escaped {
+                    let tail = value[i + 1..].trim();
+                    if !tail.is_empty() && !tail.starts_with('#') {
+                        return None;
+                    }
+                    return serde_json::from_str(&value[..=i]).ok();
+                }
+                if c == '\\' {
+                    escaped = !escaped;
+                } else {
+                    escaped = false;
+                }
+            }
+        }
+        return None;
+    }
+    None
+}
+
 /// Watches `agmux.toml` for changes and hot-reloads `RuntimeConfig` without restarting `agmuxd`.
 #[derive(Clone)]
 pub struct ConfigWatcher {

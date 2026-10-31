@@ -12,6 +12,7 @@ path = "src/main.rs"
 agmux-proto = { path = "../agmux-proto" }
 agmux-core = { path = "../agmux-core" }
 anyhow.workspace = true
+getrandom = "0.4"
 tokio.workspace = true
 tokio-util.workspace = true
 futures-util.workspace = true

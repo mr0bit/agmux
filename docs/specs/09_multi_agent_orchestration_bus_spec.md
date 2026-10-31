@@ -69,3 +69,42 @@ This specification details the autonomous multi-agent orchestration primitives, 
 * **Downstream Req:** `LLD-ORCH-KANBAN-REPORT-005`
 * **Downstream Test:** `TEST-VER-ORCH-005`
 * **Test Status:** Passed
+
+---
+
+### REQ-ORCH-AGENT-CONTEXT-006
+* **Unique ID:** `REQ-ORCH-AGENT-CONTEXT-006`
+* **Text:** As an orchestrator or worker agent discovering CLI capabilities, the system shall provide `agmux agent-context` (a compact ~200-token command overview) and `agmux agent-context --command <name>` (detailed per-command reference and JSON examples) so agents can lazy-load CLI documentation without bloating their context window.
+* **Criticality:** High
+* **SW Component:** `crates/agmux-cli::agent_context`
+* **Implementation Status:** Verified
+* **Verification Criteria:** Run `agmux agent-context` and verify compact overview output under 250 tokens listing all orchestration subcommands; run `agmux agent-context --command task` and `--command lock` and verify detailed flag and usage examples are returned.
+* **Downstream Req:** `LLD-ORCH-AGENT-CONTEXT-006`
+* **Downstream Test:** `TEST-VER-ORCH-006`
+* **Test Status:** Passed
+
+---
+
+### REQ-ORCH-MCP-SERVER-007
+* **Unique ID:** `REQ-ORCH-MCP-SERVER-007`
+* **Text:** As an autonomous agent spawned with `--enable-mcp` or connecting via stdio (`agmux mcp`), the system shall expose a JSON-RPC 2.0 Model Context Protocol (MCP) server routing tool calls (`list_sessions`, `spawn_session`, `send_message`, `read_session`, `task_list`, `task_create`, `task_claim`, `task_finish`, `report_submit`, `lock_acquire`, `lock_release`, `reserve_files`, `release_files`, `resolve_review_comment`, `archive_self`, `kill_self`) exclusively through `agmuxd` framed IPC.
+* **Criticality:** High
+* **SW Component:** `crates/agmux-cli::mcp_server`
+* **Implementation Status:** Verified
+* **Verification Criteria:** Launch `agmux mcp` connected to a running `agmuxd`; send JSON-RPC `initialize`, `tools/list`, and `tools/call` requests for task creation, lock acquisition, and session listing; verify valid MCP tool responses and persisted state in `agmuxd`.
+* **Downstream Req:** `LLD-ORCH-MCP-SERVER-007`
+* **Downstream Test:** `TEST-VER-ORCH-007`
+* **Test Status:** Passed
+
+---
+
+### REQ-ORCH-SELF-TEARDOWN-008
+* **Unique ID:** `REQ-ORCH-SELF-TEARDOWN-008`
+* **Text:** As a worker agent finishing an assigned task, calling `agmux archive-self` (`↓` badge) or `agmux kill-self` (`■` badge) shall schedule automatic session teardown once the current response turn transitions to `FINISHED` or `IDLE`, while allowing cancellation via `agmux cancel-teardown` or `c` in the TUI.
+* **Criticality:** Medium
+* **SW Component:** `crates/agmux-daemon::teardown_scheduler`
+* **Implementation Status:** Verified
+* **Verification Criteria:** Spawn a worker session; schedule `agmux kill-self <session_id>`; verify the session carries the `■` teardown badge while `WORKING`; trigger turn completion (`stop` hook or exit) and verify the session automatically freezes/terminates to `DEAD`.
+* **Downstream Req:** `LLD-ORCH-SELF-TEARDOWN-008`
+* **Downstream Test:** `TEST-VER-ORCH-008`
+* **Test Status:** Passed

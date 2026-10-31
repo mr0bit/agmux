@@ -53,6 +53,7 @@ crates/
 * **`diff_calculator`**: 5-scope diff engine computing hunks between commits/branches/worktrees.
 * **`prompt_flattener`**: Line-level review comment compiler producing numbered prompt rounds.
 * **`comment_tracker`**: Dual comment status updater (CLI/MCP resolve and diff hunk modification tracker).
+* **`scratchpad_notes`**: Persistent multi-page session scratchpad notes stored in SQLite and indexed for search.
 
 ### 3.3 `agmux-daemon` (Daemon Server & Bus)
 * **`process_supervisor`**: Dedicated OS process group supervisor (`setpgid` / Job Objects).
@@ -70,6 +71,8 @@ crates/
 * **`kanban_manager`**: SQLite-backed multi-agent task and report coordination engine.
 * **`ssh_federation`**: SSH stdio proxy bridge and Tailscale remote host subtree mounter.
 * **`network_auth`**: Security cookie handshake validator for remote connections.
+* **`teardown_scheduler`**: Self-teardown (`archive_self` / `kill_self`) scheduler triggered on turn completion.
+* **`notification_dispatcher`**: Native desktop notification and custom shell notification hook runner with 15s timeout.
 
 ### 3.4 `agmux-tui` (Terminal User Interface)
 * **`viewport_renderer`**: Ratatui 0.30 + Crossterm 0.29 layout and `tui-term` terminal renderer.
@@ -78,12 +81,17 @@ crates/
 * **`sidebar_filter`**: Attention filter (`w`) and turn acknowledgment (`.`) controller.
 * **`split_viewport`**: Pin-and-compare dual viewport split view (`v` / `m`).
 * **`onboarding_wizard`**: Zero-session interactive first-run onboarding modal.
+* **`search_modal`**: Interactive `Ctrl+F` cross-terminal search modal with auto-scrolling preview and `/` quick filter.
+* **`workspace_hierarchy`**: 3-tier Project/Group/Session tree, `⭐ Favorites`, density toggle, archive/restore, and conversation forking.
 
 ### 3.5 `agmux-cli` (Stateless CLI Client)
 * **`daemon_spawner`**: Transparent background daemon auto-spawner on socket absence.
 * **`ipc_client`**: Framed IPC client routing all CLI subcommands to `agmuxd`.
 * **`remote_bootstrapper`**: Pinned GitHub release asset downloader with SHA-256 validation.
 * **`doctor`**: Diagnostic analyzer verifying PTYs, file permissions, and active tunnels.
+* **`agent_context`**: Progressive token-efficient CLI documentation generator (`agmux agent-context`).
+* **`mcp_server`**: Built-in opt-in JSON-RPC 2.0 MCP server exposing orchestration tools (`agmux mcp` / `--enable-mcp`).
+* **`companion_gui`**: Phase 3 desktop/web companion bridge, `panels open <url|file>`, and `agmux://` deep-link handler.
 
 ---
 
@@ -129,6 +137,9 @@ crates/
 | `REQ-TUI-ATTENTION-FILTER-004` | Attention filter (`w`) and turn acknowledge (`.`) | `crates/agmux-tui::sidebar_filter` |
 | `REQ-TUI-SPLIT-COMPARE-005` | Side-by-side split comparison view (`v` / `m`) | `crates/agmux-tui::split_viewport` |
 | `REQ-TUI-COLD-START-006` | Zero-session interactive first-run onboarding wizard | `crates/agmux-tui::onboarding_wizard` |
+| `REQ-TUI-GLOBAL-SEARCH-007` | Interactive `Ctrl+F` search modal with preview & `/` filter | `crates/agmux-tui::search_modal` |
+| `REQ-TUI-SCRATCHPAD-NOTES-008` | Multi-page session scratchpad notes in SQLite & TUI | `crates/agmux-core::scratchpad_notes` |
+| `REQ-TUI-WORKSPACE-HIERARCHY-009` | 3-tier hierarchy, favorites, archive/restore & forking | `crates/agmux-tui::workspace_hierarchy` |
 | `REQ-GIT-WORKTREE-PROVISION-001` | Worktree provisioning, `.worktreeinclude`, port inject | `crates/agmux-core::worktree_manager` |
 | `REQ-GIT-SAFETY-GATE-002` | Worktree removal gate with dirty check and backup stash | `crates/agmux-core::worktree_safety_gate` |
 | `REQ-GIT-REVIEW-DIFF-ENGINE-003` | Interactive code review diff engine (`Ctrl+R`, 5 scopes) | `crates/agmux-core::diff_calculator` |
@@ -139,7 +150,12 @@ crates/
 | `REQ-ORCH-FILE-RESERVATION-003` | Repository-relative hierarchical file reservations | `crates/agmux-daemon::file_reservation_table` |
 | `REQ-ORCH-EVENT-WATCH-004` | Monotonic SQLite event journal stream (`agmux watch`) | `crates/agmux-daemon::journal_watcher` |
 | `REQ-ORCH-KANBAN-REPORT-005` | Shared Kanban task board and worker reports | `crates/agmux-daemon::kanban_manager` |
+| `REQ-ORCH-AGENT-CONTEXT-006` | Progressive token-efficient CLI documentation (`agent-context`) | `crates/agmux-cli::agent_context` |
+| `REQ-ORCH-MCP-SERVER-007` | Opt-in JSON-RPC 2.0 MCP server (`agmux mcp` / `--enable-mcp`) | `crates/agmux-cli::mcp_server` |
+| `REQ-ORCH-SELF-TEARDOWN-008` | Self-teardown scheduling (`archive_self` / `kill_self`) | `crates/agmux-daemon::teardown_scheduler` |
 | `REQ-REMOTE-FEDERATION-SSH-001` | Bidirectional SSH stdio proxy and Tailscale federation | `crates/agmux-daemon::ssh_federation` |
 | `REQ-REMOTE-BOOTSTRAP-PINNED-002` | Remote binary bootstrapping from GitHub release assets | `crates/agmux-cli::remote_bootstrapper` |
 | `REQ-REMOTE-AUTH-TOKEN-003` | Cookie token authentication across remote sockets | `crates/agmux-daemon::network_auth` |
 | `REQ-REMOTE-DOCTOR-REPAIR-004` | Diagnostic verification (`doctor`) and repair command | `crates/agmux-cli::doctor` |
+| `REQ-GUI-NOTIFICATION-HOOKS-001` | Rich desktop notifications and custom shell hooks | `crates/agmux-daemon::notification_dispatcher` |
+| `REQ-GUI-COMPANION-PANELS-002` | Phase 3 companion GUI, `panels open`, and deep-links | `crates/agmux-cli::companion_gui` |

@@ -20,7 +20,7 @@ pub fn path_conflicts(a: &str, b: &str) -> bool {
 
 /// SQLite repository. The daemon owns the connection.
 pub struct StorageEngine {
-    connection: Connection,
+    pub(crate) connection: Connection,
 }
 
 impl StorageEngine {
@@ -54,8 +54,93 @@ impl StorageEngine {
         tx.execute_batch("CREATE TABLE IF NOT EXISTS file_reservations (path TEXT PRIMARY KEY, holder_session_id TEXT NOT NULL, acquired_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_file_reservations_holder ON file_reservations(holder_session_id);")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS event_journal (seq INTEGER PRIMARY KEY AUTOINCREMENT, event_type TEXT NOT NULL, session_id TEXT, payload TEXT NOT NULL, timestamp INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_event_journal_seq ON event_journal(seq); CREATE TABLE IF NOT EXISTS event_cursors (cursor_id TEXT PRIMARY KEY, last_seq INTEGER NOT NULL, updated_at INTEGER NOT NULL);")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS kanban_tasks (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL, claimed_by TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_kanban_tasks_status ON kanban_tasks(status); CREATE TABLE IF NOT EXISTS worker_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, session_id TEXT NOT NULL, summary TEXT NOT NULL, pr_url TEXT, commit_sha TEXT, created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_worker_reports_task ON worker_reports(task_id);")?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS pending_teardowns (session_id TEXT PRIMARY KEY, action TEXT NOT NULL);")?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS workspace_metadata (session_id TEXT PRIMARY KEY, project TEXT NOT NULL, group_path TEXT NOT NULL, favorite INTEGER NOT NULL, archived INTEGER NOT NULL);")?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS companion_notifications (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, timestamp INTEGER NOT NULL);")?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS companion_panels (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, UNIQUE(session_id, kind, target)); CREATE TABLE IF NOT EXISTS companion_selection (id INTEGER PRIMARY KEY CHECK(id=1), session_id TEXT NOT NULL); CREATE TABLE IF NOT EXISTS companion_panel_selection (id INTEGER PRIMARY KEY CHECK(id=1), panel_id INTEGER NOT NULL);")?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS session_notes (session_id TEXT NOT NULL, page INTEGER NOT NULL, content TEXT NOT NULL, PRIMARY KEY(session_id, page));")?;
+        tx.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS session_notes_fts USING fts5(session_id UNINDEXED, page UNINDEXED, content, tokenize='trigram'); CREATE TRIGGER IF NOT EXISTS session_notes_insert AFTER INSERT ON session_notes BEGIN INSERT INTO session_notes_fts(rowid, session_id, page, content) VALUES (new.rowid, new.session_id, new.page, new.content); END; CREATE TRIGGER IF NOT EXISTS session_notes_update AFTER UPDATE ON session_notes BEGIN DELETE FROM session_notes_fts WHERE rowid=old.rowid; INSERT INTO session_notes_fts(rowid, session_id, page, content) VALUES (new.rowid, new.session_id, new.page, new.content); END; CREATE TRIGGER IF NOT EXISTS session_notes_delete AFTER DELETE ON session_notes BEGIN DELETE FROM session_notes_fts WHERE rowid=old.rowid; END;")?;
+        tx.execute_batch("INSERT INTO session_notes_fts(rowid, session_id, page, content) SELECT rowid, session_id, page, content FROM session_notes WHERE rowid NOT IN (SELECT rowid FROM session_notes_fts);")?;
         tx.commit()?;
         Ok(Self { connection })
+    }
+    /// Persist a bounded notification history for companion clients.
+    pub fn save_companion_notification(
+        &self,
+        event: &agmux_proto::NotificationEvent,
+    ) -> Result<(), StorageError> {
+        self.connection.execute("INSERT INTO companion_notifications(session_id,kind,title,body,timestamp) VALUES(?1,?2,?3,?4,?5)", params![event.session_id,event.kind,event.title,event.body,event.timestamp])?;
+        self.connection.execute("DELETE FROM companion_notifications WHERE id NOT IN (SELECT id FROM companion_notifications ORDER BY id DESC LIMIT 500)", [])?;
+        Ok(())
+    }
+    pub fn companion_notifications(
+        &self,
+    ) -> Result<Vec<agmux_proto::NotificationEvent>, StorageError> {
+        let mut stmt = self.connection.prepare("SELECT session_id,kind,title,body,timestamp FROM companion_notifications ORDER BY id DESC LIMIT 500")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(agmux_proto::NotificationEvent {
+                session_id: r.get(0)?,
+                kind: r.get(1)?,
+                title: r.get(2)?,
+                body: r.get(3)?,
+                timestamp: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+    /// Register a panel for an existing session.
+    pub fn register_panel(
+        &self,
+        session_id: &str,
+        kind: &str,
+        target: &str,
+    ) -> Result<bool, StorageError> {
+        Ok(self.connection.execute("INSERT OR IGNORE INTO companion_panels(session_id,kind,target) SELECT id,?2,?3 FROM sessions WHERE id=?1", params![session_id,kind,target])? != 0 || self.connection.query_row("SELECT EXISTS(SELECT 1 FROM companion_panels WHERE session_id=?1 AND kind=?2 AND target=?3)", params![session_id,kind,target], |r| r.get(0))?)
+    }
+    /// Persist the selected session, rejecting unknown sessions.
+    pub fn select_companion_session(&self, session_id: &str) -> Result<bool, StorageError> {
+        Ok(self.connection.execute("INSERT INTO companion_selection(id,session_id) SELECT 1,id FROM sessions WHERE id=?1 ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id", [session_id])? != 0)
+    }
+    pub fn select_companion_panel(
+        &self,
+        session_id: &str,
+        panel_id: i64,
+    ) -> Result<bool, StorageError> {
+        Ok(self.connection.execute("INSERT INTO companion_panel_selection(id,panel_id) SELECT 1,id FROM companion_panels WHERE id=?1 AND session_id=?2 ON CONFLICT(id) DO UPDATE SET panel_id=excluded.panel_id", params![panel_id, session_id])? != 0)
+    }
+    pub fn companion_selected_panel(&self) -> Result<Option<i64>, StorageError> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT panel_id FROM companion_panel_selection WHERE id=1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+    pub fn companion_selection(&self) -> Result<Option<String>, StorageError> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT session_id FROM companion_selection WHERE id=1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+    pub fn companion_panels(&self) -> Result<Vec<agmux_proto::CompanionPanel>, StorageError> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT id,session_id,kind,target FROM companion_panels ORDER BY id")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(agmux_proto::CompanionPanel {
+                id: r.get(0)?,
+                session_id: r.get(1)?,
+                kind: r.get(2)?,
+                target: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
     /// Persist a message for a session.
     pub fn enqueue_message(
@@ -400,6 +485,12 @@ impl StorageEngine {
         lines: &[String],
     ) -> Result<(), StorageError> {
         let tx = self.connection.transaction()?;
+        if !lines.is_empty() {
+            tx.execute(
+                "DELETE FROM terminal_logs_fts WHERE session_id=?1 AND line_no=?2",
+                params![session_id, first_line],
+            )?;
+        }
         for (offset, line) in lines.iter().enumerate() {
             tx.execute("INSERT INTO terminal_logs_fts (session_id,line_no,timestamp,content) VALUES (?1,?2,?3,?4)", params![session_id, first_line + offset as u64, timestamp, line])?;
         }
@@ -500,8 +591,54 @@ impl StorageEngine {
         )?;
         Ok(())
     }
+    /// All persisted sessions, including archived and exited sessions.
+    pub fn list_workspace_sessions(&self) -> Result<Vec<SessionInfo>, StorageError> {
+        let mut stmt = self.connection.prepare(
+            "SELECT id,pid,cwd,command,created_at,state FROM sessions ORDER BY created_at,id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(SessionInfo {
+                session_id: r.get(0)?,
+                pid: r.get(1)?,
+                cwd: r.get(2)?,
+                command: r.get(3)?,
+                created_at: r.get(4)?,
+                state: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+    /// Persist organization independently of lifecycle state.
+    pub fn set_workspace_metadata(
+        &self,
+        id: &str,
+        metadata: &agmux_proto::WorkspaceMetadata,
+    ) -> Result<bool, StorageError> {
+        Ok(self.connection.execute("INSERT INTO workspace_metadata (session_id,project,group_path,favorite,archived) SELECT id,?2,?3,?4,?5 FROM sessions WHERE id=?1 ON CONFLICT(session_id) DO UPDATE SET project=excluded.project,group_path=excluded.group_path,favorite=excluded.favorite,archived=excluded.archived", params![id, metadata.project, metadata.group, metadata.favorite, metadata.archived])? != 0)
+    }
+    /// Return organization for all sessions.
+    pub fn workspace_metadata(
+        &self,
+    ) -> Result<std::collections::HashMap<String, agmux_proto::WorkspaceMetadata>, StorageError>
+    {
+        let mut stmt = self.connection.prepare(
+            "SELECT session_id,project,group_path,favorite,archived FROM workspace_metadata",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                agmux_proto::WorkspaceMetadata {
+                    project: r.get(1)?,
+                    group: r.get(2)?,
+                    favorite: r.get(3)?,
+                    archived: r.get(4)?,
+                },
+            ))
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
     pub fn list_active_sessions(&self) -> Result<Vec<SessionInfo>, StorageError> {
-        let mut stmt = self.connection.prepare("SELECT id,pid,cwd,command,created_at,state FROM sessions WHERE state NOT IN ('DEAD','ERRORED','COMPLETED','FAILED') ORDER BY created_at,id")?;
+        let mut stmt = self.connection.prepare("SELECT id,pid,cwd,command,created_at,state FROM sessions WHERE state NOT IN ('DEAD','ERRORED','COMPLETED','FAILED','ARCHIVED') ORDER BY created_at,id")?;
         let rows = stmt.query_map([], |r| {
             Ok(SessionInfo {
                 session_id: r.get(0)?,
@@ -535,10 +672,63 @@ impl StorageEngine {
             .optional()?)
     }
     pub fn remove_session(&self, id: &str) -> Result<(), StorageError> {
+        self.set_teardown(id, None)?;
+        self.connection.execute("DELETE FROM companion_panel_selection WHERE panel_id IN (SELECT id FROM companion_panels WHERE session_id=?1)", [id])?;
+        self.connection
+            .execute("DELETE FROM companion_panels WHERE session_id=?1", [id])?;
+        self.connection
+            .execute("DELETE FROM companion_selection WHERE session_id=?1", [id])?;
+        self.connection
+            .execute("DELETE FROM workspace_metadata WHERE session_id=?1", [id])?;
         self.connection
             .execute("DELETE FROM sessions WHERE id=?1", [id])?;
         Ok(())
     }
+    /// Persist ordinary transitions without reviving a torn-down session.
+    pub fn update_live_session_state(&self, id: &str, state: &str) -> Result<bool, StorageError> {
+        Ok(self.connection.execute(
+            "UPDATE sessions SET state=?2 WHERE id=?1 AND state NOT IN ('DEAD','ARCHIVED')",
+            params![id, state],
+        )? > 0)
+    }
+
+    /// Commit the teardown state and consume its request in one transaction.
+    pub fn finish_teardown(&self, id: &str, state: &str) -> Result<(), StorageError> {
+        let tx = self.connection.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE sessions SET state=?2 WHERE id=?1",
+            params![id, state],
+        )?;
+        tx.execute("DELETE FROM pending_teardowns WHERE session_id=?1", [id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Return pending actions for presentation and completion.
+    pub fn list_teardowns(
+        &self,
+    ) -> Result<std::collections::HashMap<String, String>, StorageError> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT session_id, action FROM pending_teardowns")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Set, replace, or cancel a pending teardown.
+    pub fn set_teardown(&self, id: &str, action: Option<&str>) -> Result<(), StorageError> {
+        if let Some(action) = action {
+            self.connection.execute(
+                "INSERT OR REPLACE INTO pending_teardowns(session_id,action) VALUES (?1,?2)",
+                params![id, action],
+            )?;
+        } else {
+            self.connection
+                .execute("DELETE FROM pending_teardowns WHERE session_id=?1", [id])?;
+        }
+        Ok(())
+    }
+
     /// Save a compressed snapshot for a session.
     pub fn save_snapshot(
         &self,

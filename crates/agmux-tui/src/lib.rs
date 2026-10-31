@@ -1,6 +1,8 @@
 //! Interactive terminal viewport for daemon sessions.
 
+pub mod search_modal;
 pub mod ui;
+pub mod workspace_hierarchy;
 
 use std::{io, path::Path, time::Duration};
 
@@ -15,7 +17,10 @@ use agmux_proto::{
 };
 use anyhow::{Context, Result, bail};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+        MouseButton, MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -77,6 +82,7 @@ pub fn encode_key_to_pty_bytes(key: KeyCode, modifiers: KeyModifiers) -> Option<
 pub enum ModalState {
     #[default]
     None,
+    Help,
     CommandPalette {
         query: String,
         selected: usize,
@@ -87,6 +93,10 @@ pub enum ModalState {
     QuickPrompt {
         input: String,
     },
+    GroupEditor {
+        input: String,
+    },
+    ForkMenu,
     ReviewDiff {
         session_id: String,
         scope: agmux_proto::DiffScope,
@@ -96,12 +106,33 @@ pub enum ModalState {
     KanbanBoard {
         selected: usize,
     },
+    GlobalSearch {
+        query: String,
+        selected: usize,
+        hits: Vec<agmux_proto::GlobalSearchHit>,
+        error: Option<String>,
+    },
+    Filter,
+    Notes {
+        session_id: String,
+        page: u32,
+        content: String,
+        loaded: bool,
+    },
 }
 
 /// State displayed by the interactive viewport.
 #[derive(Default)]
 pub struct App {
     pub sessions: Vec<SessionInfo>,
+    pub workspace: std::collections::HashMap<String, agmux_proto::WorkspaceMetadata>,
+    pub show_archived: bool,
+    pub pending_selection: Option<String>,
+    pub prompt_tool: usize,
+    pub prompt_model: usize,
+    pub prompt_effort: usize,
+    pub prompt_worktree: bool,
+    pub teardowns: std::collections::HashMap<String, String>,
     pub selected_index: usize,
     pub active_viewport_lines: Vec<String>,
     pub should_quit: bool,
@@ -109,6 +140,8 @@ pub struct App {
     /// When `true`, keystrokes are forwarded directly to the active session's PTY (`Esc` returns to Normal Mode).
     pub input_mode: bool,
     pub attention_filter: bool,
+    /// Display session rows with additional command and directory details.
+    pub comfortable_rows: bool,
     pub split_view: bool,
     pub pinned_session_index: Option<usize>,
     pub pinned_viewport_lines: Vec<String>,
@@ -121,6 +154,9 @@ pub struct App {
     pub repository_root: Option<std::path::PathBuf>,
     /// Pending daemon request produced by an input action.
     pub pending_message: Option<IpcMessage>,
+    pub filter_query: String,
+    pub filter_ids: Option<Vec<String>>,
+    pub feature_error: Option<String>,
 }
 
 impl App {
@@ -154,6 +190,7 @@ impl App {
     /// Actions matching the palette query, in display order.
     pub fn palette_actions(&self, query: &str) -> Vec<String> {
         let mut actions = vec![
+            "Help / Cheatsheet (?)".to_owned(),
             "New Session".to_owned(),
             "Review Changes (Ctrl+R)".to_owned(),
             "Freeze Session".to_owned(),
@@ -173,6 +210,290 @@ impl App {
             .collect()
     }
 
+    /// Returns the session index corresponding to the given vertical offset inside the sidebar list content, if any.
+    pub fn session_at_sidebar_row(&self, row_offset: usize) -> Option<usize> {
+        let mut current_line = 0;
+        let mut previous_favorite = false;
+        let mut previous_project = String::new();
+        let mut previous_group = String::new();
+
+        for index in self.workspace_order() {
+            let meta = self.metadata_for(index);
+            if meta.favorite && !previous_favorite {
+                current_line += 1;
+            }
+            if !meta.favorite {
+                if previous_favorite || previous_project != meta.project {
+                    current_line += 1;
+                    previous_project = meta.project.clone();
+                    previous_group.clear();
+                }
+                if previous_group != meta.group {
+                    for _ in meta.group.split('/').filter(|s| !s.is_empty()) {
+                        current_line += 1;
+                    }
+                    previous_group = meta.group.clone();
+                }
+            }
+            previous_favorite = meta.favorite;
+
+            let item_height = if self.comfortable_rows { 3 } else { 1 };
+            if row_offset >= current_line && row_offset < current_line + item_height {
+                return Some(index);
+            }
+            current_line += item_height;
+        }
+        None
+    }
+
+    /// Handle terminal mouse events (clicks, scrolls) across sidebar, viewport, and modals.
+    pub fn handle_mouse(&mut self, mouse: MouseEvent, screen_width: u16, screen_height: u16) {
+        let screen = ratatui::layout::Rect::new(0, 0, screen_width, screen_height);
+        let (sidebar_area, viewport_area, status_area) = ui::layout_areas(screen);
+
+        let modal = std::mem::take(&mut self.modal);
+        self.modal = match modal {
+            ModalState::Help => {
+                if matches!(mouse.kind, MouseEventKind::Down(_)) {
+                    ModalState::None
+                } else {
+                    ModalState::Help
+                }
+            }
+            ModalState::OnboardingWizard { mut selected } => {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        selected = selected.saturating_sub(1);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        selected =
+                            (selected + 1).min(self.onboarding_commands().len().saturating_sub(1));
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        let modal_area = ui::centered(screen, 70, 22);
+                        if mouse.column < modal_area.x
+                            || mouse.column >= modal_area.x + modal_area.width
+                            || mouse.row < modal_area.y
+                            || mouse.row >= modal_area.y + modal_area.height
+                        {
+                            return;
+                        } else {
+                            self.modal = ModalState::OnboardingWizard { selected };
+                            self.handle_key(KeyCode::Enter);
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+                ModalState::OnboardingWizard { selected }
+            }
+            ModalState::CommandPalette {
+                query,
+                mut selected,
+            } => {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        selected = selected.saturating_sub(1);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        let actions_len = self.palette_actions(&query).len();
+                        selected = (selected + 1).min(actions_len.saturating_sub(1));
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        let modal_area = ui::centered(screen, 60, 12);
+                        if mouse.column < modal_area.x
+                            || mouse.column >= modal_area.x + modal_area.width
+                            || mouse.row < modal_area.y
+                            || mouse.row >= modal_area.y + modal_area.height
+                        {
+                            return;
+                        } else if mouse.row > modal_area.y + 2 {
+                            let click_offset = (mouse.row - (modal_area.y + 2)) as usize;
+                            let actions = self.palette_actions(&query);
+                            if let Some(action) = actions.get(click_offset).cloned() {
+                                self.execute_action(&action);
+                                return;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                ModalState::CommandPalette { query, selected }
+            }
+            ModalState::GlobalSearch {
+                query,
+                mut selected,
+                hits,
+                error,
+            } => {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        selected = selected.saturating_sub(1);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        selected = (selected + 1).min(hits.len().saturating_sub(1));
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        let modal_area = ui::centered(screen, 90, 80);
+                        if mouse.column < modal_area.x
+                            || mouse.column >= modal_area.x + modal_area.width
+                            || mouse.row < modal_area.y
+                            || mouse.row >= modal_area.y + modal_area.height
+                        {
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+                ModalState::GlobalSearch {
+                    query,
+                    selected,
+                    hits,
+                    error,
+                }
+            }
+            ModalState::KanbanBoard { mut selected } => {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        selected = selected.saturating_sub(1);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        selected = selected.saturating_add(1);
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        let modal_area = ui::centered(screen, 90, 80);
+                        if mouse.column < modal_area.x
+                            || mouse.column >= modal_area.x + modal_area.width
+                            || mouse.row < modal_area.y
+                            || mouse.row >= modal_area.y + modal_area.height
+                        {
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+                ModalState::KanbanBoard { selected }
+            }
+            ModalState::ReviewDiff {
+                session_id,
+                scope,
+                mut selected_hunk,
+                files,
+            } => {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        selected_hunk = selected_hunk.saturating_sub(1);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        let total_hunks: usize = files.iter().map(|f| f.hunks.len()).sum();
+                        if total_hunks > 0 {
+                            selected_hunk = (selected_hunk + 1).min(total_hunks - 1);
+                        }
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        let modal_area = ui::centered(screen, 90, 80);
+                        if mouse.column < modal_area.x
+                            || mouse.column >= modal_area.x + modal_area.width
+                            || mouse.row < modal_area.y
+                            || mouse.row >= modal_area.y + modal_area.height
+                        {
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+                ModalState::ReviewDiff {
+                    session_id,
+                    scope,
+                    selected_hunk,
+                    files,
+                }
+            }
+            ModalState::Notes { .. }
+            | ModalState::ForkMenu
+            | ModalState::GroupEditor { .. }
+            | ModalState::QuickPrompt { .. }
+            | ModalState::Filter => {
+                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    let is_outside = mouse.column >= viewport_area.x + viewport_area.width
+                        || mouse.row >= status_area.y;
+                    if is_outside { ModalState::None } else { modal }
+                } else {
+                    modal
+                }
+            }
+            ModalState::None => {
+                // Check status bar first
+                if mouse.row == status_area.y {
+                    if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                        if self.input_mode {
+                            self.input_mode = false;
+                        } else if mouse.column < 12 {
+                            return self.modal = ModalState::Help;
+                        } else if mouse.column >= 12 && mouse.column < 32 {
+                            self.execute_action("New Session");
+                        } else if mouse.column >= screen_width.saturating_sub(12) {
+                            self.should_quit = true;
+                        }
+                    }
+                    return;
+                }
+
+                // Check sidebar
+                if mouse.column >= sidebar_area.x
+                    && mouse.column < sidebar_area.x + sidebar_area.width
+                    && mouse.row >= sidebar_area.y
+                    && mouse.row < sidebar_area.y + sidebar_area.height
+                {
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => {
+                            self.move_selection(false);
+                        }
+                        MouseEventKind::ScrollDown => {
+                            self.move_selection(true);
+                        }
+                        MouseEventKind::Down(MouseButton::Left)
+                            if mouse.row > sidebar_area.y
+                                && mouse.row < sidebar_area.y + sidebar_area.height - 1 =>
+                        {
+                            let row_offset = (mouse.row - (sidebar_area.y + 1)) as usize;
+                            if let Some(target_index) = self.session_at_sidebar_row(row_offset) {
+                                if self.selected_index == target_index {
+                                    self.input_mode = true;
+                                } else {
+                                    self.selected_index = target_index;
+                                    self.input_mode = false;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+
+                // Check viewport
+                if mouse.column >= viewport_area.x
+                    && mouse.column < viewport_area.x + viewport_area.width
+                    && mouse.row >= viewport_area.y
+                    && mouse.row < viewport_area.y + viewport_area.height
+                {
+                    match mouse.kind {
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            if !self.input_mode && !self.sessions.is_empty() {
+                                self.input_mode = true;
+                            }
+                        }
+                        MouseEventKind::ScrollUp if self.split_view => {
+                            self.split_view = false;
+                        }
+                        _ => {}
+                    }
+                }
+                ModalState::None
+            }
+        };
+    }
+
     /// Handle a key without modifiers.
     pub fn handle_key(&mut self, key: KeyCode) {
         self.handle_key_with_modifiers(key, KeyModifiers::NONE);
@@ -183,6 +504,41 @@ impl App {
         let modal = std::mem::take(&mut self.modal);
         self.modal = match modal {
             ModalState::None => {
+                if key == KeyCode::Char('f') && modifiers.contains(KeyModifiers::CONTROL) {
+                    self.input_mode = false;
+                    return self.modal = ModalState::GlobalSearch {
+                        query: String::new(),
+                        selected: 0,
+                        hits: Vec::new(),
+                        error: None,
+                    };
+                }
+                if (matches!(key, KeyCode::PageUp | KeyCode::PageDown)
+                    && modifiers.contains(KeyModifiers::CONTROL))
+                    || (!self.input_mode && key == KeyCode::Char('N'))
+                {
+                    if let Some(session) = self
+                        .sessions
+                        .get(self.selected_index)
+                        .filter(|_| self.session_visible(self.selected_index))
+                    {
+                        let session_id = session.session_id.clone();
+                        let page = 1;
+                        self.pending_message = Some(IpcMessage::SearchNotesRequest(
+                            agmux_proto::SearchNotesRequest::Get {
+                                session_id: session_id.clone(),
+                                page,
+                            },
+                        ));
+                        self.input_mode = false;
+                        return self.modal = ModalState::Notes {
+                            session_id,
+                            page,
+                            content: String::new(),
+                            loaded: false,
+                        };
+                    }
+                }
                 if self.input_mode {
                     if key == KeyCode::Esc {
                         self.input_mode = false;
@@ -201,6 +557,8 @@ impl App {
                 }
 
                 match key {
+                    KeyCode::Char('?') => return self.modal = ModalState::Help,
+                    KeyCode::Char('/') => return self.modal = ModalState::Filter,
                     KeyCode::F(1) | KeyCode::Char(':') => return self.open_palette(),
                     KeyCode::Char('p') if modifiers.contains(KeyModifiers::CONTROL) => {
                         return self.open_palette();
@@ -209,11 +567,11 @@ impl App {
                         self.input_mode = true;
                         return;
                     }
-                    KeyCode::Char('n') => {
+                    KeyCode::Char('n') | KeyCode::Char('s') => {
                         self.execute_action("New Session");
                         return;
                     }
-                    KeyCode::Char('t') => {
+                    KeyCode::Char('T') => {
                         if let Some(parent) = self.sessions.get(self.selected_index) {
                             let subtab_id =
                                 format!("{}:shell-{}", parent.session_id, self.subtabs.len() + 1);
@@ -227,11 +585,38 @@ impl App {
                                 },
                             ));
                         }
-                        return;
                     }
+                    KeyCode::Char('t') => {
+                        self.show_archived = !self.show_archived;
+                        self.align_selection();
+                    }
+                    KeyCode::Char('*') => {
+                        let mut meta = self.metadata_for(self.selected_index);
+                        meta.favorite = !meta.favorite;
+                        self.update_workspace(meta);
+                    }
+                    KeyCode::Char('a') | KeyCode::Char('u') => {
+                        let mut meta = self.metadata_for(self.selected_index);
+                        meta.archived = key == KeyCode::Char('a');
+                        self.update_workspace(meta);
+                    }
+                    KeyCode::Char('g') => {
+                        let meta = self.metadata_for(self.selected_index);
+                        return self.modal = ModalState::GroupEditor {
+                            input: format!("{}/{}", meta.project.trim_end_matches('/'), meta.group),
+                        };
+                    }
+                    KeyCode::Char('f') => return self.modal = ModalState::ForkMenu,
                     KeyCode::Char('[') => {
                         if !self.subtabs.is_empty() {
                             self.active_subtab_idx = self.active_subtab_idx.saturating_sub(1);
+                            if let Some(i) = self
+                                .sessions
+                                .iter()
+                                .position(|s| s.session_id == self.subtabs[self.active_subtab_idx])
+                            {
+                                self.selected_index = i;
+                            }
                         }
                         return;
                     }
@@ -239,6 +624,13 @@ impl App {
                         if !self.subtabs.is_empty() {
                             self.active_subtab_idx =
                                 (self.active_subtab_idx + 1).min(self.subtabs.len() - 1);
+                            if let Some(i) = self
+                                .sessions
+                                .iter()
+                                .position(|s| s.session_id == self.subtabs[self.active_subtab_idx])
+                            {
+                                self.selected_index = i;
+                            }
                         }
                         return;
                     }
@@ -286,7 +678,9 @@ impl App {
                                 self.selected_index = index;
                             }
                         }
+                        self.align_selection();
                     }
+                    KeyCode::Char('D') => self.comfortable_rows = !self.comfortable_rows,
                     KeyCode::Char('.') => {
                         if let Some(session) = self.sessions.get_mut(self.selected_index) {
                             if session.state == "FINISHED" {
@@ -297,6 +691,15 @@ impl App {
                                     },
                                 ));
                             }
+                        }
+                    }
+                    KeyCode::Char('c') => {
+                        if let Some(session) = self.sessions.get(self.selected_index) {
+                            self.pending_message =
+                                Some(IpcMessage::TeardownRequest(agmux_proto::TeardownRequest {
+                                    session_id: session.session_id.clone(),
+                                    action: "cancel".into(),
+                                }));
                         }
                     }
                     KeyCode::Char('v') => {
@@ -316,6 +719,144 @@ impl App {
                     _ => {}
                 }
                 ModalState::None
+            }
+            ModalState::GlobalSearch {
+                mut query,
+                mut selected,
+                mut hits,
+                mut error,
+            } => {
+                let mut changed = false;
+                match key {
+                    KeyCode::Esc => return,
+                    KeyCode::Up => selected = selected.saturating_sub(1),
+                    KeyCode::Down => selected = (selected + 1).min(hits.len().saturating_sub(1)),
+                    KeyCode::Backspace => {
+                        query.pop();
+                        changed = true;
+                    }
+                    KeyCode::Char(c)
+                        if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        query.push(c);
+                        changed = true;
+                    }
+                    _ => {}
+                }
+                if changed {
+                    selected = 0;
+                    hits.clear();
+                    error = None;
+                    if !query.is_empty() {
+                        self.pending_message = Some(IpcMessage::SearchNotesRequest(
+                            agmux_proto::SearchNotesRequest::Search {
+                                query: query.clone(),
+                            },
+                        ));
+                    }
+                }
+                ModalState::GlobalSearch {
+                    query,
+                    selected,
+                    hits,
+                    error,
+                }
+            }
+            ModalState::Filter => {
+                match key {
+                    KeyCode::Esc => {
+                        self.filter_query.clear();
+                        self.refresh_filter();
+                        return;
+                    }
+                    KeyCode::Enter => return,
+                    KeyCode::Backspace => {
+                        self.filter_query.pop();
+                        self.refresh_filter();
+                    }
+                    KeyCode::Char(c)
+                        if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        self.filter_query.push(c);
+                        self.refresh_filter();
+                    }
+                    _ => {}
+                }
+                ModalState::Filter
+            }
+            ModalState::Notes {
+                session_id,
+                mut page,
+                mut content,
+                mut loaded,
+            } => {
+                let mut changed = false;
+                match key {
+                    KeyCode::Esc => return,
+                    KeyCode::PageUp if modifiers.contains(KeyModifiers::CONTROL) => {
+                        page = page.saturating_sub(1).max(1);
+                        loaded = false;
+                    }
+                    KeyCode::PageDown if modifiers.contains(KeyModifiers::CONTROL) => {
+                        page = page.saturating_add(1);
+                        loaded = false;
+                    }
+                    KeyCode::F(7) => {
+                        page = page.saturating_sub(1).max(1);
+                        loaded = false;
+                    }
+                    KeyCode::F(8) => {
+                        page = page.saturating_add(1);
+                        loaded = false;
+                    }
+                    KeyCode::BackTab => {
+                        page = page.saturating_sub(1).max(1);
+                        loaded = false;
+                    }
+                    KeyCode::Tab => {
+                        page = page.saturating_add(1);
+                        loaded = false;
+                    }
+                    KeyCode::Backspace if loaded => {
+                        content.pop();
+                        changed = true;
+                    }
+                    KeyCode::Enter if loaded => {
+                        content.push('\n');
+                        changed = true;
+                    }
+                    KeyCode::Char(c)
+                        if loaded
+                            && !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        content.push(c);
+                        changed = true;
+                    }
+                    _ => {}
+                }
+                if !loaded {
+                    content.clear();
+                    self.pending_message = Some(IpcMessage::SearchNotesRequest(
+                        agmux_proto::SearchNotesRequest::Get {
+                            session_id: session_id.clone(),
+                            page,
+                        },
+                    ));
+                } else if changed {
+                    self.pending_message = Some(IpcMessage::SearchNotesRequest(
+                        agmux_proto::SearchNotesRequest::Set {
+                            session_id: session_id.clone(),
+                            page,
+                            content: content.clone(),
+                        },
+                    ));
+                }
+                ModalState::Notes {
+                    session_id,
+                    page,
+                    content,
+                    loaded,
+                }
             }
             ModalState::CommandPalette {
                 mut query,
@@ -349,6 +890,15 @@ impl App {
                 }
                 ModalState::CommandPalette { query, selected }
             }
+            ModalState::Help => {
+                match key {
+                    KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter => {
+                        return;
+                    }
+                    _ => {}
+                }
+                ModalState::Help
+            }
             ModalState::OnboardingWizard { mut selected } => {
                 match key {
                     KeyCode::Up => selected = selected.saturating_sub(1),
@@ -356,51 +906,194 @@ impl App {
                         selected = (selected + 1).min(self.onboarding_commands().len() - 1)
                     }
                     KeyCode::Esc => {
-                        self.should_quit = true;
+                        return;
                     }
-                    KeyCode::Enter => match ensure_config_exists(&self.config_path) {
-                        Ok(_) => {
-                            let command = self.onboarding_commands()
-                                [selected.min(self.onboarding_commands().len() - 1)]
-                            .clone();
-                            let id = format!(
-                                "session-{}",
-                                std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis()
-                            );
-                            self.pending_message =
-                                Some(IpcMessage::SpawnSessionRequest(SpawnSessionRequest {
-                                    session_id: id,
-                                    command,
-                                    args: vec![],
-                                    cwd: self
-                                        .repository_root
-                                        .as_ref()
-                                        .map(|p| p.to_string_lossy().into_owned()),
-                                    worktree_branch: None,
-                                }));
-                            self.onboarding_error = None;
-                            return;
+                    KeyCode::Char('q') => {
+                        self.should_quit = true;
+                        return;
+                    }
+                    KeyCode::Char('?') => {
+                        return self.modal = ModalState::Help;
+                    }
+                    KeyCode::Enter | KeyCode::Char('s') | KeyCode::Char('n') => {
+                        match ensure_config_exists(&self.config_path) {
+                            Ok(_) => {
+                                let command = self.onboarding_commands()
+                                    [selected.min(self.onboarding_commands().len() - 1)]
+                                .clone();
+                                let id = format!(
+                                    "session-{}",
+                                    std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis()
+                                );
+                                self.pending_message =
+                                    Some(IpcMessage::SpawnSessionRequest(SpawnSessionRequest {
+                                        session_id: id,
+                                        command,
+                                        args: vec![],
+                                        cwd: self
+                                            .repository_root
+                                            .as_ref()
+                                            .map(|p| p.to_string_lossy().into_owned()),
+                                        worktree_branch: None,
+                                    }));
+                                self.onboarding_error = None;
+                                return;
+                            }
+                            Err(error) => self.onboarding_error = Some(error.to_string()),
                         }
-                        Err(error) => self.onboarding_error = Some(error.to_string()),
-                    },
+                    }
                     _ => {}
                 }
                 ModalState::OnboardingWizard { selected }
             }
-            ModalState::QuickPrompt { mut input } => {
+            ModalState::GroupEditor { mut input } => {
                 match key {
                     KeyCode::Esc => return,
                     KeyCode::Enter => {
+                        // The project is the current project root; the entered path names nested groups.
+                        let mut meta = self.metadata_for(self.selected_index);
+                        let prefix = format!("{}/", meta.project.trim_end_matches('/'));
+                        meta.group = input
+                            .strip_prefix(&prefix)
+                            .unwrap_or(&input)
+                            .trim_matches('/')
+                            .to_owned();
+                        self.update_workspace(meta);
+                        return;
+                    }
+                    KeyCode::Backspace => {
+                        input.pop();
+                    }
+                    KeyCode::Char(c)
+                        if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        input.push(c)
+                    }
+                    _ => {}
+                }
+                ModalState::GroupEditor { input }
+            }
+            ModalState::ForkMenu => {
+                if matches!(key, KeyCode::Char('s') | KeyCode::Char('t')) {
+                    if let Some(session) = self.sessions.get(self.selected_index) {
+                        let subtab = key == KeyCode::Char('t');
+                        let suffix = agmux_core::session_tracker::SessionTracker::mint_uuid_v4();
+                        let new_session_id = if subtab {
+                            format!("{}:fork-{suffix}", session.session_id)
+                        } else {
+                            format!("fork-{suffix}")
+                        };
+                        self.pending_selection = Some(new_session_id.clone());
+                        self.pending_message = Some(IpcMessage::WorkspaceRequest(
+                            agmux_proto::WorkspaceRequest::Fork {
+                                session_id: session.session_id.clone(),
+                                new_session_id,
+                                subtab,
+                            },
+                        ));
+                    }
+                    return;
+                }
+                if key == KeyCode::Esc {
+                    return;
+                }
+                ModalState::ForkMenu
+            }
+            ModalState::QuickPrompt { mut input } => {
+                match key {
+                    KeyCode::Esc => return,
+                    KeyCode::Tab => {
+                        self.prompt_tool = (self.prompt_tool + 1) % 3;
+                        if self.prompt_tool == 0 {
+                            self.prompt_model = 0;
+                            self.prompt_effort = 0;
+                            self.prompt_worktree = false;
+                        }
+                    }
+                    KeyCode::Char('l') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.prompt_model = (self.prompt_model + 1) % 3;
+                        if self.prompt_tool == 0 {
+                            self.prompt_tool = 1;
+                        }
+                    }
+                    KeyCode::Char('x') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.prompt_effort = (self.prompt_effort + 1) % 4;
+                        if self.prompt_tool == 0 {
+                            self.prompt_tool = 1;
+                        }
+                    }
+                    KeyCode::Char('t') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.prompt_worktree = !self.prompt_worktree;
+                        if self.prompt_tool == 0 {
+                            self.prompt_tool = 1;
+                        }
+                    }
+                    KeyCode::Enter => {
                         if let Some(session) = self.sessions.get(self.selected_index) {
-                            input.push('\n');
-                            self.pending_message =
-                                Some(IpcMessage::TerminalInputFrame(TerminalInputFrame {
-                                    session_id: session.session_id.clone(),
-                                    data: input.into_bytes(),
-                                }));
+                            if self.prompt_tool == 0
+                                && self.prompt_model == 0
+                                && self.prompt_effort == 0
+                                && !self.prompt_worktree
+                            {
+                                input.push('\n');
+                                self.pending_message =
+                                    Some(IpcMessage::TerminalInputFrame(TerminalInputFrame {
+                                        session_id: session.session_id.clone(),
+                                        data: input.into_bytes(),
+                                    }));
+                            } else {
+                                let id = format!(
+                                    "prompt-{}",
+                                    agmux_core::session_tracker::SessionTracker::mint_uuid_v4()
+                                );
+                                let mut args = Vec::new();
+                                if self.prompt_model != 0 {
+                                    args.extend([
+                                        "--model".into(),
+                                        if self.prompt_tool == 2 {
+                                            ["", "sonnet", "opus"][self.prompt_model]
+                                        } else {
+                                            ["", "gpt-5.4", "gpt-5.3-codex"][self.prompt_model]
+                                        }
+                                        .into(),
+                                    ]);
+                                }
+                                if self.prompt_effort != 0 {
+                                    if self.prompt_tool == 2 {
+                                        args.extend([
+                                            "--effort".into(),
+                                            ["", "low", "medium", "high"][self.prompt_effort]
+                                                .into(),
+                                        ]);
+                                    } else {
+                                        args.extend([
+                                            "-c".into(),
+                                            format!(
+                                                "model_reasoning_effort=\"{}\"",
+                                                ["", "low", "medium", "high"][self.prompt_effort]
+                                            ),
+                                        ]);
+                                    }
+                                }
+                                args.push(input);
+                                self.pending_selection = Some(id.clone());
+                                self.pending_message =
+                                    Some(IpcMessage::SpawnSessionRequest(SpawnSessionRequest {
+                                        session_id: id.clone(),
+                                        command: if self.prompt_tool == 2 {
+                                            "claude"
+                                        } else {
+                                            "codex"
+                                        }
+                                        .into(),
+                                        args,
+                                        cwd: Some(session.cwd.clone()),
+                                        worktree_branch: self.prompt_worktree.then_some(id),
+                                    }));
+                            }
                         }
                         return;
                     }
@@ -573,13 +1266,7 @@ impl App {
     }
 
     fn move_selection(&mut self, forward: bool) {
-        let visible: Vec<_> = self
-            .sessions
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| !self.attention_filter || !matches!(s.state.as_str(), "IDLE" | "DEAD"))
-            .map(|(i, _)| i)
-            .collect();
+        let visible = self.workspace_order();
         if visible.is_empty() {
             return;
         }
@@ -613,6 +1300,7 @@ impl App {
                         self.selected_index = index;
                     }
                 }
+                self.align_selection();
             }
             "Freeze Session" => {
                 if let Some(session) = self.sessions.get(self.selected_index) {
@@ -638,6 +1326,9 @@ impl App {
                         files: Vec::new(),
                     };
                 }
+            }
+            "Help / Cheatsheet (?)" => {
+                self.modal = ModalState::Help;
             }
             "New Session" => {
                 let id = format!(
@@ -669,8 +1360,8 @@ impl App {
 struct TerminalGuard;
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
     }
 }
 
@@ -704,6 +1395,7 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
             IpcMessage::ListSessionsResponse(response) => {
                 break App {
                     sessions: response.sessions,
+                    teardowns: response.teardowns,
                     ..App::default()
                 };
             }
@@ -713,10 +1405,33 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
             other => bail!("Unexpected list response: {other:?}"),
         }
     };
+    ipc.send(IpcMessage::WorkspaceRequest(
+        agmux_proto::WorkspaceRequest::List,
+    ))
+    .await?;
+    loop {
+        match ipc
+            .next()
+            .await
+            .context("Connection closed during workspace list")??
+        {
+            IpcMessage::WorkspaceResponse(response) => {
+                if let Some(error) = &response.error {
+                    bail!("Workspace list failed: {error}");
+                }
+                app.apply_workspace(response);
+                break;
+            }
+            IpcMessage::SessionStateChangedEvent(_)
+            | IpcMessage::NotificationEvent(_)
+            | IpcMessage::SessionListUpdate(_) => {}
+            other => bail!("Unexpected workspace response: {other:?}"),
+        }
+    }
     if app.sessions.is_empty() && !Path::new("agmux.toml").exists() {
         app.open_onboarding("agmux.toml".into());
     }
-    if let Some(session) = app.sessions.first() {
+    if let Some(session) = app.sessions.get(app.selected_index) {
         ipc.send(IpcMessage::SubscribeViewport {
             session_id: session.session_id.clone(),
         })
@@ -724,7 +1439,7 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
     }
     enable_raw_mode()?;
     let _guard = TerminalGuard;
-    execute!(io::stdout(), EnterAlternateScreen)?;
+    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let mut parser = vt100::Parser::new(
         std::num::NonZeroU16::new(24).expect("nonzero rows"),
@@ -737,19 +1452,36 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
             _ = tick.tick() => {
                 terminal.draw(|frame| ui::render(frame, &app))?;
                 while event::poll(Duration::ZERO)? {
-                    if let Event::Key(key) = event::read()? {
-                        if key.kind != KeyEventKind::Press { continue; }
-                        let previous = app.selected_index;
-                        app.handle_key_with_modifiers(key.code, key.modifiers);
-                        if let Some(message) = app.pending_message.take() { ipc.send(message).await?; }
-                        if app.should_quit { return Ok(()); }
-                        if previous != app.selected_index {
-                            parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
-                            app.active_viewport_lines.clear();
-                            if let Some(session) = app.sessions.get(app.selected_index) {
-                                ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?;
+                    match event::read()? {
+                        Event::Key(key) => {
+                            if key.kind != KeyEventKind::Press { continue; }
+                            let previous = app.selected_index;
+                            app.handle_key_with_modifiers(key.code, key.modifiers);
+                            if let Some(message) = app.pending_message.take() { ipc.send(message).await?; }
+                            if app.should_quit { return Ok(()); }
+                            if previous != app.selected_index {
+                                parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
+                                app.active_viewport_lines.clear();
+                                if let Some(session) = app.sessions.get(app.selected_index) {
+                                    ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?;
+                                }
                             }
                         }
+                        Event::Mouse(mouse) => {
+                            let previous = app.selected_index;
+                            let size = terminal.size()?;
+                            app.handle_mouse(mouse, size.width, size.height);
+                            if let Some(message) = app.pending_message.take() { ipc.send(message).await?; }
+                            if app.should_quit { return Ok(()); }
+                            if previous != app.selected_index {
+                                parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
+                                app.active_viewport_lines.clear();
+                                if let Some(session) = app.sessions.get(app.selected_index) {
+                                    ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?;
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -766,10 +1498,12 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                     app.active_viewport_lines = parser.screen().contents().lines().map(str::to_owned).collect();
                 }
                 IpcMessage::SpawnSessionResponse(response) => {
-                    if response.success { ipc.send(IpcMessage::SubscribeViewport { session_id: response.session_id }).await?; }
+                    if !response.success { app.feature_error = response.error; app.pending_selection = None; }
+                    else if response.session_id.contains(":fork-") { if !app.subtabs.contains(&response.session_id) { app.subtabs.push(response.session_id.clone()); } app.active_subtab_idx = app.subtabs.iter().position(|id| id == &response.session_id).unwrap_or(0); }
                     ipc.send(IpcMessage::ListSessionsRequest(ListSessionsRequest {})).await?;
                 }
                 IpcMessage::SpawnSubtabResponse(response) => {
+                    if !response.success { app.feature_error = response.error.clone(); }
                     if response.success {
                         if !app.subtabs.contains(&response.subtab_id) {
                             app.subtabs.push(response.subtab_id.clone());
@@ -789,16 +1523,63 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                         *files = response.files;
                     }
                 }
+                IpcMessage::SearchNotesResponse(response) => {
+                    let previous = app.selected_index;
+                    app.apply_search_notes_response(response);
+                    if previous != app.selected_index {
+                        app.active_viewport_lines.clear();
+                        parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
+                        if let Some(session) = app.sessions.get(app.selected_index) {
+                            ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?;
+                        }
+                    }
+                }
                 IpcMessage::ListSessionsResponse(response) => {
-                    app.sessions = response.sessions;
-                    app.selected_index = app.selected_index.min(app.sessions.len().saturating_sub(1));
+                    app.teardowns = response.teardowns;
+                    ipc.send(IpcMessage::WorkspaceRequest(agmux_proto::WorkspaceRequest::List)).await?;
                 }
                 IpcMessage::SessionListUpdate(update) => {
-                    app.sessions = update.sessions;
-                    app.selected_index = app.selected_index.min(app.sessions.len().saturating_sub(1));
+                    app.teardowns = update.teardowns;
+                    ipc.send(IpcMessage::WorkspaceRequest(agmux_proto::WorkspaceRequest::List)).await?;
+                    if let ModalState::GlobalSearch { query, .. } = &app.modal {
+                        if !query.is_empty() { ipc.send(IpcMessage::SearchNotesRequest(agmux_proto::SearchNotesRequest::Search { query: query.clone() })).await?; }
+                    }
+                }
+                IpcMessage::WorkspaceResponse(response) => {
+                    let selected = app.sessions.get(app.selected_index).map(|s| s.session_id.clone());
+                    if response.error.is_some() {
+                        app.pending_selection = None;
+                        ipc.send(IpcMessage::WorkspaceRequest(agmux_proto::WorkspaceRequest::List)).await?;
+                    }
+                    app.apply_workspace(response);
+                    app.refresh_filter();
+                    if let Some(message) = app.pending_message.take() { ipc.send(message).await?; }
+                    if let Some(id) = app.pending_selection.as_ref() {
+                        if let Some(index) = app.sessions.iter().position(|s| &s.session_id == id) {
+                            if app.session_visible(index) { app.selected_index = index; }
+                            app.pending_selection = None;
+                        }
+                    }
+                    if selected.as_deref() != app.sessions.get(app.selected_index).map(|s| s.session_id.as_str()) {
+                        app.active_viewport_lines.clear();
+                        parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
+                        if let Some(session) = app.sessions.get(app.selected_index) { ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?; }
+                    }
                 }
                 IpcMessage::SessionStateChangedEvent(event) => {
                     if let Some(session) = app.sessions.iter_mut().find(|s| s.session_id == event.session_id) { session.state = event.new_state; }
+                    let previous = app.selected_index;
+                    app.align_selection();
+                    if previous != app.selected_index {
+                        app.active_viewport_lines.clear();
+                        parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
+                        if let Some(session) = app.sessions.get(app.selected_index) { ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?; }
+                    }
+                }
+                IpcMessage::NotificationEvent(event) if event.kind == "search.index" => {
+                    if let ModalState::GlobalSearch { query, .. } = &app.modal {
+                        if !query.is_empty() { ipc.send(IpcMessage::SearchNotesRequest(agmux_proto::SearchNotesRequest::Search { query: query.clone() })).await?; }
+                    }
                 }
                 _ => {}
             }

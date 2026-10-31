@@ -64,6 +64,17 @@ pub async fn ensure_daemon_running(socket_path: &Path, token_path: &Path) -> Res
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::null());
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
+
     let mut child = cmd.spawn().with_context(|| {
         format!(
             "Failed to auto-spawn daemon binary {}",
