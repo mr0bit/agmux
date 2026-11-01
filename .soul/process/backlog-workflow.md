@@ -50,5 +50,5 @@ An AI agent must **never** transition a task to `"Done"` unless all of the follo
    * `cargo clippy -- -D warnings` reports clean code with zero warnings.
    * `cargo fmt --check` succeeds.
 3. **Traceability Updated:** The upstream requirements in `docs/specs/` have their `Implementation Status` and `Test Status` attributes updated to reflect the new state.
-4. **Visual Proof Artifact:** A terminal or UI screenshot captured from a live user run is saved to `docs/assets/screenshots/<task>_verification.png` as verifiable visual proof of completion.
+4. **Visual Proof Artifact (User's Point-of-View):** A high-resolution terminal, TUI, GUI, or notification screenshot captured from a live run reflecting the user's authentic perspective (what a human user sees and interacts with) is saved to `docs/assets/screenshots/<task>_verification.png`. Raw unit test logs do not qualify.
 5. **No Git Commits by Subagent:** Per delegation policy, delegated implementers do not run `git commit`; the orchestrator/human reviews diffs.

@@ -16,14 +16,16 @@ Use this template for writing the PR body:
 
 <diagram, diff-sketch, or tree>
 
-## Per-Task Implementation Report & Visual Proof
+## Per-Task Implementation Report & Visual Proof (User's POV)
 
 For each task included in this PR:
 
 ### TASK-XX: <Task Title>
 * **Implementation Steps:** <Summary of implementation, key modules modified, algorithms, and design choices>
-* **Visual Proof:**
+* **Visual Proof (User's Point-of-View):**
   ![TASK-XX](docs/assets/screenshots/<task>_verification.png)
+  *(User POV: <Brief explanation of the user-visible state, command outputs, or UI shown in the capture>)*
+  *(Direct link: [task_xx_verification.png](https://github.com/<owner>/<repo>/blob/<branch>/docs/assets/screenshots/<task>_verification.png))*
 
 ## Requirement Traceability & PR Delta
 
@@ -195,13 +197,19 @@ Place each visual next to the short text it supports. Keep only the calls, files
 
 You may use one of these, you may use several, it is unlikely you will use all of them. Use your judgement and don't overwhelm the user.
 
-### Evidence
+### Evidence & Visual Proof (User's Point-of-View)
 
 Concrete evidence that the change works. Show a before and after.
 
-Screenshots are S-tier - when the environment is set up for it and the change is visual.
+- **User's POV Visual Proofs are S-tier and Mandatory for User-Facing Changes:**
+  Screenshots must capture the authentic **User's Point-of-View (POV)** — what an actual human developer sees on screen:
+  - **CLI Tools:** Authentic terminal window showing command execution (`$ agmux <cmd>`), formatted tables, ANSI color tags, and user status feedback.
+  - **TUI & Multiplexer:** Authentic terminal viewport displaying active panes, status bar, active agent tags, and split layouts.
+  - **Desktop GUI:** Side-by-side terminal/editor layout, SSE connection status, and OS desktop protocol integration.
+  - **Mobile Notifications:** Notification cards with readable 120-char excerpts and actionable 1-tap reply buttons.
+  - *Note:* Raw `cargo test` console logs or debug trace dumps do NOT count as User POV proof.
 
-Execution-based evidence is A-tier. Test results, console output. Show the exact test that now fails and passes, using pseudocode.
+- **Execution-based evidence is A-tier:** Test suite results, SVT matrix pass summaries, benchmark metrics, and linter reports.
 
 ### Merge Danger
 
