@@ -77,6 +77,7 @@ async fn test_ver_state_002_tier1_deterministic_cli_hooks() {
             args: vec!["-c".to_string(), "sleep 10".to_string()],
             cwd: Some(dir.path().display().to_string()),
             worktree_branch: None,
+            ..Default::default()
         }),
     )
     .await

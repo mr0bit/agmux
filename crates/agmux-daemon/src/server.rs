@@ -373,6 +373,8 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
     });
 
     let mut viewport_task: Option<tokio::task::JoinHandle<()>> = None;
+    let subscribed_session: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
     while let Some(frame_res) = reader.next().await {
         let message = match frame_res {
             Ok(msg) => msg,
@@ -417,6 +419,9 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                                     args,
                                     cwd: Some(parent.cwd),
                                     worktree_branch: None,
+                                    detached: true,
+                                    cols: None,
+                                    rows: None,
                                 }),
                                 None => Err("This adapter does not support conversation forking"),
                             },
@@ -720,6 +725,9 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                     None
                 };
                 let session_id = req.session_id.clone();
+                let is_detached = req.detached;
+                let req_cols = req.cols;
+                let req_rows = req.rows;
                 let command = std::iter::once(req.command.as_str())
                     .chain(req.args.iter().map(String::as_str))
                     .collect::<Vec<_>>()
@@ -803,6 +811,11 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                     .await
                 {
                     Ok(session) => {
+                        if let (Some(c), Some(r)) = (req_cols, req_rows) {
+                            if c != 80 || r != 24 {
+                                let _ = pty_resizer.resize_session(&session_id, c, r).await;
+                            }
+                        }
                         let info = SessionInfo {
                             session_id: session_id.clone(),
                             pid: session.pid,
@@ -869,6 +882,7 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                         let bcast_fwd = event_broadcaster.clone();
                         let cfg_fwd = config_watcher.clone();
                         let teardown_fwd = teardown_scheduler.clone();
+                        let subscribed_check = subscribed_session.clone();
                         tokio::spawn(async move {
                             let mut output_rx = session.subscribe_output();
                             let mut exit_rx = session.subscribe_exit();
@@ -896,7 +910,10 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                                                     index_lines(output_db.clone(), &fwd_session_id, &mut line_no, lines).await;
                                                     if let Some(partial) = partial { let mut partial_line = line_no; index_lines(output_db.clone(), &fwd_session_id, &mut partial_line, vec![partial]).await; }
                                                     if indexed { bcast_fwd.transcript_indexed(&fwd_session_id); }
-                                                    let _ = out_tx_fwd.send(IpcMessage::TerminalOutputFrame(TerminalOutputFrame { session_id: fwd_session_id.clone(), data })).await;
+                                                    let should_forward = !is_detached && subscribed_check.lock().unwrap().as_deref() != Some(&fwd_session_id);
+                                                    if should_forward {
+                                                        let _ = out_tx_fwd.send(IpcMessage::TerminalOutputFrame(TerminalOutputFrame { session_id: fwd_session_id.clone(), data })).await;
+                                                    }
                                                     false
                                                 }
                                                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => { tracing::warn!("Lost {n} terminal output frames"); false }
@@ -935,14 +952,19 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                                             lines,
                                         )
                                         .await;
-                                        let _ = out_tx_fwd
-                                            .send(IpcMessage::TerminalOutputFrame(
-                                                TerminalOutputFrame {
-                                                    session_id: fwd_session_id.clone(),
-                                                    data,
-                                                },
-                                            ))
-                                            .await;
+                                        let should_forward = !is_detached
+                                            && subscribed_check.lock().unwrap().as_deref()
+                                                != Some(&fwd_session_id);
+                                        if should_forward {
+                                            let _ = out_tx_fwd
+                                                .send(IpcMessage::TerminalOutputFrame(
+                                                    TerminalOutputFrame {
+                                                        session_id: fwd_session_id.clone(),
+                                                        data,
+                                                    },
+                                                ))
+                                                .await;
+                                        }
                                     }
                                     if let Some(line) = history.finish() {
                                         index_lines(
@@ -1401,6 +1423,7 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                 if let Some(task) = viewport_task.take() {
                     task.abort();
                 }
+                *subscribed_session.lock().unwrap() = Some(session_id.clone());
                 if let Ok((sync_frame, mut output)) =
                     subscription_manager.subscribe_viewport(&session_id).await
                 {

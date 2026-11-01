@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use agmux_daemon::DaemonServer;
 use agmux_proto::{
-    HandshakeRequest, IpcMessage, ResizeSessionRequest, SpawnSessionRequest, connect_ipc,
-    new_framed,
+    HandshakeRequest, IpcMessage, ResizeSessionRequest, SpawnSessionRequest, TerminalInputFrame,
+    connect_ipc, new_framed,
 };
 use futures_util::{SinkExt, StreamExt};
 
@@ -78,6 +78,7 @@ async fn test_pty_environment_colorterm_and_xterm_256color() {
             ],
             cwd: Some(dir.path().display().to_string()),
             worktree_branch: None,
+            ..Default::default()
         }))
         .await
         .expect("spawn request");
@@ -151,6 +152,7 @@ async fn test_subscribe_viewport_emits_single_sync_frame_without_immediate_dupli
             args: vec!["5".to_string()],
             cwd: Some(dir.path().display().to_string()),
             worktree_branch: None,
+            ..Default::default()
         }))
         .await
         .expect("spawn request");
@@ -209,6 +211,7 @@ async fn test_resize_session_request_updates_dimensions() {
             args: vec!["5".to_string()],
             cwd: Some(dir.path().display().to_string()),
             worktree_branch: None,
+            ..Default::default()
         }))
         .await
         .expect("spawn");
@@ -239,4 +242,92 @@ async fn test_resize_session_request_updates_dimensions() {
         }
         other => panic!("Expected ResizeSessionResponse, got: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn test_interactive_input_does_not_duplicate_output_frames() {
+    let dir = TempDir::new("pty-dedup-test");
+    let (sock_path, token) = start_test_daemon(&dir).await;
+
+    let stream = connect_ipc(&sock_path).await.expect("connect");
+    let mut framed = new_framed(stream);
+    framed
+        .send(IpcMessage::HandshakeRequest(HandshakeRequest {
+            client_version: env!("CARGO_PKG_VERSION").into(),
+            token: token.clone(),
+        }))
+        .await
+        .expect("handshake");
+    let _ = framed.next().await;
+
+    let session_id = "test-dedup-sess".to_string();
+    framed
+        .send(IpcMessage::SpawnSessionRequest(SpawnSessionRequest {
+            session_id: session_id.clone(),
+            command: "sh".to_string(),
+            args: vec![],
+            cwd: None,
+            worktree_branch: None,
+            detached: true,
+            cols: Some(100),
+            rows: Some(30),
+        }))
+        .await
+        .expect("spawn");
+
+    let spawn_resp = framed.next().await.unwrap().unwrap();
+    assert!(matches!(spawn_resp, IpcMessage::SpawnSessionResponse(r) if r.success));
+
+    // Now send SubscribeViewport on the same connection (like TUI does)
+    framed
+        .send(IpcMessage::SubscribeViewport {
+            session_id: session_id.clone(),
+        })
+        .await
+        .expect("subscribe");
+
+    // Read until ScreenSyncFrame
+    let mut saw_sync = false;
+    for _ in 0..5 {
+        if let Ok(Some(Ok(msg))) =
+            tokio::time::timeout(Duration::from_millis(500), framed.next()).await
+        {
+            if matches!(msg, IpcMessage::ScreenSyncFrame(_)) {
+                saw_sync = true;
+                break;
+            }
+        }
+    }
+    assert!(saw_sync, "Must see ScreenSyncFrame");
+
+    // Send input: echo UNIQUE_DEDUP_MARKER
+    framed
+        .send(IpcMessage::TerminalInputFrame(TerminalInputFrame {
+            session_id: session_id.clone(),
+            data: b"echo UNIQUE_DEDUP_MARKER\n".to_vec(),
+        }))
+        .await
+        .expect("send input");
+
+    let mut marker_count = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(Some(Ok(msg))) =
+            tokio::time::timeout(Duration::from_millis(500), framed.next()).await
+        {
+            if let IpcMessage::TerminalOutputFrame(frame) = msg {
+                let text = String::from_utf8_lossy(&frame.data);
+                if text.contains("UNIQUE_DEDUP_MARKER") {
+                    marker_count += 1;
+                }
+            }
+        } else {
+            break;
+        }
+    }
+
+    assert_eq!(
+        marker_count, 2,
+        "Expected exactly 2 marker instances: echo from PTY + stdout from shell"
+    );
 }

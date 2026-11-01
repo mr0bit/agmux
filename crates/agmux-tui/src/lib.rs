@@ -1109,6 +1109,7 @@ impl App {
                                         .unwrap_or_default()
                                         .as_millis()
                                 );
+                                self.pending_selection = Some(id.clone());
                                 self.pending_message =
                                     Some(IpcMessage::SpawnSessionRequest(SpawnSessionRequest {
                                         session_id: id,
@@ -1119,6 +1120,9 @@ impl App {
                                             .as_ref()
                                             .map(|p| p.to_string_lossy().into_owned()),
                                         worktree_branch: None,
+                                        detached: true,
+                                        cols: None,
+                                        rows: None,
                                     }));
                                 self.onboarding_error = None;
                                 return;
@@ -1273,6 +1277,9 @@ impl App {
                                         args,
                                         cwd: Some(session.cwd.clone()),
                                         worktree_branch: self.prompt_worktree.then_some(id),
+                                        detached: true,
+                                        cols: None,
+                                        rows: None,
                                     }));
                             }
                         }
@@ -1519,12 +1526,16 @@ impl App {
                         .unwrap_or_default()
                         .as_millis()
                 );
+                self.pending_selection = Some(id.clone());
                 self.pending_message = Some(IpcMessage::SpawnSessionRequest(SpawnSessionRequest {
                     session_id: id,
                     command: default_shell(),
                     args: vec![],
                     cwd: None,
                     worktree_branch: None,
+                    detached: true,
+                    cols: None,
+                    rows: None,
                 }));
             }
             _ => {
@@ -1686,7 +1697,14 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                             if key.kind != KeyEventKind::Press { continue; }
                             let previous = app.selected_index;
                             app.handle_key_with_modifiers(key.code, key.modifiers);
-                            if let Some(message) = app.pending_message.take() { ipc.send(message).await?; }
+                            if let Some(mut message) = app.pending_message.take() {
+                                if let IpcMessage::SpawnSessionRequest(ref mut req) = message {
+                                    req.cols = Some(current_dims.0);
+                                    req.rows = Some(current_dims.1);
+                                    req.detached = true;
+                                }
+                                ipc.send(message).await?;
+                            }
                             if app.should_quit { return Ok(()); }
                             if previous != app.selected_index {
                                 parser = vt100::Parser::new(std::num::NonZeroU16::new(current_dims.1).expect("nonzero rows"), std::num::NonZeroU16::new(current_dims.0).expect("nonzero columns"), 0);
@@ -1707,7 +1725,14 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                             let previous = app.selected_index;
                             let size = terminal.size()?;
                             app.handle_mouse(mouse, size.width, size.height);
-                            if let Some(message) = app.pending_message.take() { ipc.send(message).await?; }
+                            if let Some(mut message) = app.pending_message.take() {
+                                if let IpcMessage::SpawnSessionRequest(ref mut req) = message {
+                                    req.cols = Some(current_dims.0);
+                                    req.rows = Some(current_dims.1);
+                                    req.detached = true;
+                                }
+                                ipc.send(message).await?;
+                            }
                             if app.should_quit { return Ok(()); }
                             if previous != app.selected_index {
                                 parser = vt100::Parser::new(std::num::NonZeroU16::new(current_dims.1).expect("nonzero rows"), std::num::NonZeroU16::new(current_dims.0).expect("nonzero columns"), 0);
@@ -1730,8 +1755,8 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
             }
             message = ipc.next() => match message.context("Daemon connection closed")?? {
                 IpcMessage::ScreenSyncFrame(frame) if app.sessions.get(app.selected_index).is_some_and(|s| s.session_id == frame.session_id) => {
-                    let rows = std::num::NonZeroU16::new(frame.rows.max(1)).expect("nonzero rows");
-                    let cols = std::num::NonZeroU16::new(frame.cols.max(1)).expect("nonzero cols");
+                    let rows = std::num::NonZeroU16::new(current_dims.1.max(1)).expect("nonzero rows");
+                    let cols = std::num::NonZeroU16::new(current_dims.0.max(1)).expect("nonzero cols");
                     parser = vt100::Parser::new(rows, cols, 0);
                     parser.process(&frame.formatted_screen);
                     app.active_viewport_lines = frame.lines;
@@ -1824,7 +1849,14 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                     }
                     app.apply_workspace(response);
                     app.refresh_filter();
-                    if let Some(message) = app.pending_message.take() { ipc.send(message).await?; }
+                    if let Some(mut message) = app.pending_message.take() {
+                        if let IpcMessage::SpawnSessionRequest(ref mut req) = message {
+                            req.cols = Some(current_dims.0);
+                            req.rows = Some(current_dims.1);
+                            req.detached = true;
+                        }
+                        ipc.send(message).await?;
+                    }
                     if let Some(id) = app.pending_selection.as_ref() {
                         if let Some(index) = app.sessions.iter().position(|s| &s.session_id == id) {
                             if app.session_visible(index) { app.selected_index = index; }

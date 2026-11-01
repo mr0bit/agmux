@@ -23,7 +23,7 @@ pub struct HandshakeResponse {
 }
 
 /// Request to spawn a command inside a new PTY session.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct SpawnSessionRequest {
     /// Unique identifier for the session.
     pub session_id: String,
@@ -36,6 +36,15 @@ pub struct SpawnSessionRequest {
     /// Optional Git branch for an isolated worktree.
     #[serde(default)]
     pub worktree_branch: Option<String>,
+    /// When true, session output is not forwarded over the spawning connection.
+    #[serde(default)]
+    pub detached: bool,
+    /// Initial terminal columns, if specified by client.
+    #[serde(default)]
+    pub cols: Option<u16>,
+    /// Initial terminal rows, if specified by client.
+    #[serde(default)]
+    pub rows: Option<u16>,
 }
 
 /// Daemon response indicating whether session spawning succeeded.

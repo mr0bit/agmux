@@ -67,6 +67,7 @@ async fn broadcasts_and_persists_inactivity_and_exit() {
             args: vec!["1".into()],
             cwd: None,
             worktree_branch: None,
+            ..Default::default()
         }))
         .await
         .unwrap();
