@@ -30,3 +30,42 @@ This specification details the rich notification and custom shell hook dispatche
 * **Downstream Req:** `LLD-GUI-COMPANION-PANELS-002`
 * **Downstream Test:** `TEST-VER-GUI-002`
 * **Test Status:** Passed
+
+---
+
+### REQ-GUI-SELF-UPDATER-003
+* **Unique ID:** `REQ-GUI-SELF-UPDATER-003`
+* **Text:** As a user maintaining an Agmux installation, the system shall provide `agmux update` and `agmux --update` to check the official GitHub Releases API for new versions, verify the target-triple binary archive against published SHA-256 checksum manifests, and perform atomic in-place binary replacement of `agmux` and `agmuxd` with rollback on failure.
+* **Criticality:** High
+* **SW Component:** `crates/agmux-cli::self_updater`
+* **Implementation Status:** Not implemented
+* **Verification Criteria:** Execute `agmux update --check` against release metadata; download release asset; verify SHA-256 checksum matching and mismatch rejection; replace executable atomically and verify newly installed binary version.
+* **Downstream Req:** `LLD-GUI-SELF-UPDATER-003`
+* **Downstream Test:** `TEST-VER-GUI-003`
+* **Test Status:** Failed
+
+---
+
+### REQ-GUI-MOBILE-PUSH-004
+* **Unique ID:** `REQ-GUI-MOBILE-PUSH-004`
+* **Text:** As a developer running long-running agent workflows away from the terminal, when a session transitions to `WAITING` or `ERRORED`, `agmuxd` shall dispatch rich push notifications via configured mobile push relays (including `ntfy.sh` topics and generic webhooks) with session title, 120-character output excerpt, and actionable inline reply buttons routed back to the companion endpoint.
+* **Criticality:** Medium
+* **SW Component:** `crates/agmux-daemon::notification_dispatcher`
+* **Implementation Status:** Not implemented
+* **Verification Criteria:** Configure push relay URL and ntfy topic in `config.toml`; trigger `WAITING` state; verify HTTP POST is delivered with action buttons, topic header, and payload containing title and body quote.
+* **Downstream Req:** `LLD-GUI-MOBILE-PUSH-004`
+* **Downstream Test:** `TEST-VER-GUI-004`
+* **Test Status:** Failed
+
+---
+
+### REQ-GUI-DESKTOP-APP-005
+* **Unique ID:** `REQ-GUI-DESKTOP-APP-005`
+* **Text:** As a desktop user, the companion GUI bridge (`agmux gui`) shall provide real-time Server-Sent Events (SSE) streaming of session viewports (<50ms latency), OS desktop protocol registration for `agmux://` URIs, and side-by-side split panels hosting syntax-highlighted code editing (Monaco/CodeMirror) and live web development previews.
+* **Criticality:** High
+* **SW Component:** `crates/agmux-cli::companion_gui`
+* **Implementation Status:** Not implemented
+* **Verification Criteria:** Launch `agmux gui`; connect to `/api/events` SSE stream and observe immediate viewport frame pushes on terminal output; verify `agmux panels open <file>` loads the split code editor; verify `agmux open agmux://session/<id>` activates the target session.
+* **Downstream Req:** `LLD-GUI-DESKTOP-APP-005`
+* **Downstream Test:** `TEST-VER-GUI-005`
+* **Test Status:** Failed
