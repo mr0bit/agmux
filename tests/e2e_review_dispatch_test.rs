@@ -64,6 +64,7 @@ async fn dispatches_drafts_to_pty_and_persists_rounds() {
             args: vec![],
             cwd: Some(root.to_string_lossy().into_owned()),
             worktree_branch: None,
+            ..Default::default()
         }))
         .await
         .unwrap();

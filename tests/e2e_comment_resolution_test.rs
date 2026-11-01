@@ -97,6 +97,7 @@ async fn resolves_comments_via_ipc_and_diff_inspection() {
             args: vec![],
             cwd: Some(root.to_string_lossy().into_owned()),
             worktree_branch: None,
+            ..Default::default()
         }))
         .await
         .unwrap();

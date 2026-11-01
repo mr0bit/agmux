@@ -81,6 +81,7 @@ async fn test_ver_remote_001_ssh_federation_dual_daemon_bridge_and_subtree_mount
             args: Vec::new(),
             cwd: Some(dir.path().display().to_string()),
             worktree_branch: None,
+            ..Default::default()
         }),
     )
     .await

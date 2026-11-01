@@ -77,6 +77,7 @@ async fn test_ver_ipc_003_single_writer_50_concurrent_requests() {
             ],
             cwd: None,
             worktree_branch: None,
+            ..Default::default()
         }))
         .await
         .unwrap();
@@ -177,6 +178,7 @@ async fn test_ver_ipc_004_and_005_screen_sync_frame_and_event_broadcast() {
             ],
             cwd: None,
             worktree_branch: None,
+            ..Default::default()
         }))
         .await
         .unwrap();

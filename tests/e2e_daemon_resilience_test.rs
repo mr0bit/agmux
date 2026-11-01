@@ -279,6 +279,7 @@ async fn test_ver_daemon_003_graceful_shutdown_signals_children() {
             args: vec!["60".into()],
             cwd: None,
             worktree_branch: None,
+            ..Default::default()
         }))
         .await
         .unwrap();

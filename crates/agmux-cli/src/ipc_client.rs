@@ -69,6 +69,9 @@ pub async fn run_command(
         args,
         cwd,
         worktree_branch,
+        detached: false,
+        cols: None,
+        rows: None,
     });
 
     sink.send(spawn_req)

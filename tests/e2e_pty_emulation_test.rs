@@ -136,6 +136,7 @@ async fn test_ver_pty_004_resize_reflow_and_tiocswinsz_propagation() {
             ],
             cwd: Some(dir.path().display().to_string()),
             worktree_branch: None,
+            ..Default::default()
         }),
     )
     .await
@@ -226,6 +227,7 @@ async fn test_ver_pty_005_shell_subtab_inherits_cwd_and_port() {
             args: vec!["-c".to_string(), "sleep 5".to_string()],
             cwd: Some(work_subdir.display().to_string()),
             worktree_branch: None,
+            ..Default::default()
         }),
     )
     .await

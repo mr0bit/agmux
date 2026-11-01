@@ -25,7 +25,12 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use futures_util::{SinkExt, StreamExt};
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{
+    Terminal,
+    backend::CrosstermBackend,
+    style::{Color as RatatuiColor, Modifier as RatatuiModifier, Style as RatatuiStyle},
+    text::{Line as RatatuiLine, Span as RatatuiSpan},
+};
 
 /// Platform-aware default interactive shell (`powershell.exe` on Windows, `$SHELL` / `bash` on Unix).
 pub fn default_shell() -> String {
@@ -49,32 +54,206 @@ pub fn default_shell_command() -> String {
 
 /// Encode a terminal `KeyCode` + `KeyModifiers` into raw PTY stdin bytes for Interactive Mode passthrough.
 pub fn encode_key_to_pty_bytes(key: KeyCode, modifiers: KeyModifiers) -> Option<Vec<u8>> {
+    // 1. Check Alt / Meta combinations first
+    if modifiers.contains(KeyModifiers::ALT) {
+        match key {
+            KeyCode::Char(c) => {
+                let mut buf = [0u8; 4];
+                let encoded = c.encode_utf8(&mut buf).as_bytes();
+                let mut bytes = vec![0x1b];
+                bytes.extend_from_slice(encoded);
+                return Some(bytes);
+            }
+            KeyCode::Backspace => return Some(vec![0x1b, 0x7f]),
+            KeyCode::Left => return Some(b"\x1b[1;3D".to_vec()),
+            KeyCode::Right => return Some(b"\x1b[1;3C".to_vec()),
+            KeyCode::Up => return Some(b"\x1b[1;3A".to_vec()),
+            KeyCode::Down => return Some(b"\x1b[1;3B".to_vec()),
+            _ => {}
+        }
+    }
+
+    // 2. Check Control combinations with arrows or special characters
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        match key {
+            KeyCode::Left => return Some(b"\x1b[1;5D".to_vec()),
+            KeyCode::Right => return Some(b"\x1b[1;5C".to_vec()),
+            KeyCode::Up => return Some(b"\x1b[1;5A".to_vec()),
+            KeyCode::Down => return Some(b"\x1b[1;5B".to_vec()),
+            KeyCode::Char(c) => {
+                let lower = c.to_ascii_lowercase();
+                if lower.is_ascii_lowercase() {
+                    let ctrl_byte = (lower as u8) - b'a' + 1;
+                    return Some(vec![ctrl_byte]);
+                }
+                match lower {
+                    '@' | ' ' => return Some(vec![0x00]),
+                    '[' => return Some(vec![0x1b]),
+                    '\\' => return Some(vec![0x1c]),
+                    ']' => return Some(vec![0x1d]),
+                    '^' => return Some(vec![0x1e]),
+                    '_' => return Some(vec![0x1f]),
+                    '?' => return Some(vec![0x7f]),
+                    _ => return None,
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // 3. Check Shift combinations with arrows or tab
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        match key {
+            KeyCode::Tab | KeyCode::BackTab => return Some(b"\x1b[Z".to_vec()),
+            KeyCode::Left => return Some(b"\x1b[1;2D".to_vec()),
+            KeyCode::Right => return Some(b"\x1b[1;2C".to_vec()),
+            KeyCode::Up => return Some(b"\x1b[1;2A".to_vec()),
+            KeyCode::Down => return Some(b"\x1b[1;2B".to_vec()),
+            _ => {}
+        }
+    }
+
+    // 4. Standard keys
     match key {
         KeyCode::Enter => Some(b"\r".to_vec()),
         KeyCode::Backspace => Some(vec![0x7f]),
         KeyCode::Tab => Some(b"\t".to_vec()),
+        KeyCode::BackTab => Some(b"\x1b[Z".to_vec()),
         KeyCode::Up => Some(b"\x1b[A".to_vec()),
         KeyCode::Down => Some(b"\x1b[B".to_vec()),
         KeyCode::Right => Some(b"\x1b[C".to_vec()),
         KeyCode::Left => Some(b"\x1b[D".to_vec()),
         KeyCode::Home => Some(b"\x1b[H".to_vec()),
         KeyCode::End => Some(b"\x1b[F".to_vec()),
+        KeyCode::Insert => Some(b"\x1b[2~".to_vec()),
         KeyCode::Delete => Some(b"\x1b[3~".to_vec()),
-        KeyCode::Char(c) if modifiers.contains(KeyModifiers::CONTROL) => {
-            let lower = c.to_ascii_lowercase();
-            if lower.is_ascii_lowercase() {
-                let ctrl_byte = (lower as u8) - b'a' + 1;
-                Some(vec![ctrl_byte])
-            } else {
-                None
-            }
-        }
+        KeyCode::PageUp => Some(b"\x1b[5~".to_vec()),
+        KeyCode::PageDown => Some(b"\x1b[6~".to_vec()),
+        KeyCode::F(1) => Some(b"\x1bOP".to_vec()),
+        KeyCode::F(2) => Some(b"\x1bOQ".to_vec()),
+        KeyCode::F(3) => Some(b"\x1bOR".to_vec()),
+        KeyCode::F(4) => Some(b"\x1bOS".to_vec()),
+        KeyCode::F(5) => Some(b"\x1b[15~".to_vec()),
+        KeyCode::F(6) => Some(b"\x1b[17~".to_vec()),
+        KeyCode::F(7) => Some(b"\x1b[18~".to_vec()),
+        KeyCode::F(8) => Some(b"\x1b[19~".to_vec()),
+        KeyCode::F(9) => Some(b"\x1b[20~".to_vec()),
+        KeyCode::F(10) => Some(b"\x1b[21~".to_vec()),
+        KeyCode::F(11) => Some(b"\x1b[23~".to_vec()),
+        KeyCode::F(12) => Some(b"\x1b[24~".to_vec()),
         KeyCode::Char(c) => {
             let mut buf = [0u8; 4];
             Some(c.encode_utf8(&mut buf).as_bytes().to_vec())
         }
         _ => None,
     }
+}
+
+/// Convert a VT100 parsed screen grid into styled Ratatui Lines with 24-bit Truecolor and 256-color fidelity.
+pub fn screen_to_ratatui_lines(screen: &vt100::Screen) -> Vec<RatatuiLine<'static>> {
+    let (r, c) = screen.size();
+    let (rows, cols) = (r.get(), c.get());
+    let mut lines = Vec::with_capacity(rows as usize);
+
+    for row in 0..rows {
+        let mut spans: Vec<RatatuiSpan<'static>> = Vec::new();
+        let mut current_style: Option<RatatuiStyle> = None;
+        let mut current_text = String::new();
+
+        for col in 0..cols {
+            if let Some(cell) = screen.cell(row, col) {
+                if cell.is_wide_continuation() {
+                    continue;
+                }
+                let mut style = RatatuiStyle::default();
+                match cell.fgcolor() {
+                    vt100::Color::Default => {}
+                    vt100::Color::Idx(i) => style = style.fg(RatatuiColor::Indexed(i)),
+                    vt100::Color::Rgb(r, g, b) => style = style.fg(RatatuiColor::Rgb(r, g, b)),
+                }
+                match cell.bgcolor() {
+                    vt100::Color::Default => {}
+                    vt100::Color::Idx(i) => style = style.bg(RatatuiColor::Indexed(i)),
+                    vt100::Color::Rgb(r, g, b) => style = style.bg(RatatuiColor::Rgb(r, g, b)),
+                }
+                if cell.bold() {
+                    style = style.add_modifier(RatatuiModifier::BOLD);
+                }
+                if cell.italic() {
+                    style = style.add_modifier(RatatuiModifier::ITALIC);
+                }
+                if cell.underline() {
+                    style = style.add_modifier(RatatuiModifier::UNDERLINED);
+                }
+                if cell.inverse() {
+                    style = style.add_modifier(RatatuiModifier::REVERSED);
+                }
+
+                let text = cell.contents();
+                let text_to_append = if text.is_empty() { " " } else { text };
+
+                if let Some(prev_style) = current_style {
+                    if prev_style == style {
+                        current_text.push_str(text_to_append);
+                    } else {
+                        if !current_text.is_empty() {
+                            spans.push(RatatuiSpan::styled(current_text, prev_style));
+                            current_text = String::new();
+                        }
+                        current_style = Some(style);
+                        current_text.push_str(text_to_append);
+                    }
+                } else {
+                    current_style = Some(style);
+                    current_text.push_str(text_to_append);
+                }
+            } else {
+                let style = RatatuiStyle::default();
+                if let Some(prev_style) = current_style {
+                    if prev_style == style {
+                        current_text.push(' ');
+                    } else {
+                        if !current_text.is_empty() {
+                            spans.push(RatatuiSpan::styled(current_text, prev_style));
+                            current_text = String::new();
+                        }
+                        current_style = Some(style);
+                        current_text.push(' ');
+                    }
+                } else {
+                    current_style = Some(style);
+                    current_text.push(' ');
+                }
+            }
+        }
+
+        if let Some(style) = current_style {
+            if !current_text.is_empty() {
+                spans.push(RatatuiSpan::styled(current_text, style));
+            }
+        }
+
+        // Trim trailing default-styled whitespace
+        while let Some(last_span) = spans.last_mut() {
+            if last_span.style == RatatuiStyle::default() {
+                let trimmed = last_span.content.trim_end_matches(' ');
+                if trimmed.is_empty() {
+                    spans.pop();
+                } else {
+                    if trimmed.len() != last_span.content.len() {
+                        last_span.content = trimmed.to_string().into();
+                    }
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        lines.push(RatatuiLine::from(spans));
+    }
+
+    lines
 }
 
 /// The currently displayed floating input.
@@ -135,6 +314,8 @@ pub struct App {
     pub teardowns: std::collections::HashMap<String, String>,
     pub selected_index: usize,
     pub active_viewport_lines: Vec<String>,
+    pub active_viewport_styled: Vec<RatatuiLine<'static>>,
+    pub cursor_position: Option<(u16, u16)>,
     pub should_quit: bool,
     pub modal: ModalState,
     /// When `true`, keystrokes are forwarded directly to the active session's PTY (`Esc` returns to Normal Mode).
@@ -928,6 +1109,7 @@ impl App {
                                         .unwrap_or_default()
                                         .as_millis()
                                 );
+                                self.pending_selection = Some(id.clone());
                                 self.pending_message =
                                     Some(IpcMessage::SpawnSessionRequest(SpawnSessionRequest {
                                         session_id: id,
@@ -938,6 +1120,9 @@ impl App {
                                             .as_ref()
                                             .map(|p| p.to_string_lossy().into_owned()),
                                         worktree_branch: None,
+                                        detached: true,
+                                        cols: None,
+                                        rows: None,
                                     }));
                                 self.onboarding_error = None;
                                 return;
@@ -1092,6 +1277,9 @@ impl App {
                                         args,
                                         cwd: Some(session.cwd.clone()),
                                         worktree_branch: self.prompt_worktree.then_some(id),
+                                        detached: true,
+                                        cols: None,
+                                        rows: None,
                                     }));
                             }
                         }
@@ -1338,12 +1526,16 @@ impl App {
                         .unwrap_or_default()
                         .as_millis()
                 );
+                self.pending_selection = Some(id.clone());
                 self.pending_message = Some(IpcMessage::SpawnSessionRequest(SpawnSessionRequest {
                     session_id: id,
                     command: default_shell(),
                     args: vec![],
                     cwd: None,
                     worktree_branch: None,
+                    detached: true,
+                    cols: None,
+                    rows: None,
                 }));
             }
             _ => {
@@ -1441,15 +1633,63 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
     let _guard = TerminalGuard;
     execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    let initial_size = terminal.size()?;
+    let mut current_dims = ui::active_viewport_inner_size(
+        ratatui::layout::Rect::new(0, 0, initial_size.width, initial_size.height),
+        app.split_view,
+    );
     let mut parser = vt100::Parser::new(
-        std::num::NonZeroU16::new(24).expect("nonzero rows"),
-        std::num::NonZeroU16::new(80).expect("nonzero columns"),
+        std::num::NonZeroU16::new(current_dims.1).expect("nonzero rows"),
+        std::num::NonZeroU16::new(current_dims.0).expect("nonzero columns"),
         0,
     );
+    if let Some(session) = app.sessions.get(app.selected_index) {
+        ipc.send(IpcMessage::ResizeSessionRequest(
+            agmux_proto::ResizeSessionRequest {
+                session_id: session.session_id.clone(),
+                cols: current_dims.0,
+                rows: current_dims.1,
+            },
+        ))
+        .await?;
+        ipc.send(IpcMessage::SubscribeViewport {
+            session_id: session.session_id.clone(),
+        })
+        .await?;
+    }
     let mut tick = tokio::time::interval(Duration::from_millis(16));
     loop {
         tokio::select! {
             _ = tick.tick() => {
+                let size = terminal.size()?;
+                let new_dims = ui::active_viewport_inner_size(
+                    ratatui::layout::Rect::new(0, 0, size.width, size.height),
+                    app.split_view,
+                );
+                if new_dims != current_dims {
+                    current_dims = new_dims;
+                    let rows = std::num::NonZeroU16::new(current_dims.1).expect("nonzero rows");
+                    let cols = std::num::NonZeroU16::new(current_dims.0).expect("nonzero cols");
+                    let formatted = parser.screen().contents_formatted();
+                    parser = vt100::Parser::new(rows, cols, 0);
+                    parser.process(formatted.as_bytes());
+                    app.active_viewport_styled = screen_to_ratatui_lines(parser.screen());
+                    app.active_viewport_lines = parser.screen().contents().lines().map(str::to_owned).collect();
+                    let screen = parser.screen();
+                    app.cursor_position = if !screen.hide_cursor() {
+                        let (r, c) = screen.cursor_position();
+                        Some((c, r))
+                    } else {
+                        None
+                    };
+                    if let Some(session) = app.sessions.get(app.selected_index) {
+                        ipc.send(IpcMessage::ResizeSessionRequest(agmux_proto::ResizeSessionRequest {
+                            session_id: session.session_id.clone(),
+                            cols: current_dims.0,
+                            rows: current_dims.1,
+                        })).await?;
+                    }
+                }
                 terminal.draw(|frame| ui::render(frame, &app))?;
                 while event::poll(Duration::ZERO)? {
                     match event::read()? {
@@ -1457,12 +1697,26 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                             if key.kind != KeyEventKind::Press { continue; }
                             let previous = app.selected_index;
                             app.handle_key_with_modifiers(key.code, key.modifiers);
-                            if let Some(message) = app.pending_message.take() { ipc.send(message).await?; }
+                            if let Some(mut message) = app.pending_message.take() {
+                                if let IpcMessage::SpawnSessionRequest(ref mut req) = message {
+                                    req.cols = Some(current_dims.0);
+                                    req.rows = Some(current_dims.1);
+                                    req.detached = true;
+                                }
+                                ipc.send(message).await?;
+                            }
                             if app.should_quit { return Ok(()); }
                             if previous != app.selected_index {
-                                parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
+                                parser = vt100::Parser::new(std::num::NonZeroU16::new(current_dims.1).expect("nonzero rows"), std::num::NonZeroU16::new(current_dims.0).expect("nonzero columns"), 0);
                                 app.active_viewport_lines.clear();
+                                app.active_viewport_styled.clear();
+                                app.cursor_position = None;
                                 if let Some(session) = app.sessions.get(app.selected_index) {
+                                    ipc.send(IpcMessage::ResizeSessionRequest(agmux_proto::ResizeSessionRequest {
+                                        session_id: session.session_id.clone(),
+                                        cols: current_dims.0,
+                                        rows: current_dims.1,
+                                    })).await?;
                                     ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?;
                                 }
                             }
@@ -1471,12 +1725,26 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                             let previous = app.selected_index;
                             let size = terminal.size()?;
                             app.handle_mouse(mouse, size.width, size.height);
-                            if let Some(message) = app.pending_message.take() { ipc.send(message).await?; }
+                            if let Some(mut message) = app.pending_message.take() {
+                                if let IpcMessage::SpawnSessionRequest(ref mut req) = message {
+                                    req.cols = Some(current_dims.0);
+                                    req.rows = Some(current_dims.1);
+                                    req.detached = true;
+                                }
+                                ipc.send(message).await?;
+                            }
                             if app.should_quit { return Ok(()); }
                             if previous != app.selected_index {
-                                parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
+                                parser = vt100::Parser::new(std::num::NonZeroU16::new(current_dims.1).expect("nonzero rows"), std::num::NonZeroU16::new(current_dims.0).expect("nonzero columns"), 0);
                                 app.active_viewport_lines.clear();
+                                app.active_viewport_styled.clear();
+                                app.cursor_position = None;
                                 if let Some(session) = app.sessions.get(app.selected_index) {
+                                    ipc.send(IpcMessage::ResizeSessionRequest(agmux_proto::ResizeSessionRequest {
+                                        session_id: session.session_id.clone(),
+                                        cols: current_dims.0,
+                                        rows: current_dims.1,
+                                    })).await?;
                                     ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?;
                                 }
                             }
@@ -1487,15 +1755,31 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
             }
             message = ipc.next() => match message.context("Daemon connection closed")?? {
                 IpcMessage::ScreenSyncFrame(frame) if app.sessions.get(app.selected_index).is_some_and(|s| s.session_id == frame.session_id) => {
-                    let rows = std::num::NonZeroU16::new(frame.rows.max(1)).expect("nonzero rows");
-                    let cols = std::num::NonZeroU16::new(frame.cols.max(1)).expect("nonzero cols");
+                    let rows = std::num::NonZeroU16::new(current_dims.1.max(1)).expect("nonzero rows");
+                    let cols = std::num::NonZeroU16::new(current_dims.0.max(1)).expect("nonzero cols");
                     parser = vt100::Parser::new(rows, cols, 0);
                     parser.process(&frame.formatted_screen);
                     app.active_viewport_lines = frame.lines;
+                    app.active_viewport_styled = screen_to_ratatui_lines(parser.screen());
+                    let screen = parser.screen();
+                    app.cursor_position = if !screen.hide_cursor() {
+                        let (r, c) = screen.cursor_position();
+                        Some((c, r))
+                    } else {
+                        None
+                    };
                 }
                 IpcMessage::TerminalOutputFrame(frame) if app.sessions.get(app.selected_index).is_some_and(|s| s.session_id == frame.session_id) => {
                     parser.process(&frame.data);
                     app.active_viewport_lines = parser.screen().contents().lines().map(str::to_owned).collect();
+                    app.active_viewport_styled = screen_to_ratatui_lines(parser.screen());
+                    let screen = parser.screen();
+                    app.cursor_position = if !screen.hide_cursor() {
+                        let (r, c) = screen.cursor_position();
+                        Some((c, r))
+                    } else {
+                        None
+                    };
                 }
                 IpcMessage::SpawnSessionResponse(response) => {
                     if !response.success { app.feature_error = response.error; app.pending_selection = None; }
@@ -1508,6 +1792,11 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                         if !app.subtabs.contains(&response.subtab_id) {
                             app.subtabs.push(response.subtab_id.clone());
                         }
+                        ipc.send(IpcMessage::ResizeSessionRequest(agmux_proto::ResizeSessionRequest {
+                            session_id: response.subtab_id.clone(),
+                            cols: current_dims.0,
+                            rows: current_dims.1,
+                        })).await?;
                         ipc.send(IpcMessage::SubscribeViewport { session_id: response.subtab_id }).await?;
                     }
                     ipc.send(IpcMessage::ListSessionsRequest(ListSessionsRequest {})).await?;
@@ -1528,8 +1817,15 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                     app.apply_search_notes_response(response);
                     if previous != app.selected_index {
                         app.active_viewport_lines.clear();
-                        parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
+                        app.active_viewport_styled.clear();
+                        app.cursor_position = None;
+                        parser = vt100::Parser::new(std::num::NonZeroU16::new(current_dims.1).expect("nonzero rows"), std::num::NonZeroU16::new(current_dims.0).expect("nonzero columns"), 0);
                         if let Some(session) = app.sessions.get(app.selected_index) {
+                            ipc.send(IpcMessage::ResizeSessionRequest(agmux_proto::ResizeSessionRequest {
+                                session_id: session.session_id.clone(),
+                                cols: current_dims.0,
+                                rows: current_dims.1,
+                            })).await?;
                             ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?;
                         }
                     }
@@ -1553,7 +1849,14 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                     }
                     app.apply_workspace(response);
                     app.refresh_filter();
-                    if let Some(message) = app.pending_message.take() { ipc.send(message).await?; }
+                    if let Some(mut message) = app.pending_message.take() {
+                        if let IpcMessage::SpawnSessionRequest(ref mut req) = message {
+                            req.cols = Some(current_dims.0);
+                            req.rows = Some(current_dims.1);
+                            req.detached = true;
+                        }
+                        ipc.send(message).await?;
+                    }
                     if let Some(id) = app.pending_selection.as_ref() {
                         if let Some(index) = app.sessions.iter().position(|s| &s.session_id == id) {
                             if app.session_visible(index) { app.selected_index = index; }
@@ -1562,8 +1865,17 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                     }
                     if selected.as_deref() != app.sessions.get(app.selected_index).map(|s| s.session_id.as_str()) {
                         app.active_viewport_lines.clear();
-                        parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
-                        if let Some(session) = app.sessions.get(app.selected_index) { ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?; }
+                        app.active_viewport_styled.clear();
+                        app.cursor_position = None;
+                        parser = vt100::Parser::new(std::num::NonZeroU16::new(current_dims.1).expect("nonzero rows"), std::num::NonZeroU16::new(current_dims.0).expect("nonzero columns"), 0);
+                        if let Some(session) = app.sessions.get(app.selected_index) {
+                            ipc.send(IpcMessage::ResizeSessionRequest(agmux_proto::ResizeSessionRequest {
+                                session_id: session.session_id.clone(),
+                                cols: current_dims.0,
+                                rows: current_dims.1,
+                            })).await?;
+                            ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?;
+                        }
                     }
                 }
                 IpcMessage::SessionStateChangedEvent(event) => {
@@ -1572,8 +1884,17 @@ pub async fn run_tui(socket_path: &Path, token: &str) -> Result<()> {
                     app.align_selection();
                     if previous != app.selected_index {
                         app.active_viewport_lines.clear();
-                        parser = vt100::Parser::new(std::num::NonZeroU16::new(24).expect("nonzero rows"), std::num::NonZeroU16::new(80).expect("nonzero columns"), 0);
-                        if let Some(session) = app.sessions.get(app.selected_index) { ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?; }
+                        app.active_viewport_styled.clear();
+                        app.cursor_position = None;
+                        parser = vt100::Parser::new(std::num::NonZeroU16::new(current_dims.1).expect("nonzero rows"), std::num::NonZeroU16::new(current_dims.0).expect("nonzero columns"), 0);
+                        if let Some(session) = app.sessions.get(app.selected_index) {
+                            ipc.send(IpcMessage::ResizeSessionRequest(agmux_proto::ResizeSessionRequest {
+                                session_id: session.session_id.clone(),
+                                cols: current_dims.0,
+                                rows: current_dims.1,
+                            })).await?;
+                            ipc.send(IpcMessage::SubscribeViewport { session_id: session.session_id.clone() }).await?;
+                        }
                     }
                 }
                 IpcMessage::NotificationEvent(event) if event.kind == "search.index" => {

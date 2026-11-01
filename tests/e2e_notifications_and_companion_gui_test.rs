@@ -96,6 +96,7 @@ async fn live_notifications_panels_http_reply_and_restart() {
         ],
         cwd: Some(root.to_string_lossy().into()),
         worktree_branch: None,
+        ..Default::default()
     });
     assert!(
         matches!(agmux_cli::ipc_client::review_request(&sock,&token,spawn).await.unwrap(),IpcMessage::SpawnSessionResponse(r) if r.success)
@@ -297,6 +298,7 @@ async fn live_notifications_panels_http_reply_and_restart() {
         args: vec!["-c".into(), "printf error-output; sleep 30".into()],
         cwd: Some(root.to_string_lossy().into()),
         worktree_branch: None,
+        ..Default::default()
     });
     assert!(
         matches!(agmux_cli::ipc_client::review_request(&sock, &token, error_spawn).await.unwrap(), IpcMessage::SpawnSessionResponse(r) if r.success)

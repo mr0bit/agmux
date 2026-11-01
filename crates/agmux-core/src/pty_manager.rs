@@ -217,6 +217,8 @@ impl PtyManager {
         if let Some(port) = port {
             cmd.env("PORT", port.to_string());
         }
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
         cmd.env("AGMUX_SESSION_ID", &session_id);
         for (k, v) in extra_env {
             cmd.env(k, v);
