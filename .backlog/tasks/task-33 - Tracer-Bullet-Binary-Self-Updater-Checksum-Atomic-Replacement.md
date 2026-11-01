@@ -1,12 +1,13 @@
 ---
 id: TASK-33
 title: >-
-  Tracer Bullet: Binary Self-Updater Subsystem (agmux update & SHA-256 Checksums)
-status: To Do
+  Tracer Bullet: Binary Self-Updater Subsystem (agmux update & SHA-256
+  Checksums)
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-11-01T06:15:00Z'
-updated_date: '2026-11-01T06:15:00Z'
+updated_date: '2026-11-01T04:27:00Z'
 labels:
   - tracer-bullet
   - updater
@@ -36,10 +37,10 @@ Implements the Binary Self-Updater Subsystem (`FR-P3-03`):
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 `agmux update --check` checks GitHub Releases API and reports if a newer version is available
-- [ ] #2 Asset downloader validates target-triple binary against SHA256SUMS and rejects corrupted/tampered payloads
-- [ ] #3 Executable replacement replaces `agmux` and `agmuxd` atomically and verifies executable permissions
-- [ ] #4 Integration test (`tests/e2e_self_updater_test.rs`) verifies mock release checking, checksum verification, and update lifecycle
+- [x] #1 `agmux update --check` checks GitHub Releases API and reports if a newer version is available
+- [x] #2 Asset downloader validates target-triple binary against SHA256SUMS and rejects corrupted/tampered payloads
+- [x] #3 Executable replacement replaces `agmux` and `agmuxd` atomically and verifies executable permissions
+- [x] #4 Integration test (`tests/e2e_self_updater_test.rs`) verifies mock release checking, checksum verification, and update lifecycle
 <!-- AC:END -->
 
 ## Implementation Notes

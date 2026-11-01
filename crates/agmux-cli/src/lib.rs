@@ -8,6 +8,7 @@ pub mod doctor;
 pub mod ipc_client;
 pub mod mcp_server;
 pub mod remote_bootstrapper;
+pub mod self_updater;
 
 pub use daemon_spawner::ensure_daemon_running;
 pub use ipc_client::{freeze_session, resume_session, run_command};

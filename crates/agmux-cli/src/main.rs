@@ -28,12 +28,25 @@ struct Cli {
     #[arg(long)]
     enable_mcp: bool,
 
+    /// Update the installed binaries.
+    #[arg(long)]
+    update: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Check for and install a release.
+    Update {
+        #[arg(long)]
+        check: bool,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        version: Option<String>,
+    },
     /// Register a workspace panel.
     Panels {
         #[command(subcommand)]
@@ -410,6 +423,23 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    if cli.update && cli.command.is_some() {
+        anyhow::bail!("--update cannot be combined with a subcommand");
+    }
+    if cli.update || matches!(cli.command, Some(Commands::Update { .. })) {
+        let (check, force, version) = match cli.command {
+            Some(Commands::Update {
+                check,
+                force,
+                version,
+            }) => (check, force, version),
+            _ => (false, false, None),
+        };
+        return tokio::task::spawn_blocking(move || {
+            agmux_cli::self_updater::update(check, force, version.as_deref())
+        })
+        .await?;
+    }
     if cli.enable_mcp && cli.command.is_some() {
         anyhow::bail!(
             "--enable-mcp in server mode cannot be combined with a subcommand; use run --enable-mcp for an agent"
@@ -1100,6 +1130,7 @@ async fn main() -> Result<()> {
         Some(Commands::AgentContext { .. }) => {
             unreachable!("agent-context handled before daemon startup")
         }
+        Some(Commands::Update { .. }) => unreachable!("update handled before daemon startup"),
         Some(Commands::Init) => unreachable!("init handled before daemon startup"),
         None | Some(Commands::Tui) => agmux_tui::run_tui(&socket_path, &token).await?,
         Some(Commands::Diff {

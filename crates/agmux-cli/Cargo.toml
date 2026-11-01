@@ -25,3 +25,9 @@ thiserror.workspace = true
 portable-pty.workspace = true
 libc.workspace = true
 agmux-tui = { path = "../agmux-tui" }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+semver = "1"
+tempfile = "3"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }

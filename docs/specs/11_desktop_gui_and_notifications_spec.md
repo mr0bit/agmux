@@ -38,11 +38,11 @@ This specification details the rich notification and custom shell hook dispatche
 * **Text:** As a user maintaining an Agmux installation, the system shall provide `agmux update` and `agmux --update` to check the official GitHub Releases API for new versions, verify the target-triple binary archive against published SHA-256 checksum manifests, and perform atomic in-place binary replacement of `agmux` and `agmuxd` with rollback on failure.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-cli::self_updater`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Execute `agmux update --check` against release metadata; download release asset; verify SHA-256 checksum matching and mismatch rejection; replace executable atomically and verify newly installed binary version.
 * **Downstream Req:** `LLD-GUI-SELF-UPDATER-003`
 * **Downstream Test:** `TEST-VER-GUI-003`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 
