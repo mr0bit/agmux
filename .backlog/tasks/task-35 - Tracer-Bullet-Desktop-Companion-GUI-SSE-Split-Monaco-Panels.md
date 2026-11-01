@@ -2,11 +2,11 @@
 id: TASK-35
 title: >-
   Tracer Bullet: Desktop Companion GUI, Real-Time SSE Viewport & Split Monaco Panels
-status: To Do
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-11-01T06:15:00Z'
-updated_date: '2026-11-01T06:15:00Z'
+updated_date: '2026-11-01T07:08:00Z'
 labels:
   - tracer-bullet
   - desktop
@@ -34,13 +34,13 @@ Implements Real-time Desktop Companion GUI Streaming & Split Panels (`FR-P3-01`,
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 `/api/events` delivers low-latency SSE push updates for session output and state transitions
-- [ ] #2 Desktop companion dashboard renders a side-by-side split view with syntax-highlighted code editor and web preview panels
-- [ ] #3 Integration test (`tests/e2e_desktop_companion_gui_test.rs`) verifies SSE stream delivery, split layout, and deep-link activation
+- [x] #1 `/api/events` delivers low-latency SSE push updates for session output and state transitions
+- [x] #2 Desktop companion dashboard renders a side-by-side split view with syntax-highlighted code editor and web preview panels
+- [x] #3 Integration test (`tests/e2e_desktop_companion_gui_test.rs`) verifies SSE stream delivery, split layout, and deep-link activation
 <!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Dispatched to OpenAI Codex (Lane: feature1, gpt-6.1-terra).
+Implemented by OpenAI Codex (Lane: feature1, gpt-6.1-terra). Verified via `tests/e2e_desktop_companion_gui_test.rs`.
 <!-- SECTION:NOTES:END -->

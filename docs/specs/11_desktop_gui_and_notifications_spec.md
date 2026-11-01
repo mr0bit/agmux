@@ -64,8 +64,8 @@ This specification details the rich notification and custom shell hook dispatche
 * **Text:** As a desktop user, the companion GUI bridge (`agmux gui`) shall provide real-time Server-Sent Events (SSE) streaming of session viewports (<50ms latency), OS desktop protocol registration for `agmux://` URIs, and side-by-side split panels hosting syntax-highlighted code editing (Monaco/CodeMirror) and live web development previews.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-cli::companion_gui`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Launch `agmux gui`; connect to `/api/events` SSE stream and observe immediate viewport frame pushes on terminal output; verify `agmux panels open <file>` loads the split code editor; verify `agmux open agmux://session/<id>` activates the target session.
 * **Downstream Req:** `LLD-GUI-DESKTOP-APP-005`
 * **Downstream Test:** `TEST-VER-GUI-005`
-* **Test Status:** Failed
+* **Test Status:** Passed

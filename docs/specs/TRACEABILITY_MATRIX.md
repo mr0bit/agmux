@@ -66,4 +66,4 @@
 | `REQ-GUI-COMPANION-PANELS-002` | Medium | `crates/agmux-cli::companion_gui` | **Verified** | `LLD-GUI-COMPANION-PANELS-002` | `TEST-VER-GUI-002` | `Passed` |
 | `REQ-GUI-SELF-UPDATER-003` | High | `crates/agmux-cli::self_updater` | **Verified** | `LLD-GUI-SELF-UPDATER-003` | `TEST-VER-GUI-003` | `Passed` |
 | `REQ-GUI-MOBILE-PUSH-004` | Medium | `crates/agmux-daemon::notification_dispatcher` | **Verified** | `LLD-GUI-MOBILE-PUSH-004` | `TEST-VER-GUI-004` | `Passed` |
-| `REQ-GUI-DESKTOP-APP-005` | High | `crates/agmux-cli::companion_gui` | **Not implemented** | `LLD-GUI-DESKTOP-APP-005` | `TEST-VER-GUI-005` | `Failed` |
+| `REQ-GUI-DESKTOP-APP-005` | High | `crates/agmux-cli::companion_gui` | **Verified** | `LLD-GUI-DESKTOP-APP-005` | `TEST-VER-GUI-005` | `Passed` |

@@ -52,6 +52,8 @@ enum Commands {
         #[command(subcommand)]
         command: PanelCommand,
     },
+    /// Register the desktop URI scheme handler.
+    RegisterScheme,
     /// Resolve a session or panel deep link.
     Open { uri: String },
     /// Serve the local companion dashboard or print its state.
@@ -477,6 +479,13 @@ async fn main() -> Result<()> {
                     .map_or_else(|| "not found".into(), |p| p.display().to_string())
             );
         }
+        return Ok(());
+    }
+    if matches!(cli.command, Some(Commands::RegisterScheme)) {
+        println!(
+            "{}",
+            agmux_cli::companion_gui::register_desktop_protocol(None)?.display()
+        );
         return Ok(());
     }
     let socket_path = cli.socket.unwrap_or_else(default_socket_path);
@@ -1132,6 +1141,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Update { .. }) => unreachable!("update handled before daemon startup"),
         Some(Commands::Init) => unreachable!("init handled before daemon startup"),
+        Some(Commands::RegisterScheme) => {
+            unreachable!("registration handled before daemon startup")
+        }
         None | Some(Commands::Tui) => agmux_tui::run_tui(&socket_path, &token).await?,
         Some(Commands::Diff {
             session_id,
