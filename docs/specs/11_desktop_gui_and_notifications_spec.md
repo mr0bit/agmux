@@ -51,11 +51,11 @@ This specification details the rich notification and custom shell hook dispatche
 * **Text:** As a developer running long-running agent workflows away from the terminal, when a session transitions to `WAITING` or `ERRORED`, `agmuxd` shall dispatch rich push notifications via configured mobile push relays (including `ntfy.sh` topics and generic webhooks) with session title, 120-character output excerpt, and actionable inline reply buttons routed back to the companion endpoint.
 * **Criticality:** Medium
 * **SW Component:** `crates/agmux-daemon::notification_dispatcher`
-* **Implementation Status:** Not implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Configure push relay URL and ntfy topic in `config.toml`; trigger `WAITING` state; verify HTTP POST is delivered with action buttons, topic header, and payload containing title and body quote.
 * **Downstream Req:** `LLD-GUI-MOBILE-PUSH-004`
 * **Downstream Test:** `TEST-VER-GUI-004`
-* **Test Status:** Failed
+* **Test Status:** Passed
 
 ---
 

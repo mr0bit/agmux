@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use crate::journal_watcher::JournalWatcher;
+use crate::notification_dispatcher::{PushProvider, PushRelayConfig};
 
 /// Dynamically reloadable daemon runtime configuration parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,6 +13,7 @@ pub struct RuntimeConfig {
     pub idle_after_ms: u64,
     pub blocked_settle_ms: u64,
     pub fts_retention_lines: usize,
+    pub push_relay: Option<PushRelayConfig>,
 }
 
 impl Default for RuntimeConfig {
@@ -25,6 +27,7 @@ impl Default for RuntimeConfig {
             idle_after_ms,
             blocked_settle_ms: 500,
             fts_retention_lines: 10_000,
+            push_relay: None,
         }
     }
 }
@@ -32,7 +35,10 @@ impl Default for RuntimeConfig {
 impl RuntimeConfig {
     /// Parse `RuntimeConfig` overrides from TOML text.
     pub fn parse_toml(content: &str) -> Self {
-        let mut cfg = Self::default();
+        let mut cfg = Self {
+            push_relay: push_relay_config(content),
+            ..Default::default()
+        };
         for raw_line in content.lines() {
             let line = raw_line.split('#').next().unwrap_or("").trim();
             if let Some((k, v)) = line.split_once('=') {
@@ -99,6 +105,100 @@ pub fn notification_hook(content: &str) -> Option<String> {
         return None;
     }
     None
+}
+
+/// Parse push relay configuration from `config.toml` (`[notifications.push]` or flat keys).
+pub fn push_relay_config(content: &str) -> Option<PushRelayConfig> {
+    let mut current_section = String::new();
+    let mut provider_str = None;
+    let mut url_str = None;
+    let mut topic_str = None;
+    let mut token_str = None;
+    let mut reply_base_url_str = None;
+
+    for raw_line in content.lines() {
+        let line = raw_line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            current_section = line[1..line.len() - 1].trim().to_lowercase();
+            continue;
+        }
+        let Some((key_part, val_part)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key_part.trim().to_lowercase();
+        let val = val_part
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim()
+            .to_string();
+
+        let in_push_section = current_section == "notifications.push"
+            || current_section == "push"
+            || current_section == "notifications";
+
+        if in_push_section {
+            match key.as_str() {
+                "provider" => provider_str = Some(val),
+                "url" => url_str = Some(val),
+                "topic" => topic_str = Some(val),
+                "token" => token_str = Some(val),
+                "reply_base_url" | "reply_url" => reply_base_url_str = Some(val),
+                "push_provider" => provider_str = Some(val),
+                "push_url" => url_str = Some(val),
+                "push_topic" => topic_str = Some(val),
+                "push_token" => token_str = Some(val),
+                "push_reply_url" | "push_reply_base_url" => reply_base_url_str = Some(val),
+                _ => {}
+            }
+        } else {
+            match key.as_str() {
+                "push_provider" => provider_str = Some(val),
+                "push_url" => url_str = Some(val),
+                "push_topic" => topic_str = Some(val),
+                "push_token" => token_str = Some(val),
+                "push_reply_url" | "push_reply_base_url" => reply_base_url_str = Some(val),
+                _ => {}
+            }
+        }
+    }
+
+    let provider = match provider_str.as_deref().map(str::to_lowercase).as_deref() {
+        Some("ntfy") => Some(PushProvider::Ntfy),
+        Some("webhook") => Some(PushProvider::Webhook),
+        None => {
+            if topic_str.is_some() {
+                Some(PushProvider::Ntfy)
+            } else if url_str.is_some() {
+                Some(PushProvider::Webhook)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }?;
+
+    let url = match url_str {
+        Some(u) if !u.is_empty() => u,
+        _ => {
+            if provider == PushProvider::Ntfy {
+                "https://ntfy.sh".to_string()
+            } else {
+                return None;
+            }
+        }
+    };
+
+    Some(PushRelayConfig {
+        provider,
+        url,
+        topic: topic_str.filter(|s| !s.is_empty()),
+        token: token_str.filter(|s| !s.is_empty()),
+        reply_base_url: reply_base_url_str.filter(|s| !s.is_empty()),
+    })
 }
 
 /// Watches `agmux.toml` for changes and hot-reloads `RuntimeConfig` without restarting `agmuxd`.
@@ -172,5 +272,44 @@ impl ConfigWatcher {
     /// Path being watched.
     pub fn path(&self) -> &Path {
         &self.config_path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_push_relay_config_ntfy_section() {
+        let toml = r#"
+        [notifications.push]
+        provider = "ntfy"
+        url = "https://ntfy.sh"
+        topic = "my-agmux-alerts"
+        token = "secret123"
+        reply_base_url = "http://127.0.0.1:4040"
+        "#;
+        let cfg = push_relay_config(toml).expect("should parse ntfy");
+        assert_eq!(cfg.provider, PushProvider::Ntfy);
+        assert_eq!(cfg.url, "https://ntfy.sh");
+        assert_eq!(cfg.topic.as_deref(), Some("my-agmux-alerts"));
+        assert_eq!(cfg.token.as_deref(), Some("secret123"));
+        assert_eq!(cfg.reply_base_url.as_deref(), Some("http://127.0.0.1:4040"));
+    }
+
+    #[test]
+    fn test_push_relay_config_webhook_flat() {
+        let toml = r#"
+        push_provider = "webhook"
+        push_url = "https://example.com/webhook"
+        push_token = "tok_abc"
+        push_reply_url = "http://127.0.0.1:5050"
+        "#;
+        let cfg = push_relay_config(toml).expect("should parse webhook");
+        assert_eq!(cfg.provider, PushProvider::Webhook);
+        assert_eq!(cfg.url, "https://example.com/webhook");
+        assert_eq!(cfg.topic, None);
+        assert_eq!(cfg.token.as_deref(), Some("tok_abc"));
+        assert_eq!(cfg.reply_base_url.as_deref(), Some("http://127.0.0.1:5050"));
     }
 }

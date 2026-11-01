@@ -61,6 +61,8 @@ dependencies = [
  "clap",
  "futures-util",
  "libc",
+ "reqwest",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-util",

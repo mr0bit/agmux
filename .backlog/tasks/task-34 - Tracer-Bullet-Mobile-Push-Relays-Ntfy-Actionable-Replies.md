@@ -2,11 +2,11 @@
 id: TASK-34
 title: >-
   Tracer Bullet: Mobile Push Relays (ntfy.sh & Webhooks with Actionable Inline Replies)
-status: To Do
+status: Done
 assignee:
   - '@agy'
 created_date: '2026-11-01T06:15:00Z'
-updated_date: '2026-11-01T06:15:00Z'
+updated_date: '2026-11-01T06:48:00Z'
 labels:
   - tracer-bullet
   - notifications
@@ -34,9 +34,9 @@ Implements External Mobile Push Relays and Actionable Push Replies (`FR-P3-03`):
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 `notification_dispatcher` reads push relay configuration from `config.toml`
-- [ ] #2 Transitions to `WAITING` and `ERRORED` dispatch formatted HTTP requests to configured push endpoints (with 120-char quote and action buttons)
-- [ ] #3 Integration test (`tests/e2e_mobile_push_relay_test.rs`) verifies webhook / ntfy payload generation and action routing
+- [x] #1 `notification_dispatcher` reads push relay configuration from `config.toml`
+- [x] #2 Transitions to `WAITING` and `ERRORED` dispatch formatted HTTP requests to configured push endpoints (with 120-char quote and action buttons)
+- [x] #3 Integration test (`tests/e2e_mobile_push_relay_test.rs`) verifies webhook / ntfy payload generation and action routing
 <!-- AC:END -->
 
 ## Implementation Notes
