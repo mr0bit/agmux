@@ -28,17 +28,32 @@ struct Cli {
     #[arg(long)]
     enable_mcp: bool,
 
+    /// Update the installed binaries.
+    #[arg(long)]
+    update: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Check for and install a release.
+    Update {
+        #[arg(long)]
+        check: bool,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        version: Option<String>,
+    },
     /// Register a workspace panel.
     Panels {
         #[command(subcommand)]
         command: PanelCommand,
     },
+    /// Register the desktop URI scheme handler.
+    RegisterScheme,
     /// Resolve a session or panel deep link.
     Open { uri: String },
     /// Serve the local companion dashboard or print its state.
@@ -410,6 +425,23 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    if cli.update && cli.command.is_some() {
+        anyhow::bail!("--update cannot be combined with a subcommand");
+    }
+    if cli.update || matches!(cli.command, Some(Commands::Update { .. })) {
+        let (check, force, version) = match cli.command {
+            Some(Commands::Update {
+                check,
+                force,
+                version,
+            }) => (check, force, version),
+            _ => (false, false, None),
+        };
+        return tokio::task::spawn_blocking(move || {
+            agmux_cli::self_updater::update(check, force, version.as_deref())
+        })
+        .await?;
+    }
     if cli.enable_mcp && cli.command.is_some() {
         anyhow::bail!(
             "--enable-mcp in server mode cannot be combined with a subcommand; use run --enable-mcp for an agent"
@@ -447,6 +479,13 @@ async fn main() -> Result<()> {
                     .map_or_else(|| "not found".into(), |p| p.display().to_string())
             );
         }
+        return Ok(());
+    }
+    if matches!(cli.command, Some(Commands::RegisterScheme)) {
+        println!(
+            "{}",
+            agmux_cli::companion_gui::register_desktop_protocol(None)?.display()
+        );
         return Ok(());
     }
     let socket_path = cli.socket.unwrap_or_else(default_socket_path);
@@ -1100,7 +1139,11 @@ async fn main() -> Result<()> {
         Some(Commands::AgentContext { .. }) => {
             unreachable!("agent-context handled before daemon startup")
         }
+        Some(Commands::Update { .. }) => unreachable!("update handled before daemon startup"),
         Some(Commands::Init) => unreachable!("init handled before daemon startup"),
+        Some(Commands::RegisterScheme) => {
+            unreachable!("registration handled before daemon startup")
+        }
         None | Some(Commands::Tui) => agmux_tui::run_tui(&socket_path, &token).await?,
         Some(Commands::Diff {
             session_id,

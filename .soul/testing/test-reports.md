@@ -77,6 +77,27 @@ To ensure screenshots render natively inside GitHub pull requests, agents must u
    ```
    This gives the reviewer a 1-click fallback to inspect the committed asset file directly in GitHub's file viewer.
 
+### 4.3 User's Point-of-View (POV) Proof Mandate
+
+> [!IMPORTANT]
+> **Unit and integration test runner outputs (e.g. `cargo test --test ...`) do NOT satisfy visual proof requirements.**
+> Visual evidence must capture the **User's Point-of-View (POV)** — what an actual human developer sees, experiences, and interacts with on screen.
+
+When completing tasks and creating or updating pull requests, agents must adhere to the following user POV visual standards:
+
+1. **CLI Commands (`agmux <subcommand>`):**
+   * Must capture an authentic terminal session with a realistic shell prompt (`$ agmux ...`).
+   * Must clearly display formatted user-facing output: ANSI color palettes, status badges (e.g. `[OK]`, `[ERROR]`, `[UPDATE]`), clean data tables, progress indicators, and shell return feedback as experienced by the user.
+2. **Terminal / TUI Multiplexer Viewports:**
+   * Must capture the full multiplexer canvas: split panes, active session headers, status lines, agent indicators, and user keystroke responses.
+   * Demonstrates correct border rendering, truecolor highlights, and zero duplicate line artifacting.
+3. **Desktop Companion GUI & Web Views:**
+   * Must capture the actual application window or split layout as seen by the user: live terminal viewport beside the code editor or web preview, status bars, and desktop protocol invocation (`agmux://`).
+4. **Mobile & Push Notifications:**
+   * Must capture the rendered notification display from the user's receiving client (e.g., ntfy.sh card), verifying readable 120-character excerpts, clear message priority, and 1-tap actionable inline reply buttons.
+5. **No Synthetic Shortcuts:**
+   * Do not submit cropped snippets of raw terminal trace dumps or test runner passes. Visual evidence must prove that the human-facing interface looks polished, ergonomic, and defect-free.
+
 ---
 
 ## 5. Requirement Traceability Matrix & PR Delta

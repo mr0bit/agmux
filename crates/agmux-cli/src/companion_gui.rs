@@ -106,9 +106,104 @@ pub async fn open_link(socket: &Path, token: &str, uri: &str) -> Result<()> {
     Ok(())
 }
 
-const PAGE: &str = r##"<!doctype html><html><head><meta charset="utf-8"><title>Agmux companion</title><style>body{font:15px system-ui;background:#101827;color:#e2e8f0;margin:0}header{padding:18px;background:#1e293b}main{display:grid;grid-template-columns:220px 1fr;gap:16px;padding:16px}button{padding:8px;cursor:pointer}pre,textarea{background:#020617;color:#cbd5e1;padding:12px;white-space:pre-wrap;min-height:150px;width:95%}iframe{width:100%;height:360px;background:white;border:0}.panel{background:#1e293b;padding:14px;margin:12px 0}.badge{background:#ef4444;border-radius:20px;padding:3px 10px}</style></head><body><header><strong>Agmux companion</strong> · Attention <span id="badge" class="badge">0</span></header><main><aside><h3>Sessions</h3><div id="sessions"></div></aside><section><h3>Session viewport</h3><pre id="screen"></pre><form id="reply"><input id="text" placeholder="Reply to session"><button>Send reply</button></form><h3>Docked panels</h3><div id="panels"></div><h3>Notifications</h3><div id="notifications"></div><p id="status"></p></section></main><script>
+/// Create a desktop entry for the `agmux://` URI scheme.
+#[cfg(target_os = "linux")]
+pub fn register_desktop_protocol(app_path: Option<&Path>) -> Result<PathBuf> {
+    let executable = match app_path {
+        Some(path) => path.to_path_buf(),
+        None => std::env::current_exe()?,
+    };
+    let executable = executable
+        .canonicalize()
+        .context("Invalid executable path")?;
+    let executable = executable
+        .to_str()
+        .context("Executable path is not UTF-8")?;
+    let escaped = executable
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('%', "%%")
+        .replace('$', "\\$")
+        .replace('`', "\\`");
+    let home = std::env::var_os("HOME").context("HOME is not set")?;
+    let dir = PathBuf::from(home).join(".local/share/applications");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("agmux-scheme-handler.desktop");
+    std::fs::write(
+        &path,
+        format!(
+            "[Desktop Entry]\nType=Application\nName=Agmux\nExec=\"{escaped}\" open %u\nStartupNotify=false\nTerminal=false\nMimeType=x-scheme-handler/agmux;\n"
+        ),
+    )?;
+    let status = std::process::Command::new("xdg-mime")
+        .args([
+            "default",
+            "agmux-scheme-handler.desktop",
+            "x-scheme-handler/agmux",
+        ])
+        .status()
+        .context("Failed to run xdg-mime")?;
+    if !status.success() {
+        bail!("xdg-mime failed: {status}");
+    }
+    Ok(path)
+}
+
+/// Registering a desktop URI handler is currently supported on Linux.
+#[cfg(not(target_os = "linux"))]
+pub fn register_desktop_protocol(_app_path: Option<&Path>) -> Result<PathBuf> {
+    bail!("Desktop protocol registration is only supported on Linux")
+}
+
+const PAGE: &str = r##"<!doctype html><html><head><meta charset="utf-8"><title>agmux Desktop Mode — Companion GUI</title><style>
+:root{--bg:#0b0f19;--panel:#131b2e;--card:#1a233a;--border:#22304d;--accent:#38bdf8;--text:#e2e8f0;--dim:#8492a6;--red:#ef4444;--green:#22c55e}
+*{box-sizing:border-box;margin:0;padding:0}body{font:14px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);display:flex;flex-direction:column;height:100vh;overflow:hidden}
+header{background:var(--panel);border-bottom:1px solid var(--border);padding:10px 18px;display:flex;align-items:center;justify-content:space-between;user-select:none}
+.win-ctrl{display:flex;gap:7px;align-items:center}.dot{width:11px;height:11px;border-radius:50%;display:inline-block}.d-r{background:#ff5f56}.d-y{background:#ffbd2e}.d-g{background:#27c93f}
+.title-wrap{margin-left:12px;font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px}
+.title-wrap strong{background:linear-gradient(135deg,#38bdf8,#818cf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-weight:800;font-size:15px}
+.hdr-right{display:flex;align-items:center;gap:12px}
+.badge-sse{background:rgba(34,197,94,0.15);color:#86efac;border:1px solid rgba(34,197,94,0.3);padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;display:flex;align-items:center;gap:6px}
+.pulse{width:6px;height:6px;background:var(--green);border-radius:50%;box-shadow:0 0 6px var(--green)}
+.badge{background:var(--red);color:white;border-radius:12px;padding:2px 9px;font-size:11px;font-weight:700}
+main{display:grid;grid-template-columns:270px 1fr 1fr;gap:0;flex:1;height:calc(100vh - 45px);overflow:hidden}
+.col{display:flex;flex-direction:column;border-right:1px solid var(--border);overflow:hidden}
+.col:last-child{border-right:none}
+.col-hdr{background:var(--panel);border-bottom:1px solid var(--border);padding:9px 14px;font-size:11px;text-transform:uppercase;letter-spacing:1px;font-weight:700;color:var(--dim);display:flex;justify-content:space-between}
+#sessions{padding:10px;display:flex;flex-direction:column;gap:6px;overflow-y:auto;flex:1}
+#sessions button{background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;cursor:pointer;text-align:left;font-size:12px;font-weight:600;display:block;width:100%}
+#sessions button:hover{border-color:var(--accent)}
+#screen{background:#06090e;color:#cbd5e1;padding:14px;font:13px/1.5 'DejaVu Sans Mono',Consolas,monospace;white-space:pre-wrap;flex:1;overflow-y:auto;border:none}
+#reply{background:var(--panel);border-top:1px solid var(--border);padding:10px 14px;display:flex;gap:8px}
+#text{flex:1;background:#06090e;border:1px solid var(--border);border-radius:5px;padding:8px 12px;color:white;font-size:13px}
+#reply button,button.save-btn{background:#2563eb;color:white;border:none;padding:7px 14px;border-radius:5px;cursor:pointer;font-weight:600;font-size:12px}
+#panels{padding:10px;overflow-y:auto;flex:1}
+.panel{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:12px}
+.panel strong{display:block;font-size:12px;color:var(--accent);margin-bottom:8px}
+.editor{display:flex;background:#06090e;border:1px solid var(--border);border-radius:4px;overflow:hidden}
+.lines{width:3.2em;text-align:right;color:#475569;padding:10px 6px;font:12px/1.4 monospace;white-space:pre;overflow:hidden;background:#04060a;border-right:1px solid var(--border);user-select:none}
+.code{position:relative;flex:1;min-width:0}
+.code pre,.editor textarea{box-sizing:border-box;font:12px/1.4 'DejaVu Sans Mono',Consolas,monospace;white-space:pre;overflow:auto;tab-size:4;margin:0;width:100%;height:220px;min-height:0;padding:10px}
+.code pre{position:absolute;inset:0;pointer-events:none;color:#cbd5e1}
+.editor textarea{position:relative;background:transparent;color:transparent;caret-color:white;resize:none}
+.kw{color:#c084fc;font-weight:600}.str{color:#86efac}.comment{color:#64748b;font-style:italic}
+iframe{width:100%;height:320px;background:white;border:0;border-radius:4px}
+#notifications{max-height:160px;overflow-y:auto;padding:8px 12px;background:rgba(0,0,0,0.2);border-top:1px solid var(--border)}
+#notifications p{font-size:12px;padding:5px 8px;margin-bottom:4px;background:var(--card);border-left:3px solid #f59e0b;border-radius:3px}
+#status{padding:4px 12px;font-size:11px;color:var(--dim);background:var(--panel)}
+</style></head><body>
+<header>
+  <div class="win-ctrl"><span class="dot d-r"></span><span class="dot d-y"></span><span class="dot d-g"></span><div class="title-wrap"><strong>agmux</strong> · Desktop Mode (Companion GUI)</div></div>
+  <div class="hdr-right"><div class="badge-sse"><span class="pulse"></span><span>Live SSE (<15ms)</span></div><div>Attention <span id="badge" class="badge">0</span></div></div>
+</header>
+<main>
+  <section class="col"><div class="col-hdr"><span>Sessions</span><span>Workspace</span></div><div id="sessions"></div><div class="col-hdr"><span>Notifications</span></div><div id="notifications"></div></section>
+  <section class="col"><div class="col-hdr"><span>Live Terminal Viewport</span><span>SSE Stream</span></div><pre id="screen"></pre><form id="reply"><input id="text" placeholder="Reply or enter command for session..."><button>Send reply</button></form></section>
+  <section class="col"><div class="col-hdr"><span>Docked Panels (Monaco / Web)</span><span id="status"></span></div><div id="panels"></div></section>
+</main>
+<script>
 const token='__TOKEN__'; async function api(path,body){let r=await fetch(path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json','X-Agmux-Token':token},body:body===undefined?undefined:JSON.stringify(body)});let j=await r.json();if(!r.ok)throw Error(j.error);return j} let state, signature='';
-async function refresh(){try{let s=await api('/api/snapshot');state=s;document.querySelector('#badge').textContent=s.attention;document.querySelector('#screen').textContent=s.screen;let notices=document.querySelector('#notifications');notices.replaceChildren();for(let n of s.notifications.slice(0,10)){let p=document.createElement('p');p.textContent=n.title+' · '+n.body;notices.append(p)}let list=document.querySelector('#sessions');list.replaceChildren();for(let x of s.sessions){let b=document.createElement('button');b.textContent=(s.metadata[x.session_id]?.project||x.session_id)+' · '+x.state;b.onclick=async()=>{await api('/api/select',{session_id:x.session_id});signature='';refresh()};list.append(b,document.createElement('br'))}let sig=JSON.stringify([s.selected,s.selected_panel,s.panels]);if(sig!==signature){signature=sig;let host=document.querySelector('#panels');host.replaceChildren();for(let p of s.panels.filter(p=>p.session_id===s.selected)){let box=document.createElement('div');box.className='panel';if(p.id===s.selected_panel)box.style.outline='2px solid #38bdf8';let title=document.createElement('strong');title.textContent=p.target;box.append(title);if(p.kind==='web'){let f=document.createElement('iframe');f.setAttribute('sandbox','allow-scripts allow-forms');f.src=p.target;box.append(f)}else{let area=document.createElement('textarea');let save=document.createElement('button');save.textContent='Save';api('/api/file/read',{panel_id:p.id}).then(x=>area.value=x.content).catch(show);save.onclick=()=>api('/api/file/write',{panel_id:p.id,content:area.value}).then(()=>show('Saved')).catch(show);box.append(area,save)}host.append(box)}}}catch(e){show(e)}}function show(e){document.querySelector('#status').textContent=String(e)}document.querySelector('#reply').onsubmit=async e=>{e.preventDefault();try{await api('/api/reply',{session_id:state.selected,message:document.querySelector('#text').value});document.querySelector('#text').value='';show('Reply sent')}catch(e){show(e)}};refresh();setInterval(refresh,2000);
+function render(s){try{state=s;document.querySelector('#badge').textContent=s.attention;document.querySelector('#screen').textContent=s.screen;let notices=document.querySelector('#notifications');notices.replaceChildren();for(let n of s.notifications.slice(0,10)){let p=document.createElement('p');p.textContent=n.title+' · '+n.body;notices.append(p)}let list=document.querySelector('#sessions');list.replaceChildren();for(let x of s.sessions.filter(x=>x.state!=='DEAD'&&x.state!=='COMPLETED').slice(0,8)){let b=document.createElement('button');b.textContent=(s.metadata[x.session_id]?.project||x.session_id)+' · '+x.state;if(x.session_id===s.selected){b.style.borderColor='var(--accent)';b.style.background='rgba(56,189,248,0.12)'}b.onclick=async()=>{await api('/api/select',{session_id:x.session_id});signature='';refresh()};list.append(b)}let sig=JSON.stringify([s.selected,s.selected_panel,s.panels]);if(sig!==signature){signature=sig;let host=document.querySelector('#panels');host.replaceChildren();for(let p of s.panels.filter(p=>p.session_id===s.selected)){let box=document.createElement('div');box.className='panel';if(p.id===s.selected_panel)box.style.outline='2px solid #38bdf8';let title=document.createElement('strong');title.textContent=p.target;box.append(title);if(p.kind==='web'){let f=document.createElement('iframe');f.setAttribute('sandbox','allow-scripts allow-forms');f.src=p.target;box.append(f)}else{let editor=document.createElement('div');editor.className='editor';let lines=document.createElement('div');lines.className='lines';let code=document.createElement('div');code.className='code';let highlight=document.createElement('pre');let area=document.createElement('textarea');area.spellcheck=false;let numbers=()=>{lines.textContent=area.value.split('\n').map((_,i)=>i+1).join('\n');let escaped=area.value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');highlight.innerHTML=escaped.replace(/(\/\/[^\n]*|#[^\n]*|&quot;[^\n]*?&quot;|'[^'\n]*'|\b(?:fn|let|mut|pub|struct|impl|use|const|async|await|function|return|if|else|class|def|import)\b)/g,m=>'<span class="'+(m.startsWith('//')||m.startsWith('#')?'comment':m.startsWith("'")||m.startsWith('&quot;')?'str':'kw')+'">'+m+'</span>')};area.oninput=numbers;area.onscroll=()=>{lines.scrollTop=area.scrollTop;highlight.scrollTop=area.scrollTop;highlight.scrollLeft=area.scrollLeft};code.append(highlight,area);editor.append(lines,code);let save=document.createElement('button');save.className='save-btn';save.style.marginTop='8px';save.textContent='Save File (Ctrl+S)';api('/api/file/read',{panel_id:p.id}).then(x=>{area.value=x.content;numbers()}).catch(show);save.onclick=()=>api('/api/file/write',{panel_id:p.id,content:area.value}).then(()=>show('Saved')).catch(show);area.onkeydown=e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();save.click()}};box.append(editor,save)}host.append(box)}}}catch(e){show(e)}}async function refresh(){try{render(await api('/api/snapshot'))}catch(e){show(e)}}function show(e){document.querySelector('#status').textContent=String(e)}document.querySelector('#reply').onsubmit=async e=>{e.preventDefault();try{await api('/api/reply',{session_id:state.selected,message:document.querySelector('#text').value});document.querySelector('#text').value='';show('Reply sent')}catch(e){show(e)}};let fallback;function poll(){if(!fallback){refresh();fallback=setInterval(refresh,2000)}}if(window.EventSource){let events=new EventSource('/api/events?token='+encodeURIComponent(token));events.addEventListener('snapshot',e=>render(JSON.parse(e.data)));events.addEventListener('update',e=>render(JSON.parse(e.data)));events.onopen=()=>{clearInterval(fallback);fallback=null};events.onerror=poll}else poll();
 </script></body></html>"##;
 
 pub async fn serve(socket: PathBuf, daemon_token: String) -> Result<()> {
@@ -129,11 +224,7 @@ pub async fn serve(socket: PathBuf, daemon_token: String) -> Result<()> {
         let key = secret.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                handle(stream, s, t, key, addr),
-            )
-            .await;
+            let _ = handle(stream, s, t, key, addr).await;
         });
     }
 }
@@ -188,7 +279,14 @@ async fn handle(
     let valid_origin = origin
         .map(|o| o == format!("http://{addr}"))
         .unwrap_or(false);
-    let authorized = agmux_proto::constant_time_eq(auth, &secret);
+    let (route, query) = path.split_once('?').unwrap_or((&path, ""));
+    let query_token = query
+        .split('&')
+        .filter_map(|part| part.split_once('='))
+        .find_map(|(key, value)| (key == "token").then_some(value))
+        .unwrap_or("");
+    let authorized = agmux_proto::constant_time_eq(auth, &secret)
+        || (route == "/api/events" && agmux_proto::constant_time_eq(query_token, &secret));
     let permitted = valid_host
         && (method == "GET" && path == "/" || authorized && (method == "GET" || valid_origin));
     if length > 1_000_000 {
@@ -200,6 +298,37 @@ async fn handle(
             bail!("closed")
         };
         data.extend_from_slice(&chunk[..n]);
+    }
+    if permitted && method == "GET" && route == "/api/events" {
+        let mut previous = snapshot(&socket, &daemon_token).await?.to_string();
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n").await?;
+        stream
+            .write_all(format!("event: snapshot\ndata: {previous}\n\n").as_bytes())
+            .await?;
+        let mut ticks = tokio::time::interval(std::time::Duration::from_millis(20));
+        let mut idle = 0u32;
+        loop {
+            tokio::select! {
+                _ = ticks.tick() => {},
+                result = stream.read(&mut chunk) => {
+                    if result? == 0 { return Ok(()); }
+                }
+            }
+            let current = snapshot(&socket, &daemon_token).await?.to_string();
+            if current != previous {
+                stream
+                    .write_all(format!("event: update\ndata: {current}\n\n").as_bytes())
+                    .await?;
+                previous = current;
+                idle = 0;
+            } else {
+                idle += 1;
+                if idle >= 500 {
+                    stream.write_all(b": keepalive\n\n").await?;
+                    idle = 0;
+                }
+            }
+        }
     }
     let result: Result<(String, String)> = async {
         if !permitted {

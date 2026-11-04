@@ -27,10 +27,10 @@ Whenever an AI agent (Codex, Antigravity, or orchestrator) is tasked with implem
    cargo fmt --check
    cargo clippy -- -D warnings
    ```
-3. **Capture Visual Proof Artifact:** Execute the feature live as a proper user, capture a high-resolution terminal/TUI screenshot, and store it under `docs/assets/screenshots/<task>_verification.png`.
+3. **Capture User's Point-of-View (POV) Visual Proof Artifact:** Execute the feature live as a real user would interact with it. Capture an authentic, high-resolution screenshot representing the user's authentic perspective (CLI terminal session output, interactive TUI panels, desktop companion GUI window, or mobile push notification cards). Unit test runner logs (e.g. `cargo test`) do NOT satisfy this requirement. Store under `docs/assets/screenshots/<task>_verification.png`.
 4. **Update Test Status:** Update the spec file in `docs/specs/` setting `Implementation Status: Verified` and `Test Status: Passed`.
 5. **Close Task in Backlog:** Run `npx backlog.md task edit <taskId> -s "Done"`.
-6. **Report with Visual Proof & Traceability Matrix:**
-   * In PR bodies, include a dedicated technical report for each task followed by its visual proof screenshot.
+6. **Report with Visual Proof (User's POV) & Traceability Matrix:**
+   * In PR bodies, include a dedicated technical report for each task followed by its User POV visual proof screenshot and descriptive caption.
    * **Private Repo Asset Upload Trick:** Use `gh pr edit` / `gh pr create` with `--attach docs/assets/screenshots/<task>_verification.png` flags to automatically upload images to GitHub user-attachment storage and rewrite markdown references.
    * Include the **Traceability Contribution & Delta Table** showing the baseline, per-phase gains, net gain, and post-PR status.

@@ -123,19 +123,27 @@ impl EventBroadcaster {
             tokio::spawn(async move {
                 let _permit = permit;
                 let data = tokio::task::spawn_blocking(move || {
-                    let config = std::fs::read_to_string(config_path).ok()?;
-                    let hook = crate::config_watcher::notification_hook(&config)?;
+                    let config = std::fs::read_to_string(config_path).ok();
+                    let hook = config
+                        .as_deref()
+                        .and_then(crate::config_watcher::notification_hook);
+                    let push_cfg = config
+                        .as_deref()
+                        .and_then(crate::config_watcher::push_relay_config);
+                    if hook.is_none() && push_cfg.is_none() {
+                        return None;
+                    }
                     let db = db.lock().ok()?;
                     let info = db.get_session(&id).ok().flatten()?;
                     let metadata = db.workspace_metadata().ok()?.remove(&id);
                     drop(db);
                     let branch = crate::notification_dispatcher::workspace_branch(&info.cwd);
-                    Some((hook, info, metadata, branch))
+                    Some((hook, push_cfg, info, metadata, branch))
                 })
                 .await
                 .ok()
                 .flatten();
-                if let Some((hook, info, metadata, branch)) = data {
+                if let Some((hook, push_cfg, info, metadata, branch)) = data {
                     let tool = info
                         .command
                         .split_whitespace()
@@ -155,11 +163,31 @@ impl EventBroadcaster {
                         title,
                         body,
                     };
-                    if let Err(error) =
-                        crate::notification_dispatcher::run_hook(&hook, &notification).await
-                    {
-                        tracing::warn!(%error, "notification hook failed");
-                    }
+                    let hook_task = async {
+                        if let Some(hook) = hook {
+                            if let Err(error) =
+                                crate::notification_dispatcher::run_hook(&hook, &notification).await
+                            {
+                                tracing::warn!(%error, "notification hook failed");
+                            }
+                        }
+                    };
+                    let push_task = async {
+                        if let Some(push_cfg) = push_cfg {
+                            if kind == "WAITING" || kind == "ERRORED" {
+                                if let Err(error) =
+                                    crate::notification_dispatcher::dispatch_push_relay(
+                                        &push_cfg,
+                                        &notification,
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!(%error, "push relay failed");
+                                }
+                            }
+                        }
+                    };
+                    tokio::join!(hook_task, push_task);
                 }
             });
         }

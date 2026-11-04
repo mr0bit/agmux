@@ -36,4 +36,5 @@ When working as a delegated implementer (`codex-delegate` or `agy-delegate`):
 1. **Do NOT commit changes:** The human/orchestrator reviews the diff and lands commits. Do not run `git commit` or force git actions.
 2. **Respect the Brief Scope:** Modify only the files requested in the task brief. Do not perform speculative refactors outside scope.
 3. **Run Gates Before Finishing:** Always verify `cargo check`, `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`, and run `node .soul/tools/v-cycle-checker.mjs` before concluding.
-4. **Report Concisely:** Summarize modified files, verification test results, and spec status updates in your final report.
+4. **Capture User's POV Visual Proofs:** For every user-facing task (CLI, TUI, GUI, notifications), capture and save visual proof representing the end user's point-of-view in `docs/assets/screenshots/<task>_verification.png`. Raw `cargo test` console logs do not substitute for user POV visual evidence.
+5. **Report Concisely:** Summarize modified files, verification test results, user POV visual proofs, and spec status updates in your final report.

@@ -92,6 +92,7 @@ crates/
 * **`agent_context`**: Progressive token-efficient CLI documentation generator (`agmux agent-context`).
 * **`mcp_server`**: Built-in opt-in JSON-RPC 2.0 MCP server exposing orchestration tools (`agmux mcp` / `--enable-mcp`).
 * **`companion_gui`**: Phase 3 desktop/web companion bridge, `panels open <url|file>`, and `agmux://` deep-link handler.
+* **`self_updater`**: In-place binary self-updater checking GitHub Releases, validating SHA-256 checksums, and atomically replacing executables (`agmux update` / `--update`).
 
 ---
 
@@ -159,3 +160,6 @@ crates/
 | `REQ-REMOTE-DOCTOR-REPAIR-004` | Diagnostic verification (`doctor`) and repair command | `crates/agmux-cli::doctor` |
 | `REQ-GUI-NOTIFICATION-HOOKS-001` | Rich desktop notifications and custom shell hooks | `crates/agmux-daemon::notification_dispatcher` |
 | `REQ-GUI-COMPANION-PANELS-002` | Phase 3 companion GUI, `panels open`, and deep-links | `crates/agmux-cli::companion_gui` |
+| `REQ-GUI-SELF-UPDATER-003` | Pinned GitHub Releases self-updater and SHA-256 verification | `crates/agmux-cli::self_updater` |
+| `REQ-GUI-MOBILE-PUSH-004` | External mobile push relays (ntfy/webhooks) with action replies | `crates/agmux-daemon::notification_dispatcher` |
+| `REQ-GUI-DESKTOP-APP-005` | Desktop companion GUI with SSE streaming and Monaco split panels | `crates/agmux-cli::companion_gui` |

@@ -3,6 +3,58 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
+/// Supported mobile push relay provider protocols.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PushProvider {
+    Ntfy,
+    Webhook,
+}
+
+/// Push notification relay destination configuration (`REQ-GUI-MOBILE-PUSH-004`).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PushRelayConfig {
+    pub provider: PushProvider,
+    pub url: String,
+    pub topic: Option<String>,
+    pub token: Option<String>,
+    pub reply_base_url: Option<String>,
+}
+
+/// 1-tap actionable inline reply button metadata.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WebhookAction {
+    pub label: String,
+    pub url: String,
+    pub method: String,
+    pub body: String,
+}
+
+/// Standardized JSON webhook notification payload.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WebhookPayload {
+    pub kind: String,
+    pub session_id: String,
+    pub session_name: String,
+    pub tool: String,
+    pub cwd: String,
+    pub branch: String,
+    pub title: String,
+    pub body: String,
+    pub actions: Vec<WebhookAction>,
+}
+
+static HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+fn http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_default()
+    })
+}
+
 /// Metadata supplied to a notification hook as environment variables.
 #[derive(Clone, Debug)]
 pub struct HookNotification {
@@ -81,6 +133,121 @@ impl NotificationDispatcher {
             }
         });
     }
+
+    /// Schedule a push relay dispatch without blocking the caller.
+    pub fn dispatch_push_relay(&self, config: PushRelayConfig, notification: HookNotification) {
+        let Ok(permit) = self.slots.clone().try_acquire_owned() else {
+            tracing::warn!("push relay capacity exhausted");
+            return;
+        };
+        tokio::spawn(async move {
+            let _permit = permit;
+            if let Err(error) = dispatch_push_relay(&config, &notification).await {
+                tracing::warn!(%error, "push relay dispatch failed");
+            }
+        });
+    }
+}
+
+/// Dispatch a push notification to an external relay (`ntfy.sh` or webhook).
+pub async fn dispatch_push_relay(
+    config: &PushRelayConfig,
+    notification: &HookNotification,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let client = http_client();
+        match config.provider {
+            PushProvider::Ntfy => {
+                let base_url = config.url.trim_end_matches('/');
+                let endpoint = match &config.topic {
+                    Some(topic) if !topic.is_empty() => format!("{base_url}/{topic}"),
+                    _ => base_url.to_string(),
+                };
+                let mut req = client.post(&endpoint);
+                if let Some(token) = &config.token {
+                    if !token.is_empty() {
+                        req = req.header("Authorization", format!("Bearer {token}"));
+                    }
+                }
+                if let Some(topic) = &config.topic {
+                    if !topic.is_empty() {
+                        req = req.header("Topic", topic);
+                    }
+                }
+                req = req.header("Title", &notification.title);
+                let (priority, tags) = if notification.kind == "ERRORED" {
+                    ("high", "rotating_light,skull")
+                } else {
+                    ("default", "warning")
+                };
+                req = req.header("Priority", priority);
+                req = req.header("Tags", tags);
+                if let Some(reply_base) = &config.reply_base_url {
+                    let base = reply_base.trim_end_matches('/');
+                    let sid = &notification.session_id;
+                    let actions = format!(
+                        "http, Reply Yes, {base}/api/reply, method=POST, headers.Content-Type=application/json, body={{\"session_id\":\"{sid}\",\"message\":\"y\\n\"}}; http, Reply No, {base}/api/reply, method=POST, headers.Content-Type=application/json, body={{\"session_id\":\"{sid}\",\"message\":\"n\\n\"}}; view, Open agmux, agmux://session/{sid}"
+                    );
+                    req = req.header("Actions", actions);
+                }
+                let resp = req.body(notification.body.clone()).send().await?;
+                if !resp.status().is_success() {
+                    anyhow::bail!("ntfy push relay HTTP status: {}", resp.status());
+                }
+            }
+            PushProvider::Webhook => {
+                let mut req = client.post(&config.url);
+                req = req.header("Content-Type", "application/json");
+                if let Some(token) = &config.token {
+                    if !token.is_empty() {
+                        req = req.header("Authorization", format!("Bearer {token}"));
+                    }
+                }
+                let mut actions = Vec::new();
+                if let Some(reply_base) = &config.reply_base_url {
+                    let base = reply_base.trim_end_matches('/');
+                    let sid = &notification.session_id;
+                    actions.push(WebhookAction {
+                        label: "Reply Yes".into(),
+                        url: format!("{base}/api/reply"),
+                        method: "POST".into(),
+                        body: format!("{{\"session_id\":\"{sid}\",\"message\":\"y\\n\"}}"),
+                    });
+                    actions.push(WebhookAction {
+                        label: "Reply No".into(),
+                        url: format!("{base}/api/reply"),
+                        method: "POST".into(),
+                        body: format!("{{\"session_id\":\"{sid}\",\"message\":\"n\\n\"}}"),
+                    });
+                    actions.push(WebhookAction {
+                        label: "Open agmux".into(),
+                        url: format!("agmux://session/{sid}"),
+                        method: "VIEW".into(),
+                        body: String::new(),
+                    });
+                }
+                let payload = WebhookPayload {
+                    kind: notification.kind.clone(),
+                    session_id: notification.session_id.clone(),
+                    session_name: notification.session_name.clone(),
+                    tool: notification.tool.clone(),
+                    cwd: notification.cwd.clone(),
+                    branch: notification.branch.clone(),
+                    title: notification.title.clone(),
+                    body: notification.body.clone(),
+                    actions,
+                };
+                let body = serde_json::to_vec(&payload)?;
+                let resp = req.body(body).send().await?;
+                if !resp.status().is_success() {
+                    anyhow::bail!("webhook push relay HTTP status: {}", resp.status());
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("push relay request timed out"))?
 }
 
 #[cfg(windows)]

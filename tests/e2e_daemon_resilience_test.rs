@@ -193,6 +193,7 @@ async fn test_ver_storage_005_config_hot_reload() {
             idle_after_ms: 120_000,
             blocked_settle_ms: 500,
             fts_retention_lines: 10_000,
+            ..Default::default()
         }
     );
 
