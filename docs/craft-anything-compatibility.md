@@ -1,0 +1,61 @@
+# Craft Anything integration experiment
+
+Date: 2026-11-06. Upstream: `storytold/craft-anything`, commit
+`785539196a1863ee1a49c8cb69639d02f385bbbe` (workspace version 0.4.0).
+
+## Result
+
+Dependency integration is present. Full Study -> Build -> Check integration is **blocked**, not verified or enabled. No provider, target application, native upstream builder or paid tool was run. No agent sandbox was tested. No upstream files were modified.
+
+The user approved an unchanged, optionally installed submodule; an external bridge using existing delegation lanes; a reviewed specification before building; a fresh implementer restricted to permitted inputs; bounded refinement; and human acceptance after engineering gates. They explicitly required returning concrete conflicts before changing those controls or modifying upstream.
+
+## Experiment and evidence
+
+`node .soul/plugins/craft-anything/compatibility-probe.mjs` verifies the checked-out commit and clean upstream worktree. Set `SOUL_GIT` to the Git executable if Git is not on PATH. Its ordinary Node child starts in a fresh builder directory and attempts to read a synthetic private-evidence marker in the parent directory. The read succeeded. The fixture is removed afterward.
+
+Observed output:
+
+```text
+PASS: unchanged upstream at 785539196a1863ee1a49c8cb69639d02f385bbbe
+CONFIRMED: a plain child in a fresh builder folder can read sibling private evidence
+Scope: ordinary Node child process; agent sandboxes were not tested.
+BLOCKED: full bridge requires a verified isolated runner and approved-handoff gate.
+```
+
+Exit 2 means diagnostic completed but integration remains blocked; exit 1 means diagnostic failure. This establishes that cwd separation alone is insufficient. It does not prove that a custom isolated runner is impossible, or establish the behaviour of Codex/Antigravity sandboxes.
+
+Source inspection at the pinned commit found:
+
+| Finding | Evidence in unchanged upstream |
+| --- | --- |
+| External builder extension exists | `crates/ai/src/cli_agents/adapters.rs`: public `AgentAdapter`, `AgentAdapters::register`; `rebuild/mod.rs`: `RunOptions.adapters` |
+| A relay is not a drop-in executable replacement | `crates/ai/src/config.rs`: custom command/args; adapter prompt/event interfaces differ from host relay brief-file/result-artifact interfaces |
+| Study transitions into build without a dedicated reviewed-specification gate in `RunOptions` | `crates/ai/src/rebuild/mod.rs`: `Worker::run`, `self.study`, prompt construction and `self.turn` |
+| Builder prompts include the original target and expose investigation context | `crates/ai/src/rebuild/brief.rs`: `brief`, `steps`, target/capture descriptions |
+| Native Antigravity builder is unsuitable for direct use under the agreed approval contract | `crates/ai/src/cli_agents/adapters/antigravity.rs`: builder adds `--dangerously-skip-permissions` |
+| `rebuild_check` cannot simply replace a standalone comparison stage | `crates/ai/src/rebuild/tools.rs`: sends a check request to an active build |
+
+The host Codex relay defaults to workspace-write; this is not a demonstrated read allowlist. The host Antigravity relay describes sandbox read restrictions verified on macOS, not this Windows environment. Neither was certified by this experiment. Shell discovery found Codex and WSL, but no Docker, Podman or Antigravity command on the current PATH; that is not a complete inventory of installed software.
+
+## Remaining work before bridge execution
+
+Update: the user approved pursuing a container-based runner and requested a clean room process evidence report. The reusable evidence collection process and report template are now linked from the adapter. The runner and report generator are not implemented; no target-specific report can yet be issued. Current shell discovery still finds no Docker/Podman CLI or Docker executable at the checked standard locations; a runnable container engine remains an external prerequisite.
+
+Recommended: add a verified isolated execution runner (for example a container or VM) around the existing delegation bridge. Mount only the approved handoff and implementation output; keep original targets, private evidence, ambient MCP connections and credentials outside the builder's permitted access. Provision required authentication deliberately. Test negative reads, indirect tool/network access, fresh sessions, cancellation and child-process cleanup before enabling execution. A container is not itself proof: its mounts, network and tool access must be tested.
+
+Alternative: retain workflow instructions and use procedural separation without claiming enforced read isolation. This changes the approved requirement and needs the user's explicit decision. A tools-only workflow or an upstream patch would also change the selected design; neither was substituted.
+
+After the runner decision, the next experiment must compile the external adapter against this pin and demonstrate a real Study -> approved immutable handoff -> fresh delegated Build -> Check/refine -> human acceptance sequence. The current source review and cwd probe are only the first experiment, not that full verification.
+
+## Validation
+
+- Dependency pin and clean checkout: passed.
+- Plain-process cwd access probe: confirmed the isolation gap.
+- Node syntax check: passed.
+- Bundled skill validator: passed during PR preparation after providing PyYAML in a temporary validation directory outside the plugin. The initial attempt lacked PyYAML.
+- Diagnostic guard checks: passed for the clean pinned checkout (expected exit 2), an intentionally mismatched pin (exit 1), and an untracked upstream modification (exit 1). Temporary mutations were restored.
+- Existing V-cycle checker: passed, 63/63 pre-existing requirements; this does not establish plugin verification or add plugin requirements. A fresh Windows worktree with CRLF specification files triggers 567 pre-existing parser errors. Normalizing only the worktree specification line endings to LF makes the same checker pass; Git confirms no specification content changes. The checker and specifications are outside this PR's diff.
+- Upstream build, live agent execution, end-user visual proof and full bridge: not performed; integration is blocked before that stage.
+- Host Rust compiler/test/lint/format gates: not run for this dependency/documentation experiment; existing unrelated Rust edits were preserved.
+
+The submodule operation stages `.gitmodules` and its gitlink automatically. The plugin manifest records execution as disabled. The adapter and index expose this state explicitly so future agents do not mistake dependency presence for a functioning bridge. The foundation is prepared on a separate PR branch from `origin/main`, excluding unrelated application changes. The live pilot is deferred.
