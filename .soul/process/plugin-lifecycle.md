@@ -31,6 +31,14 @@ Missing manifests, invalid configuration, escaped script paths, timeouts and sig
 
 ## Required triggers
 
+Use the combined update command whenever synchronizing installed plugins after pulling accepted `.soul` changes:
+
+```sh
+node .soul/tools/update-plugins.mjs
+```
+
+It synchronizes only Git submodules indexed under `.soul/plugins/` to their recorded commits, then automatically runs all declared compatibility checks. It never uses `--remote`, changes accepted pins or enables plugins. Review changed adapter checks before running it. A synchronization error returns exit 1 even if diagnostics pass; diagnostics still run to report current state. The Git sync has a 60-second timeout. Plugins without submodules still get checked.
+
 Run this command after installing a plugin, after changing an adapter or pinned dependency, and after updating `.soul` when plugin contracts or shared workflow/tooling have changed:
 
 ```sh
@@ -55,4 +63,4 @@ The command can run from any cwd; it locates `.soul` relative to its own file. I
 
 The runner exits 1 if any check failed or is unavailable; otherwise 2 if any is blocked; otherwise 0. Exit 0 with zero plugins is an empty scan, not proof of compatibility. Inspect per-plugin outcomes when accepting updates with disabled optional dependencies.
 
-These are mandatory instructions for the orchestrating agent. The runner does not install a filesystem watcher, Git hook, CI job or `.soul` updater. An updater must invoke this command at the triggers above; running `git pull` alone does not execute it.
+These are mandatory instructions for the orchestrating agent. The combined update command invokes the checks automatically; the standalone checker supports verification without changing checkouts. Neither installs a filesystem watcher or Git hook. Running `git pull` or Git submodule commands directly still requires the standalone checks afterward. The update command synchronizes accepted pins; selecting a newer upstream version remains the reviewed candidate-upgrade process above.

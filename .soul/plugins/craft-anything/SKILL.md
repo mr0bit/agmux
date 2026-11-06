@@ -11,7 +11,13 @@ Read `plugin.json` first. Execution is currently disabled: the compatibility exp
 
 Follow the shared [plugin lifecycle](../../process/plugin-lifecycle.md) for installation, upgrades and checks before use. The manifest registers this adapter's diagnostic with the common runner.
 
-Run commands from the host repository root. Initialize only this optional submodule:
+Run commands from the host repository root. To synchronize installed plugin dependencies and automatically check all adapters, use:
+
+```sh
+node .soul/tools/update-plugins.mjs
+```
+
+For targeted initialization of only this optional submodule, run the following and then the registered compatibility diagnostic below:
 
 ```sh
 git submodule update --init -- .soul/plugins/craft-anything/upstream
