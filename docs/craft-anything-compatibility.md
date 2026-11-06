@@ -11,18 +11,16 @@ The user approved an unchanged, optionally installed submodule; an external brid
 
 ## Experiment and evidence
 
-`node .soul/plugins/craft-anything/compatibility-probe.mjs` verifies the checked-out commit and clean upstream worktree. Set `SOUL_GIT` to the Git executable if Git is not on PATH. Its ordinary Node child starts in a fresh builder directory and attempts to read a synthetic private-evidence marker in the parent directory. The read succeeded. The fixture is removed afterward.
+`node .soul/plugins/craft-anything/compatibility-probe.mjs` verifies the checked-out commit and clean upstream worktree. Set `SOUL_GIT` to the Git executable if Git is not on PATH. It performs no file-access experiment and runs no Craft Anything tools, providers or builders.
 
 Observed output:
 
 ```text
 PASS: unchanged upstream at 785539196a1863ee1a49c8cb69639d02f385bbbe
-CONFIRMED: a plain child in a fresh builder folder can read sibling private evidence
-Scope: ordinary Node child process; agent sandboxes were not tested.
 BLOCKED: full bridge requires a verified isolated runner and approved-handoff gate.
 ```
 
-Exit 2 means diagnostic completed but integration remains blocked; exit 1 means diagnostic failure. This establishes that cwd separation alone is insufficient. It does not prove that a custom isolated runner is impossible, or establish the behaviour of Codex/Antigravity sandboxes.
+Exit 2 means the checkout checks passed but integration remains blocked; exit 1 means diagnostic failure. The blocked result records known unfinished work, not a runtime readiness test. An earlier file-access demonstration was removed following review because it did not test Craft Anything compatibility. No replacement experiment script was added.
 
 Source inspection at the pinned commit found:
 
@@ -45,12 +43,12 @@ Recommended: add a verified isolated execution runner (for example a container o
 
 Alternative: retain workflow instructions and use procedural separation without claiming enforced read isolation. This changes the approved requirement and needs the user's explicit decision. A tools-only workflow or an upstream patch would also change the selected design; neither was substituted.
 
-After the runner decision, the next experiment must compile the external adapter against this pin and demonstrate a real Study -> approved immutable handoff -> fresh delegated Build -> Check/refine -> human acceptance sequence. The current source review and cwd probe are only the first experiment, not that full verification.
+The next integration experiment must compile the external adapter against this pin and demonstrate a real Study -> approved immutable handoff -> fresh delegated Build -> Check/refine -> human acceptance sequence. Source review and checkout checks do not establish that full verification.
 
 ## Validation
 
 - Dependency pin and clean checkout: passed.
-- Plain-process cwd access probe: confirmed the isolation gap.
+- File-access demonstration: removed after review; it was not an integration check.
 - Node syntax check: passed.
 - Bundled skill validator: passed during PR preparation after providing PyYAML in a temporary validation directory outside the plugin. The initial attempt lacked PyYAML.
 - Diagnostic guard checks: passed for the clean pinned checkout (expected exit 2), an intentionally mismatched pin (exit 1), and an untracked upstream modification (exit 1). Temporary mutations were restored.

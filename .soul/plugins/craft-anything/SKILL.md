@@ -5,7 +5,7 @@ description: Set up, check or upgrade the optional Craft Anything plugin; consul
 
 # Craft Anything adapter
 
-Read `plugin.json` first. Execution is disabled pending a verified isolated runner and delegation bridge. The current diagnostic checks the upstream pin and demonstrates that a working folder alone is not isolation; it does not certify readiness.
+Read `plugin.json` first. Execution is disabled pending a verified isolated runner and delegation bridge. The current diagnostic checks only the upstream pin and checkout cleanliness; it does not certify readiness.
 
 ## Setup and upgrades
 
