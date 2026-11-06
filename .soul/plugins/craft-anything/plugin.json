@@ -5,5 +5,9 @@
   "optional": true,
   "executionEnabled": false,
   "compatibility": "blocked-pending-isolated-runner",
+  "compatibilityCheck": {
+    "script": "compatibility-probe.mjs",
+    "timeoutMs": 30000
+  },
   "entrypoint": "SKILL.md"
 }

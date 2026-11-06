@@ -67,6 +67,7 @@ When entering a session or tackling any task, **do not read the entire operating
 1. **Foundational Behavioral Baseline (Always Read):**
    * [`guidelines/karpathy-guidelines.md`](./guidelines/karpathy-guidelines.md): Non-negotiable cognitive posture (Think Before Coding, Simplicity First, Surgical Changes, Goal-Driven Execution).
 2. **Task-Specific Execution Selection:**
+   * **Any plugin installation, use, upgrade, or relevant `.soul` update:** Read [`process/plugin-lifecycle.md`](./process/plugin-lifecycle.md) and run the shared compatibility checks at its required triggers.
    * **Reverse engineering, clean room recreation, or Craft Anything setup/upgrades:** Read [`plugins/craft-anything/SKILL.md`](./plugins/craft-anything/SKILL.md), including its readiness gate, before using the optional dependency.
    * **Clean room process documentation or evidence review:** Read [`process/clean-room-evidence.md`](./process/clean-room-evidence.md) for collection, approvals, integrity and report completion criteria.
    * **Implementing a feature, bugfix, or refactor:** Read [`process/agent-execution-rules.md`](./process/agent-execution-rules.md) and [`process/backlog-workflow.md`](./process/backlog-workflow.md).

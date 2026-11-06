@@ -54,6 +54,7 @@ After the runner decision, the next experiment must compile the external adapter
 - Node syntax check: passed.
 - Bundled skill validator: passed during PR preparation after providing PyYAML in a temporary validation directory outside the plugin. The initial attempt lacked PyYAML.
 - Diagnostic guard checks: passed for the clean pinned checkout (expected exit 2), an intentionally mismatched pin (exit 1), and an untracked upstream modification (exit 1). Temporary mutations were restored.
+- Shared plugin lifecycle runner: six tests passed for discovery, selection, manifest errors, missing/escaped scripts, timeouts, exit aggregation and empty scans. The actual all-plugin run discovers Craft Anything and returns BLOCKED (exit 2). The manifest registers its diagnostic; the runner does not enable it or install update hooks.
 - Existing V-cycle checker: passed, 63/63 pre-existing requirements; this does not establish plugin verification or add plugin requirements. A fresh Windows worktree with CRLF specification files triggers 567 pre-existing parser errors. Normalizing only the worktree specification line endings to LF makes the same checker pass; Git confirms no specification content changes. The checker and specifications are outside this PR's diff.
 - Upstream build, live agent execution, end-user visual proof and full bridge: not performed; integration is blocked before that stage.
 - Host Rust compiler/test/lint/format gates: not run for this dependency/documentation experiment; existing unrelated Rust edits were preserved.

@@ -9,6 +9,8 @@ Read `plugin.json` first. Execution is currently disabled: the compatibility exp
 
 ## Dependency setup and upgrades
 
+Follow the shared [plugin lifecycle](../../process/plugin-lifecycle.md) for installation, upgrades and checks before use. The manifest registers this adapter's diagnostic with the common runner.
+
 Run commands from the host repository root. Initialize only this optional submodule:
 
 ```sh
@@ -19,12 +21,12 @@ git -C .soul/plugins/craft-anything/upstream status --porcelain
 
 Require HEAD to equal `plugin.json`'s commit and the upstream worktree to be clean. Keep adapter code beside `upstream/`; preserve upstream unchanged. Ordinary engineering workflows do not require this dependency or its build.
 
-For an upgrade, inspect the current pin and working tree, fetch an explicitly chosen candidate, review the diff, and check out its exact commit in detached mode. Never track a moving branch automatically. Build and re-run compatibility experiments before updating the manifest and parent gitlink together. Record failed experiments without declaring the candidate supported. Keep execution disabled until the complete bridge is verified.
+For an upgrade, inspect the current pin and working tree, fetch an explicitly chosen candidate, review the diff, and check out its exact commit in detached mode in an isolated candidate checkout. Test with a temporary candidate manifest as the shared lifecycle describes; never track a moving branch automatically. Build and re-run compatibility experiments before accepting the manifest and parent gitlink together. Record failed experiments without declaring the candidate supported. Keep execution disabled until the complete bridge is verified.
 
-The initial diagnostic is:
+Run the registered initial diagnostic through the shared command:
 
 ```sh
-node .soul/plugins/craft-anything/compatibility-probe.mjs
+node .soul/tools/check-plugins.mjs --plugin craft-anything
 ```
 
 This checks dependency identity and demonstrates that a child process's working directory alone is not read isolation. It does not test an agent sandbox, authenticate a provider, or certify bridge compatibility.
