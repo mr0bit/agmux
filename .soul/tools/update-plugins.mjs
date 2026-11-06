@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// Purpose: sync recorded plugin submodule versions, then automatically check all adapters.
+// Run: node .soul/tools/update-plugins.mjs
+// No newer-version selection, forced checkout or automatic plugin enablement.
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -17,16 +20,20 @@ export function updatePlugins(root, git = process.env.SOUL_GIT || 'git') {
       return child.stdout;
     };
     const entries = call(['ls-files', '--stage', '-z', '--', '.soul/plugins/']).split('\0').filter(Boolean);
+    // 1. Read only indexed plugin submodules; reject unresolved index conflicts.
     const submodules = entries.filter(entry => entry.startsWith('160000 ')).map(entry => {
       const tab = entry.indexOf('\t');
       if (!entry.slice(0, tab).endsWith(' 0')) throw new Error('Resolve plugin index conflicts before updating');
       return entry.slice(tab + 1);
     });
+    // 2. Sync those exact pins; unrelated submodules remain untouched.
     if (submodules.length) call(['submodule', 'update', '--init', '--', ...submodules]);
   } catch (error) {
     syncError = error.message;
   }
+  // 3. Check all adapters, even after sync failure or when none use submodules.
   const results = checkPlugins(join(root, '.soul/plugins'), root);
+  // 4. Update failure wins; otherwise return the combined check result.
   return { syncError, results, exitCode: syncError ? 1 : resultExitCode(results) };
 }
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Purpose: run declared plugin checks; report status. No installs or enablement.
+// Usage: node .soul/tools/check-plugins.mjs [--plugin <name>]
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +16,7 @@ const inside = (parent, child) => {
 
 /** Run each adapter's declared Node diagnostic; return results without enabling plugins. */
 export function checkPlugins(root, cwd, selected) {
+  // 1. Find adapter folders only; select one if requested. Never scan upstream trees.
   let entries;
   try {
     entries = readdirSync(root, { withFileTypes: true })
@@ -33,11 +36,13 @@ export function checkPlugins(root, cwd, selected) {
       const pluginDir = realpathSync(join(root, name));
       if (!inside(realpathSync(root), pluginDir)) throw new Error('Plugin directory escapes plugins root');
       const manifest = JSON.parse(readFileSync(join(pluginDir, 'plugin.json'), 'utf8'));
+      // 2. Require a supported manifest, check script and valid timeout.
       const check = manifest.compatibilityCheck;
       if (manifest.schemaVersion !== 1 || !check || typeof check.script !== 'string' || !check.script) {
         throw new Error('Expected schemaVersion 1 and compatibilityCheck.script');
       }
       if (isAbsolute(check.script)) throw new Error('Check script must be relative to its adapter');
+      // 3. Keep the resolved check file inside its adapter, including symlink targets.
       const script = resolve(pluginDir, check.script);
       if (!inside(pluginDir, script)) throw new Error('Check script escapes adapter directory');
       const timeout = check.timeoutMs ?? 30000;
@@ -49,6 +54,7 @@ export function checkPlugins(root, cwd, selected) {
       }
       if (!inside(pluginDir, actual) || !statSync(actual).isFile()) throw new Error('Check must be a file inside its adapter');
       const child = spawnSync(process.execPath, [actual], {
+        // 4. Run trusted adapter code directly; bound runtime and captured output.
         cwd, encoding: 'utf8', shell: false, timeout, maxBuffer: 1024 * 1024,
       });
       const output = [child.stdout, child.stderr].filter(Boolean).join('\n').trim();
@@ -56,6 +62,7 @@ export function checkPlugins(root, cwd, selected) {
         return { name, status: 'FAILED', detail: child.error?.message || `Terminated: ${child.signal}`, output };
       }
       const status = ({ 0: 'PASSED', 1: 'FAILED', 2: 'BLOCKED', 3: 'UNAVAILABLE' })[child.status] || 'FAILED';
+      // 5. Preserve each check's result and output; continue checking other adapters.
       return { name, status, detail: `Check exited ${child.status}`, output };
     } catch (error) {
       return { name, status: 'FAILED', detail: error.message };
@@ -65,6 +72,7 @@ export function checkPlugins(root, cwd, selected) {
 
 /** Errors/unavailable checks take precedence over blocked checks in an aggregate result. */
 export function resultExitCode(results) {
+  // 6. Aggregate: failure/unavailable first, then blocked, otherwise success.
   if (results.some(result => ['FAILED', 'UNAVAILABLE'].includes(result.status))) return 1;
   return results.some(result => result.status === 'BLOCKED') ? 2 : 0;
 }

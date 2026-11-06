@@ -1,3 +1,5 @@
+// Purpose: test updater behaviour using disposable local Git repositories, never real plugins.
+// Run: node --test .soul/tools/update-plugins.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -8,12 +10,14 @@ import { updatePlugins } from './update-plugins.mjs';
 
 const git = process.env.SOUL_GIT || 'git';
 function fixture(t, withSubmodules = true) {
+  // 1. Build temporary repositories, pins and adapter checks; no network required.
   const home = mkdtempSync(join(tmpdir(), 'soul-update-tests-'));
   const host = join(home, 'host');
   const hooks = join(home, 'empty-hooks');
   mkdirSync(host);
   mkdirSync(hooks);
   t.after(() => {
+    // 4. Remove only this fixture; preserve the user's repository and plugins.
     const rel = relative(resolve(tmpdir()), resolve(home));
     if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new Error('Unsafe cleanup path');
     rmSync(home, { recursive: true, force: true, maxRetries: 3 });
@@ -55,6 +59,7 @@ function fixture(t, withSubmodules = true) {
 }
 
 test('updates only plugin submodules to indexed pins and then checks their resulting content', t => {
+  // 2. Run the updater against differing local revisions and check the resulting content.
   const { host, dir, command, first, second, outside } = fixture(t);
   const outcome = updatePlugins(host, git);
   assert.equal(outcome.syncError, undefined);
@@ -66,6 +71,7 @@ test('updates only plugin submodules to indexed pins and then checks their resul
 });
 
 test('preserves conflicting local edits, reports update failure and still runs diagnostics', t => {
+  // 3. Verify failure handling too: preserve edits, run checks, keep failure status.
   const { host, dir } = fixture(t);
   const note = join(dir, 'upstream/note.txt');
   writeFileSync(note, 'local edits');

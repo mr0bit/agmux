@@ -1,3 +1,5 @@
+// Purpose: test shared-checker behaviour with disposable example plugins, not Craft Anything.
+// Run: node --test .soul/tools/check-plugins.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -6,10 +8,12 @@ import { join, resolve, relative, isAbsolute } from 'node:path';
 import { checkPlugins, resultExitCode } from './check-plugins.mjs';
 
 function fixture(t) {
+  // 1. Create temporary adapters and declared checks for each test scenario.
   const home = mkdtempSync(join(tmpdir(), 'soul-plugin-tests-'));
   const root = join(home, 'plugins');
   mkdirSync(root);
   t.after(() => {
+    // 4. Remove only this test's temporary files, even after failed assertions.
     const rel = relative(resolve(tmpdir()), resolve(home));
     if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new Error('Unsafe cleanup path');
     rmSync(home, { recursive: true, force: true });
@@ -26,6 +30,7 @@ function fixture(t) {
 }
 
 test('discovers adapters once, preserves all outcomes and never recurses into upstream', t => {
+  // 2. Exercise discovery and execution; remaining tests cover selection and failures.
   const { home, root, plugin } = fixture(t);
   plugin('pass', 'console.log(process.cwd()); process.exit(0)');
   const blocked = plugin('blocked', 'console.log("unfinished bridge"); process.exit(2)');
@@ -35,6 +40,7 @@ test('discovers adapters once, preserves all outcomes and never recurses into up
   writeFileSync(join(blocked, 'upstream', 'plugin.json'), '{}');
   const before = readFileSync(join(blocked, 'plugin.json'), 'utf8');
   const results = checkPlugins(root, home);
+  // 3. Assert observable results; also verify cwd, output and unchanged enablement.
   assert.deepEqual(results.map(r => [r.name, r.status]), [
     ['blocked', 'BLOCKED'], ['failed', 'FAILED'], ['pass', 'PASSED'], ['unavailable', 'UNAVAILABLE'],
   ]);
