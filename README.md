@@ -46,3 +46,10 @@ remote relay/pairing is separate work. The executable hosts the UI in your brows
 
 See the [companion guide](crates/agmux-cli/src/companion_gui/ui/README.md) for
 configuration, transport contracts, and verification commands.
+
+## Architecture workflow
+
+The repository uses pinned Groma tooling alongside `.soul`. From the root, run
+`npm ci`, `npm run arch:setup`, then `npm run arch:view` to open the local map.
+See [setup, coverage and architecture rules](docs/archi/groma.md). The checked-in
+map is an initial scan; the module registry remains authoritative.

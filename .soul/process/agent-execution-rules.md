@@ -11,8 +11,9 @@ Whenever an AI agent (Codex, Antigravity, or orchestrator) is tasked with implem
 1. **Vertical Tracer Validation:** If creating new tasks, ensure they follow the `to-tickets` vertical tracer slicing discipline with explicit blocking edges and user quiz before publishing to `.backlog/`.
 2. **Read the Task:** View the task in `.backlog/` (`npx backlog.md task view <taskId>`).
 3. **Review Upstream Requirements:** Read the corresponding specification file in `docs/specs/` and architecture in `docs/archi/`.
-4. **Verify Module Ownership:** Check `docs/archi/module-list.md` to confirm the exact crate and module responsible for this change.
-5. **Transition Task:** Run `npx backlog.md task edit <taskId> -s "In Progress"`.
+4. **Inspect Live Architecture (when configured):** Follow [`live-architecture.md`](../architecture/live-architecture.md) to inspect affected file owners and scanner coverage.
+5. **Verify Module Ownership:** Check `docs/archi/module-list.md` to confirm the exact crate and module responsible for this change.
+6. **Transition Task:** Run `npx backlog.md task edit <taskId> -s "In Progress"`.
 
 ### Step 2: Implement & Trace (Code with Proof)
 1. **Write LLD:** Document the low-level design in `crates/<crate>/docs/<module>_lld.md`.
@@ -21,16 +22,17 @@ Whenever an AI agent (Codex, Antigravity, or orchestrator) is tasked with implem
 4. **Update Requirements:** Update the spec file in `docs/specs/` setting `Implementation Status: Implemented` and linking `Downstream Req: LLD-*`.
 
 ### Step 3: Verify Gates & Report (Sign-Off)
-1. **Run Verification Suite:** Run the software verification tests (`cargo test --test <feature>_tests`).
-2. **Verify Lints & Formatting:**
+1. **Refresh Live Architecture (when configured):** Rescan, review ownership and map changes, and include the refreshed map in the same pull request.
+2. **Run Verification Suite:** Run the software verification tests (`cargo test --test <feature>_tests`).
+3. **Verify Lints & Formatting:**
    ```bash
    cargo fmt --check
    cargo clippy -- -D warnings
    ```
-3. **Capture User's Point-of-View (POV) Visual Proof Artifact:** Execute the feature live as a real user would interact with it. Capture an authentic, high-resolution screenshot representing the user's authentic perspective (CLI terminal session output, interactive TUI panels, desktop companion GUI window, or mobile push notification cards). Unit test runner logs (e.g. `cargo test`) do NOT satisfy this requirement. Store under `docs/assets/screenshots/<task>_verification.png`.
-4. **Update Test Status:** Update the spec file in `docs/specs/` setting `Implementation Status: Verified` and `Test Status: Passed`.
-5. **Close Task in Backlog:** Run `npx backlog.md task edit <taskId> -s "Done"`.
-6. **Report with Visual Proof (User's POV) & Traceability Matrix:**
+4. **Capture User's Point-of-View (POV) Visual Proof Artifact:** Execute the feature live as a real user would interact with it. Capture an authentic, high-resolution screenshot representing the user's authentic perspective (CLI terminal session output, interactive TUI panels, desktop companion GUI window, or mobile push notification cards). Unit test runner logs (e.g. `cargo test`) do NOT satisfy this requirement. Store under `docs/assets/screenshots/<task>_verification.png`.
+5. **Update Test Status:** Update the spec file in `docs/specs/` setting `Implementation Status: Verified` and `Test Status: Passed`.
+6. **Close Task in Backlog:** Run `npx backlog.md task edit <taskId> -s "Done"`.
+7. **Report with Visual Proof (User's POV) & Traceability Matrix:**
    * In PR bodies, include a dedicated technical report for each task followed by its User POV visual proof screenshot and descriptive caption.
    * **Private Repo Asset Upload Trick:** Use `gh pr edit` / `gh pr create` with `--attach docs/assets/screenshots/<task>_verification.png` flags to automatically upload images to GitHub user-attachment storage and rewrite markdown references.
    * Include the **Traceability Contribution & Delta Table** showing the baseline, per-phase gains, net gain, and post-PR status.

@@ -1,0 +1,67 @@
+{
+  "scanners": [
+    {
+      "id": "react",
+      "source": "@groma/scanner-react@0.2.3",
+      "include": [
+        "crates/agmux-cli/src/companion_gui/ui/src/**/*.ts",
+        "crates/agmux-cli/src/companion_gui/ui/src/**/*.tsx",
+        "crates/agmux-cli/src/companion_gui/ui/tsconfig*.json",
+        "crates/agmux-cli/src/companion_gui/ui/package.json",
+        "crates/agmux-cli/src/companion_gui/ui/index.html"
+      ],
+      "exclude": [
+        "*.test.ts",
+        "*.test.tsx",
+        "*.spec.ts",
+        "*.spec.tsx",
+        "/test/",
+        "node_modules/",
+        "dist/",
+        "build/",
+        "coverage/"
+      ]
+    },
+    {
+      "id": "rust",
+      "source": "@groma/scanner-rust@0.2.3",
+      "include": [
+        "Cargo.toml",
+        "crates/**/Cargo.toml",
+        "crates/**/*.rs"
+      ],
+      "exclude": [
+        "target/",
+        "vendor/"
+      ]
+    },
+    {
+      "id": "typescript",
+      "source": "@groma/scanner-typescript@0.2.4",
+      "include": [
+        "crates/agmux-cli/src/companion_gui/ui/src/**/*.ts",
+        "crates/agmux-cli/src/companion_gui/ui/src/**/*.tsx",
+        "crates/agmux-cli/src/companion_gui/ui/tsconfig*.json",
+        "crates/agmux-cli/src/companion_gui/ui/package.json",
+        "crates/agmux-cli/src/companion_gui/ui/index.html"
+      ],
+      "exclude": [
+        "*.test.ts",
+        "*.test.tsx",
+        "*.spec.ts",
+        "*.spec.tsx",
+        "/test/",
+        "node_modules/",
+        "dist/",
+        "build/",
+        "coverage/"
+      ]
+    }
+  ],
+  "workSources": [
+    {
+      "id": "backlog",
+      "version": "1.55.3"
+    }
+  ]
+}

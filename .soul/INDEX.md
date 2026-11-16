@@ -69,6 +69,7 @@ When entering a session or tackling any task, **do not read the entire operating
 2. **Task-Specific Execution Selection:**
    * **Implementing a feature, bugfix, or refactor:** Read [`process/agent-execution-rules.md`](./process/agent-execution-rules.md) and [`process/backlog-workflow.md`](./process/backlog-workflow.md).
    * **Writing tests or verifying behavior:** Read [`testing/testing-seams.md`](./testing/testing-seams.md) and [`testing/unit-vs-verification.md`](./testing/unit-vs-verification.md).
+   * **Inspecting or maintaining a live architecture map:** Read [`architecture/live-architecture.md`](./architecture/live-architecture.md), then use the host repository's pinned tooling and setup instructions.
    * **Modifying or adding architectural boundaries/modules:** Read [`architecture/module-root-of-trust.md`](./architecture/module-root-of-trust.md) and [`architecture/deep-modules-and-seams.md`](./architecture/deep-modules-and-seams.md).
    * **Writing code or refining error paths:** Read [`code-quality/code-conventions.md`](./code-quality/code-conventions.md) and the relevant profile in [`languages/`](./languages/).
    * **Requirements & Spec synchronization:** Read [`requirements/attributes-schema.md`](./requirements/attributes-schema.md) and [`requirements/state-transitions.md`](./requirements/state-transitions.md).
@@ -99,6 +100,7 @@ When entering a session or tackling any task, **do not read the entire operating
 * [`requirements/state-transitions.md`](./requirements/state-transitions.md): Exact protocol for updating requirement implementation and test statuses.
 
 ### 3. Architecture Discipline ([`.soul/architecture/`](./architecture/))
+* [`architecture/live-architecture.md`](./architecture/live-architecture.md): Source-backed repository maps, registry precedence, scan coverage and change verification.
 * [`architecture/module-root-of-trust.md`](./architecture/module-root-of-trust.md): Strict module registry governance—agents must never invent unauthorized modules.
 * [`architecture/deep-modules-and-seams.md`](./architecture/deep-modules-and-seams.md): Designing deep modules with narrow interfaces and clean architectural seams.
 
