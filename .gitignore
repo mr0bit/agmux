@@ -16,6 +16,11 @@ target
 **/mutants.out*/
 
 scratch/
+node_modules/
+dist/
+playwright-report/
+test-results/
+*.tsbuildinfo
 
 # rustc will dump stack traces when hitting an internal compiler error to PWD
 rustc-ice-*.txt

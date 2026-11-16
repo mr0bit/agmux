@@ -92,6 +92,8 @@ crates/
 * **`agent_context`**: Progressive token-efficient CLI documentation generator (`agmux agent-context`).
 * **`mcp_server`**: Built-in opt-in JSON-RPC 2.0 MCP server exposing orchestration tools (`agmux mcp` / `--enable-mcp`).
 * **`companion_gui`**: Phase 3 desktop/web companion bridge, `panels open <url|file>`, and `agmux://` deep-link handler.
+  * **`companion_gui::live`**: Authenticated loopback HTTP/SSE/WebSocket adapter over public daemon IPC; built UI hosting, process actions, registered files, Git, journal replay and raw PTY streaming.
+  * **`companion_gui/ui`**: React Native Web frontend. `LiveApp` and `backend` use only the companion API; `LiveTerminal` renders native PTY frames. The separate design-preview App is isolated from backend state. UI code never accesses daemon internals or provider credentials.
 * **`self_updater`**: In-place binary self-updater checking GitHub Releases, validating SHA-256 checksums, and atomically replacing executables (`agmux update` / `--update`).
 
 ---

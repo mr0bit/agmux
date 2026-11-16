@@ -5,6 +5,9 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// Browser API and static frontend served over the existing authenticated IPC seam.
+pub mod live;
+
 pub async fn request(
     socket: &Path,
     token: &str,
@@ -207,6 +210,13 @@ function render(s){try{state=s;document.querySelector('#badge').textContent=s.at
 </script></body></html>"##;
 
 pub async fn serve(socket: PathBuf, daemon_token: String) -> Result<()> {
+    let ui = live::ui_directory();
+    if ui.join("index.html").is_file() {
+        return live::serve(socket, daemon_token, ui).await;
+    }
+    if std::env::var_os("AGMUX_UI_DIST").is_some() {
+        bail!("AGMUX_UI_DIST must contain the built frontend index.html");
+    }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let mut random = [0u8; 32];
