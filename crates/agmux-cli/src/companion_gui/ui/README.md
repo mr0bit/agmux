@@ -1,13 +1,13 @@
 # Agmux browser companion
 
-The frontend has two explicitly separate entry points:
+The production UI is embedded in `agmux.exe` / `agmux`. The executable injects
+an authenticated browser bootstrap and serves the actual Rust application.
+Production builds contain no demo workspace or simulated replies.
+Vite development mode retains the isolated design preview for design regression tests.
 
-- **Live:** `agmux gui` serves built assets and injects a browser-only bootstrap
-  credential. The UI uses the Rust bridge's sessions, PTYs, files, metadata, and
-  diffs. There are no simulated replies or permission grants in live mode.
-- **Design preview:** Vite or the private hosted Site has no bootstrap credential
-  and renders the isolated demo workspace. Its **Connect backend** dialog explains
-  how to start and open the real local companion. It does not tunnel to localhost.
+Windows users can extract both release executables together and double-click
+`agmux.exe`; no frontend installation or Node.js is needed. Other platforms use
+`agmux gui`. The default browser opens automatically.
 
 ## Start
 
@@ -30,10 +30,10 @@ cargo build -p agmux-cli -p agmux-daemon
 cargo run -p agmux-cli -- gui
 ```
 
-The bridge locates `dist/` in this checkout, or `ui/dist/` beside the executable.
-Set `AGMUX_UI_DIST` to an explicit built directory when distributing binaries.
-Set `AGMUX_GUI_PORT` to a chosen loopback port, or leave it unset for an ephemeral
-port. Without built assets, the CLI retains its original basic companion page.
+The Rust build embeds `dist/`; build the frontend before any Cargo compilation.
+Missing assets fail compilation. An explicit `AGMUX_UI_DIST` is a development
+override, not a distribution requirement. Set `AGMUX_GUI_PORT` to choose a
+loopback port and `AGMUX_GUI_NO_OPEN=1` to suppress opening the browser.
 
 The existing daemon environment settings (`AGMUX_SOCK`, `AGMUX_AUTH_TOKEN_PATH`,
 `AGMUX_DB_PATH`, `AGMUX_CONFIG_PATH`) can isolate a development workspace.

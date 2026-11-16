@@ -165,3 +165,5 @@ crates/
 | `REQ-GUI-SELF-UPDATER-003` | Pinned GitHub Releases self-updater and SHA-256 verification | `crates/agmux-cli::self_updater` |
 | `REQ-GUI-MOBILE-PUSH-004` | External mobile push relays (ntfy/webhooks) with action replies | `crates/agmux-daemon::notification_dispatcher` |
 | `REQ-GUI-DESKTOP-APP-005` | Desktop companion GUI with SSE streaming and Monaco split panels | `crates/agmux-cli::companion_gui` |
+
+The CLI build script (`crates/agmux-cli/build.rs`) packages `companion_gui` UI assets into the executable; it adds no runtime module or daemon dependency.

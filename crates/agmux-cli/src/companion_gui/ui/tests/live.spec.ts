@@ -132,7 +132,7 @@ test.describe.serial("actual Rust daemon integration", () => {
     await page.getByRole("button", { name: "Chat", exact: true }).click();
     await page.screenshot({
       path: path.resolve(
-        "../../../../../docs/assets/screenshots/live_companion_verification.png",
+        "../../../../../docs/assets/screenshots/embedded_companion_verification.png",
       ),
       fullPage: true,
     });

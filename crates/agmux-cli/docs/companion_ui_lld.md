@@ -1,28 +1,25 @@
 # Live companion integration design
 
 The `companion_gui` boundary owns the browser bridge and frontend. Running
-`agmux gui` after building the UI serves the same React Native Web design as the
-prototype, connected to the actual Rust daemon over its public authenticated IPC.
+`agmux gui` serves the embedded React Native Web application, connected to the actual Rust daemon over its public authenticated IPC.
 The daemon remains authoritative for process execution, session metadata, file
 panels, terminal state, Git data and inter-agent delivery.
 
 ## Boundaries and runtime
 
-- `companion_gui.rs`: existing CLI entry, snapshot/deep-link helpers and legacy
-  basic page. Selects the enhanced server when built assets exist.
+- `companion_gui.rs`: CLI entry and snapshot/deep-link helpers. Always runs the full application; the legacy basic page has been removed.
 - `companion_gui/live.rs`: Axum HTTP/SSE/WebSocket server. Binds `127.0.0.1` only;
-  serves `/assets` from the built UI directory and injects a per-process browser
+  serves `/assets` from the embedded manifest and injects a per-process browser
   credential into the root HTML. It does not expose arbitrary IPC envelopes.
 - `ui/src/backend.ts`: typed browser client; browser secret stays in memory.
 - `ui/src/LiveApp.tsx`: actual workspace, prompt, file, diff and process controls.
 - `ui/src/LiveTerminal.tsx`: xterm viewport sync, byte streaming, resize, reconnect
   and cleanup. It uses separate connections per selected terminal.
-- `ui/src/App.tsx`: isolated design preview, without live provider calls.
-  `ConnectBackend.tsx` guides users into the locally served application.
+- `ui/src/App.tsx`: development-only design fixture, excluded from production bundles.
 
-The entrypoint chooses live mode only when the bridge bootstrap is present.
-Demo storage and scripted replies are not used in live mode. Node.js is required
-for building, not for serving the built app. `AGMUX_UI_DIST` overrides asset lookup;
+The production entrypoint requires the bridge bootstrap. Demo storage and scripted
+replies are excluded from production. Node.js is required
+for source builds, not for running the executable. `AGMUX_UI_DIST` is a development override;
 `AGMUX_GUI_PORT` selects an optional loopback port.
 
 ## Public browser operations
@@ -98,3 +95,26 @@ requires exactly two marker occurrences, regardless of split/coalesced frames.
 
 Provider account authentication and model responses are not part of the shell
 fixture; they must be validated with the user's installed/authenticated CLIs.
+
+## Embedded executable distribution
+
+`agmux-cli/build.rs` embeds every production `ui/dist` asset into the CLI at
+compile time. Release CI builds the frontend before Rust on Linux and Windows.
+Missing assets fail compilation rather than silently shipping the old dashboard.
+The compiled production frontend excludes the design demo. Only Vite development
+mode can load it without a companion bootstrap. Browser code is still served by
+the authenticated loopback server and talks to the actual daemon IPC.
+
+Windows starts the full UI when `agmux.exe` is launched without arguments;
+`agmux.exe gui` does the same explicitly, and `agmux.exe tui` keeps the terminal
+interface. The GUI opens the default browser, with `AGMUX_GUI_NO_OPEN=1` for
+headless operation. Keep `agmuxd.exe` beside `agmux.exe` as in the release ZIP.
+No Node, source checkout, `dist` folder, or frontend server is needed at runtime.
+An explicit `AGMUX_UI_DIST` remains a development override; shipped binaries
+always use the embedded UI by default. This is a browser application hosted by
+the executable, not an additional native WebView window.
+
+The browser fixture copies only both executables into a clean temporary directory,
+unsets `AGMUX_UI_DIST`, and exercises real terminal, files and Git behavior there.
+The existing specification status and 63/63 traceability baseline are unchanged;
+this delivery changes distribution of the already integrated companion feature.

@@ -3,7 +3,15 @@
 A Rust agentic terminal multiplexer with a browser companion for real local
 sessions, terminal input/output, workspace files, and Git review.
 
-## Run the live companion
+## Run the Windows application
+
+Extract the Windows release ZIP and keep `agmux.exe` and `agmuxd.exe` together.
+Double-click `agmux.exe` to open the real application in your default browser.
+The UI is embedded in the executable; Node.js, a source checkout and a separate
+frontend server are not needed. Keep the application process running while using
+the UI. `agmux.exe gui` opens it explicitly; `agmux.exe tui` opens the terminal UI.
+
+## Build from source
 
 Install a current stable Rust toolchain, Node.js 22+, npm, and Git. From a clone
 of this integration branch:
@@ -14,7 +22,7 @@ npm ci
 npm run live
 ```
 
-Open the `http://127.0.0.1:<port>/` URL printed by `agmux gui` in your browser.
+The browser opens automatically; the `http://127.0.0.1:<port>/` URL is also printed.
 The command builds the frontend and both Rust binaries, starts or connects to
 `agmuxd`, and serves the frontend from the authenticated companion origin.
 
@@ -34,7 +42,7 @@ implemented; permissions and native CLI settings are handled in Terminal.
 
 The hosted private Site remains a design preview with connection instructions.
 It cannot reach a daemon on your computer. The live app binds only to loopback;
-remote relay/pairing and a packaged desktop application are separate work.
+remote relay/pairing is separate work. The executable hosts the UI in your browser.
 
 See the [companion guide](crates/agmux-cli/src/companion_gui/ui/README.md) for
 configuration, transport contracts, and verification commands.

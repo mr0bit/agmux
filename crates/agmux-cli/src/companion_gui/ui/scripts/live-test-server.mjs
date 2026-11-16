@@ -44,10 +44,19 @@ const env = {
   AGMUX_AUTH_TOKEN_PATH: path.join(root, "token"),
   AGMUX_DB_PATH: path.join(root, "database"),
   AGMUX_CONFIG_PATH: path.join(root, "config"),
-  AGMUX_UI_DIST: path.join(ui, "dist"),
+  AGMUX_GUI_NO_OPEN: "1",
   AGMUX_GUI_PORT: process.env.AGMUX_TEST_PORT || "5174",
 };
-const daemon = spawn(path.join(repo, "target/debug/agmuxd"), [], {
+// Verify the packaged contract with only the two executables, without UI files.
+const { copyFile } = await import("node:fs/promises");
+const bin = path.join(root, "bin");
+await mkdir(bin);
+const suffix = process.platform === "win32" ? ".exe" : "";
+for (const name of ["agmux", "agmuxd"]) {
+  await copyFile(path.join(repo, "target/debug", name + suffix), path.join(bin, name + suffix));
+}
+delete env.AGMUX_UI_DIST;
+const daemon = spawn(path.join(bin, "agmuxd" + suffix), [], {
   cwd: project,
   env,
   stdio: ["ignore", "inherit", "inherit"],
@@ -76,7 +85,7 @@ for (let attempt = 0; attempt < 300; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
-gui = spawn(path.join(repo, "target/debug/agmux"), ["gui"], {
+gui = spawn(path.join(bin, "agmux" + suffix), ["gui"], {
   cwd: project,
   env,
   stdio: ["ignore", "inherit", "inherit"],

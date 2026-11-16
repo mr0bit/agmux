@@ -75,6 +75,13 @@ pub async fn ensure_daemon_running(socket_path: &Path, token_path: &Path) -> Res
         }
     }
 
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Keep the background daemon from opening a second console window.
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
     let mut child = cmd.spawn().with_context(|| {
         format!(
             "Failed to auto-spawn daemon binary {}",

@@ -22,7 +22,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{convert::Infallible, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
-use tower_http::services::ServeDir;
+// Generated from the production frontend during compilation.
+include!(concat!(env!("OUT_DIR"), "/companion_assets.rs"));
 
 type Ctx = Arc<Bridge>;
 struct Bridge {
@@ -32,6 +33,7 @@ struct Bridge {
     authority: String,
     index: String,
     streams: Arc<Semaphore>,
+    directory: Option<PathBuf>,
 }
 struct ApiError(StatusCode, String);
 impl From<anyhow::Error> for ApiError {
@@ -46,22 +48,9 @@ impl IntoResponse for ApiError {
 }
 type ApiResult<T> = std::result::Result<T, ApiError>;
 
-/// Locate a built UI without requiring Node.js at runtime.
-pub fn ui_directory() -> PathBuf {
-    if let Some(path) = std::env::var_os("AGMUX_UI_DIST") {
-        return PathBuf::from(path);
-    }
-    let adjacent = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.join("ui/dist")));
-    if let Some(path) = adjacent.filter(|p| p.join("index.html").is_file()) {
-        return path;
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/companion_gui/ui/dist")
-}
-
-/// Serve the built UI and browser-only secret on an IPv4 loopback origin.
-pub async fn serve(socket: PathBuf, daemon_token: String, directory: PathBuf) -> Result<()> {
+/// Serve the embedded application; an explicit directory override is for development.
+pub async fn serve(socket: PathBuf, daemon_token: String) -> Result<()> {
+    let directory = std::env::var_os("AGMUX_UI_DIST").map(PathBuf::from);
     let port: u16 = std::env::var("AGMUX_GUI_PORT")
         .unwrap_or_else(|_| "0".into())
         .parse()
@@ -71,9 +60,15 @@ pub async fn serve(socket: PathBuf, daemon_token: String, directory: PathBuf) ->
     let mut random = [0u8; 32];
     getrandom::fill(&mut random).map_err(|e| anyhow::anyhow!("Browser token: {e}"))?;
     let secret: String = random.iter().map(|b| format!("{b:02x}")).collect();
-    let html = tokio::fs::read_to_string(directory.join("index.html"))
-        .await
-        .context("Read built UI")?;
+    let html = match &directory {
+        Some(path) => tokio::fs::read_to_string(path.join("index.html"))
+            .await
+            .context("AGMUX_UI_DIST must contain the built frontend index.html")?,
+        None => std::str::from_utf8(
+            embedded_asset("index.html").context("Embedded application index missing")?,
+        )?
+        .to_owned(),
+    };
     let bootstrap =
         format!("<script>const token='{secret}';window.__AGMUX__={{token,version:1}};</script>");
     let ctx = Arc::new(Bridge {
@@ -83,6 +78,7 @@ pub async fn serve(socket: PathBuf, daemon_token: String, directory: PathBuf) ->
         authority: authority.clone(),
         index: html.replace("<head>", &format!("<head>{bootstrap}")),
         streams: Arc::new(Semaphore::new(32)),
+        directory,
     });
     let router = Router::new()
         .route("/", get(index))
@@ -91,15 +87,68 @@ pub async fn serve(socket: PathBuf, daemon_token: String, directory: PathBuf) ->
         .route("/api/events", get(events))
         .route("/api/terminal", get(terminal))
         .route("/api/{*path}", post(api))
-        .nest_service("/assets", ServeDir::new(directory.join("assets")))
+        .route("/assets/{*path}", get(asset))
         .layer(DefaultBodyLimit::max(1_000_000))
         .layer(middleware::from_fn_with_state(ctx.clone(), authorize))
         .with_state(ctx);
-    println!("http://{authority}/");
+    let url = format!("http://{authority}/");
+    println!("{url}");
+    if std::env::var_os("AGMUX_GUI_NO_OPEN").is_none() {
+        open_browser(&url);
+    }
     axum::serve(listener, router)
         .await
         .context("Companion HTTP server")
 }
+fn embedded_asset(path: &str) -> Option<&'static [u8]> {
+    COMPANION_ASSETS
+        .iter()
+        .find_map(|(name, bytes)| (*name == path).then_some(*bytes))
+}
+
+async fn asset(State(ctx): State<Ctx>, OriginalUri(uri): OriginalUri) -> Response {
+    let path = uri.path().trim_start_matches('/');
+    // Only files in the embedded manifest can be served, including in override mode.
+    let Some(embedded) = embedded_asset(path) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let body = match &ctx.directory {
+        Some(directory) => match tokio::fs::read(directory.join(path)).await {
+            Ok(bytes) => Bytes::from(bytes),
+            Err(_) => return StatusCode::NOT_FOUND.into_response(),
+        },
+        None => Bytes::from_static(embedded),
+    };
+    let content_type = if path.ends_with(".js") {
+        "text/javascript; charset=utf-8"
+    } else if path.ends_with(".css") {
+        "text/css; charset=utf-8"
+    } else if path.ends_with(".svg") {
+        "image/svg+xml"
+    } else if path.ends_with(".woff2") {
+        "font/woff2"
+    } else if path.ends_with(".png") {
+        "image/png"
+    } else {
+        "application/octet-stream"
+    };
+    ([(header::CONTENT_TYPE, content_type)], body).into_response()
+}
+
+fn open_browser(url: &str) {
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", url])
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open").arg(url).spawn();
+    if let Err(error) = result {
+        tracing::warn!(%error, "Open the printed companion URL in your browser");
+    }
+}
+
 async fn authorize(
     State(ctx): State<Ctx>,
     request: Request<axum::body::Body>,
