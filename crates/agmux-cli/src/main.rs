@@ -1144,6 +1144,9 @@ async fn main() -> Result<()> {
         Some(Commands::RegisterScheme) => {
             unreachable!("registration handled before daemon startup")
         }
+        None if cfg!(target_os = "windows") => {
+            agmux_cli::companion_gui::serve(socket_path.clone(), token.clone()).await?;
+        }
         None | Some(Commands::Tui) => agmux_tui::run_tui(&socket_path, &token).await?,
         Some(Commands::Diff {
             session_id,

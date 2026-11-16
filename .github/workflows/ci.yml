@@ -41,6 +41,10 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Build embedded application UI
+        working-directory: crates/agmux-cli/src/companion_gui/ui
+        run: npm ci && npm run build && npm run test:state
+
       - name: Run .soul V-Cycle Traceability Check
         run: node .soul/tools/v-cycle-checker.mjs
 
@@ -87,6 +91,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Setup Node.js for embedded UI
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Build embedded application UI
+        working-directory: crates/agmux-cli/src/companion_gui/ui
+        run: npm ci && npm run build
+
       - name: Install musl toolchain (Linux)
         if: matrix.platform.target == 'x86_64-unknown-linux-musl'
         run: |
@@ -117,6 +130,47 @@ jobs:
           tar -czvf ../../../${{ matrix.platform.archive_name }} agmux agmuxd
           cd ../../..
           sha256sum ${{ matrix.platform.archive_name }} > ${{ matrix.platform.archive_name }}.sha256
+
+      - name: Verify standalone Windows application
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP ([guid]::NewGuid().ToString())
+          New-Item -ItemType Directory $root | Out-Null
+          Copy-Item "target/${{ matrix.platform.target }}/release/agmux.exe", "target/${{ matrix.platform.target }}/release/agmuxd.exe" $root
+          $env:AGMUX_GUI_NO_OPEN = '1'
+          $env:AGMUX_SOCK = Join-Path $root 'socket'
+          $env:AGMUX_AUTH_TOKEN_PATH = Join-Path $root 'token'
+          $env:AGMUX_DB_PATH = Join-Path $root 'state.db'
+          $env:AGMUX_CONFIG_PATH = Join-Path $root 'config'
+          Remove-Item Env:AGMUX_UI_DIST -ErrorAction SilentlyContinue
+          $app = Start-Process (Join-Path $root 'agmux.exe') -WorkingDirectory $root -PassThru -RedirectStandardOutput (Join-Path $root 'stdout') -RedirectStandardError (Join-Path $root 'stderr')
+          try {
+            $url = $null
+            for ($attempt = 0; $attempt -lt 100; $attempt++) {
+              if ($app.HasExited) { throw (Get-Content (Join-Path $root 'stderr') -Raw) }
+              $url = Get-Content (Join-Path $root 'stdout') -ErrorAction SilentlyContinue | Where-Object { $_ -match '^http://127[.]0[.]0[.]1:[0-9]+/$' } | Select-Object -First 1
+              if ($url) { break }
+              Start-Sleep -Milliseconds 100
+            }
+            if (!$url) { throw 'Application did not start its companion server' }
+            $html = (Invoke-WebRequest $url).Content
+            if ($html -notmatch "const token='([a-f0-9]+)'") { throw 'Live application bootstrap missing' }
+            $headers = @{ 'X-Agmux-Token' = $Matches[1] }
+            $snapshot = Invoke-RestMethod ($url + 'api/snapshot') -Headers $headers
+            $assets = [regex]::Matches($html, '(?:src|href)="(/assets/[^"]+)"')
+            if ($assets.Count -eq 0) { throw 'Embedded frontend assets missing' }
+            foreach ($asset in $assets) {
+              $response = Invoke-WebRequest ($url.TrimEnd('/') + $asset.Groups[1].Value)
+              if ($response.StatusCode -ne 200) { throw 'Embedded asset failed to load' }
+            }
+            Write-Output 'Standalone agmux.exe launched its embedded live UI and connected to agmuxd.exe.'
+          } finally {
+            Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+            Get-Process agmuxd -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq (Join-Path $root 'agmuxd.exe') } | Stop-Process -Force
+            Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Package Windows Binaries
         if: runner.os == 'Windows'

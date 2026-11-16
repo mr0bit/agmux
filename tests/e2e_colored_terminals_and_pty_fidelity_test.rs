@@ -309,22 +309,25 @@ async fn test_interactive_input_does_not_duplicate_output_frames() {
         .await
         .expect("send input");
 
-    let mut marker_count = 0;
+    // PTY chunks may coalesce echo and stdout, or split a marker across frames.
+    // Assert on the complete byte stream rather than the number of packets.
+    let mut output = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while tokio::time::Instant::now() < deadline {
-        if let Ok(Some(Ok(msg))) =
-            tokio::time::timeout(Duration::from_millis(500), framed.next()).await
-        {
-            if let IpcMessage::TerminalOutputFrame(frame) = msg {
-                let text = String::from_utf8_lossy(&frame.data);
-                if text.contains("UNIQUE_DEDUP_MARKER") {
-                    marker_count += 1;
-                }
+        match tokio::time::timeout(Duration::from_millis(100), framed.next()).await {
+            Ok(Some(Ok(IpcMessage::TerminalOutputFrame(frame)))) => {
+                output.extend_from_slice(&frame.data);
             }
-        } else {
-            break;
+            Ok(Some(Err(error))) => panic!("Terminal framing error: {error}"),
+            Ok(None) => break,
+            _ => {}
         }
     }
+    let marker = b"UNIQUE_DEDUP_MARKER";
+    let marker_count = output
+        .windows(marker.len())
+        .filter(|bytes| *bytes == marker)
+        .count();
 
     assert_eq!(
         marker_count, 2,
