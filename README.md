@@ -53,3 +53,20 @@ The repository uses pinned Groma tooling alongside `.soul`. From the root, run
 `npm ci`, `npm run arch:setup`, then `npm run arch:view` to open the local map.
 See [setup, coverage and architecture rules](docs/archi/groma.md). The checked-in
 map is an initial scan; the module registry remains authoritative.
+
+## Windows startup troubleshooting
+
+If v0.1.0 reports `Daemon process exited prematurely ... exit code: 1`, the default
+named-pipe lock path has a known bug. In PowerShell, use a regular lock file:
+
+```powershell
+$env:AGMUX_LOCK_PATH = Join-Path $env:LOCALAPPDATA "agmux\agmuxd.pid"
+.\agmux.exe gui
+```
+
+This affects the current PowerShell session. It does not delete or reset data.
+The corrected startup implementation stores default named-pipe locks in the local
+data directory and includes backend stderr plus a startup-log path on failure.
+For a different failure, `agmux doctor` or running `.\agmuxd.exe` directly from
+the extracted folder can reveal the underlying diagnostic. Do not post token-file
+contents when reporting an issue.

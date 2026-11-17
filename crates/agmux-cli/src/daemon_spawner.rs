@@ -1,5 +1,6 @@
 //! Background daemon auto-spawner on socket absence.
 
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -62,7 +63,26 @@ pub async fn ensure_daemon_running(socket_path: &Path, token_path: &Path) -> Res
     cmd.arg("--token-path").arg(token_path);
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(std::process::Stdio::null());
+    let mut log_name = token_path.as_os_str().to_os_string();
+    log_name.push(".daemon.log");
+    let log_path = PathBuf::from(log_name);
+    if let Some(parent) = log_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).with_context(|| format!("Agmux could not create its diagnostic directory {}. Check that your account can write there.", parent.display()))?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let log = options.open(&log_path).with_context(|| {
+        format!(
+            "Agmux could not write its backend diagnostic log at {}. Check the folder permissions.",
+            log_path.display()
+        )
+    })?;
+    cmd.stderr(std::process::Stdio::from(log));
 
     #[cfg(unix)]
     {
@@ -84,8 +104,8 @@ pub async fn ensure_daemon_running(socket_path: &Path, token_path: &Path) -> Res
 
     let mut child = cmd.spawn().with_context(|| {
         format!(
-            "Failed to auto-spawn daemon binary {}",
-            daemon_bin.display()
+            "Agmux could not launch its background service at {}. Extract agmux and agmuxd from the same release archive into one folder. Startup log: {}",
+            daemon_bin.display(), log_path.display()
         )
     })?;
 
@@ -106,12 +126,37 @@ pub async fn ensure_daemon_running(socket_path: &Path, token_path: &Path) -> Res
 
         // Check if child exited prematurely
         if let Ok(Some(status)) = child.try_wait() {
-            bail!("Daemon process exited prematurely with status: {status}");
+            bail!(
+                "Agmux could not start its background service ({}). The service stopped during startup ({status}).\n\n{}",
+                daemon_bin.display(),
+                startup_diagnostic(&log_path)
+            );
         }
     }
 
     bail!(
-        "Timed out waiting 3s for daemon socket {} to become ready",
-        socket_path.display()
+        "Agmux's background service did not become ready within 3 seconds at {}. It may still be starting.\n\n{}",
+        socket_path.display(),
+        startup_diagnostic(&log_path)
     );
+}
+
+fn startup_diagnostic(log_path: &Path) -> String {
+    let detail = (|| -> std::io::Result<String> {
+        let mut file = std::fs::File::open(log_path)?;
+        let length = file.metadata()?.len().min(8192);
+        file.seek(SeekFrom::End(-(length as i64)))?;
+        let mut bytes = Vec::with_capacity(length as usize);
+        file.take(8192).read_to_end(&mut bytes)?;
+        Ok(String::from_utf8_lossy(&bytes).trim().to_owned())
+    })();
+    let reason = match detail {
+        Ok(text) if !text.is_empty() => format!("Backend details:\n{text}"),
+        Ok(_) => "The backend did not write an error message. Check that both executables came from the same release and were fully extracted.".into(),
+        Err(error) => format!("The startup diagnostic could not be read: {error}"),
+    };
+    format!(
+        "{reason}\n\nStartup log: {}\nRun `agmux doctor` to check local configuration.",
+        log_path.display()
+    )
 }

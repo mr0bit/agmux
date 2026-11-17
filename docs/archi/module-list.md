@@ -174,3 +174,5 @@ The root `package.json` / lockfile pin Groma as development tooling.
 `groma/config.json` scopes and pins scanners; `groma/` contains their architecture
 Markdown records. This is a visualization of the registered modules, not a new
 runtime module or a replacement ownership registry. See [Groma workflow](groma.md).
+
+Daemon startup diagnostics are owned by the existing CLI `daemon_spawner` module ([LLD](../../crates/agmux-cli/docs/daemon_spawner_lld.md)); named-pipe lock placement remains owned by daemon `instance_lock`.
