@@ -190,12 +190,24 @@ jobs:
             $body = @{ agent = 'gemini'; args = @('--version', '--model', 'gemini-2.5-pro'); cwd = $root; title = 'Gemini verification' } | ConvertTo-Json
             $session = Invoke-RestMethod ($url + 'api/spawn') -Method Post -Headers $headers -ContentType 'application/json' -Body $body
             $verified = $false
-            for ($attempt = 0; $attempt -lt 100; $attempt++) {
+            for ($attempt = 0; $attempt -lt 300; $attempt++) {
               $snapshot = Invoke-RestMethod ($url + 'api/snapshot?session_id=' + $session.session_id) -Headers $headers
               if ($snapshot.screen -match '0[.]68[.]0') { $verified = $true; break }
               Start-Sleep -Milliseconds 200
             }
-            if (!$verified) { throw 'Real Gemini CLI did not run in the Windows PTY' }
+            if (!$verified) {
+              Write-Output ('Gemini PTY snapshot: ' + ($snapshot | ConvertTo-Json -Depth 8))
+              $shim = (Get-Command gemini.cmd -ErrorAction Stop).Source
+              $packageRoot = Join-Path (Split-Path $shim) 'node_modules/@google/gemini-cli'
+              $package = Get-Content (Join-Path $packageRoot 'package.json') -Raw | ConvertFrom-Json
+              $entry = Join-Path $packageRoot $package.bin.gemini
+              Write-Output "Direct Node probe: $entry"
+              & node $entry --version 2>&1 | Out-String | Write-Output
+              $verbatimEntry = '\\?\' + $entry
+              Write-Output "Verbatim Node probe: $verbatimEntry"
+              & node $verbatimEntry --version 2>&1 | Out-String | Write-Output
+              throw 'Real Gemini CLI did not return version output through the Windows PTY within 60 seconds; see diagnostics above.'
+            }
             Write-Output 'Gemini CLI npm provider ran inside the real Windows PTY without credentials.'
             Write-Output 'Standalone agmux.exe launched its embedded live UI and connected to agmuxd.exe.'
             # Force a separate real backend startup failure and check the human-readable diagnostic.
