@@ -225,7 +225,7 @@ impl PtyManager {
         }
         cmd.args(&args);
         if let Some(ref dir) = cwd {
-            cmd.cwd(dir);
+            cmd.cwd(dunce::simplified(dir));
         }
 
         if let Some(port) = port {
@@ -255,10 +255,13 @@ impl PtyManager {
             .try_clone_reader()
             .map_err(|e| PtyError::PtyAllocation(e.to_string()))?;
 
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| PtyError::PtyAllocation(e.to_string()))?;
+        let writer = Arc::new(std::sync::Mutex::new(
+            pair.master
+                .take_writer()
+                .map_err(|e| PtyError::PtyAllocation(e.to_string()))?,
+        ));
+        #[cfg(windows)]
+        let bootstrap_writer = writer.clone();
 
         let master = Arc::new(std::sync::Mutex::new(pair.master));
 
@@ -278,11 +281,47 @@ impl PtyManager {
         let reader_task = tokio::task::spawn_blocking(move || {
             use std::io::Read;
             let mut buf = [0u8; 8192];
+            #[cfg(windows)]
+            let mut bootstrap = ConptyCursorBootstrap::default();
             loop {
                 match reader.read(&mut buf) {
-                    Ok(0) => break, // EOF reached when slave closes
+                    Ok(0) => {
+                        #[cfg(windows)]
+                        if let Ok(mut sb) = screen_buf_clone.lock() {
+                            let tail = bootstrap.finish();
+                            if !tail.is_empty() {
+                                sb.process(&tail);
+                                let _ = output_tx_clone.send(tail);
+                            }
+                        }
+                        break;
+                    }
                     Ok(n) => {
+                        #[cfg(not(windows))]
                         let chunk = buf[..n].to_vec();
+                        #[cfg(windows)]
+                        let chunk = {
+                            let (chunk, reply) = bootstrap.process(&buf[..n]);
+                            if reply {
+                                match bootstrap_writer.lock() {
+                                    Ok(mut writer) => {
+                                        if let Err(error) = writer
+                                            .write_all(b"\x1b[1;1R")
+                                            .and_then(|_| writer.flush())
+                                        {
+                                            tracing::warn!(%error, "Could not answer initial ConPTY cursor query");
+                                        }
+                                    }
+                                    Err(error) => {
+                                        tracing::warn!(%error, "ConPTY input writer unavailable during startup")
+                                    }
+                                }
+                            }
+                            if chunk.is_empty() {
+                                continue;
+                            }
+                            chunk
+                        };
                         if let Ok(mut sb) = screen_buf_clone.lock() {
                             sb.process(&chunk);
                             let _ = output_tx_clone.send(chunk);
@@ -330,7 +369,7 @@ impl PtyManager {
             cwd,
             port,
             master,
-            writer: Arc::new(std::sync::Mutex::new(writer)),
+            writer,
             output_tx,
             input_tx,
             exit_rx,
@@ -368,9 +407,69 @@ impl PtyManager {
     }
 }
 
+// portable-pty creates fresh ConPTY hosts with INHERIT_CURSOR. Answer only that
+// initial query; later application queries remain the attached terminal's job.
+#[cfg(any(windows, test))]
+#[derive(Default)]
+struct ConptyCursorBootstrap {
+    pending: Vec<u8>,
+    answered: bool,
+}
+#[cfg(any(windows, test))]
+impl ConptyCursorBootstrap {
+    fn process(&mut self, bytes: &[u8]) -> (Vec<u8>, bool) {
+        if self.answered {
+            return (bytes.to_vec(), false);
+        }
+        const QUERY: &[u8] = b"\x1b[6n";
+        self.pending.extend_from_slice(bytes);
+        if let Some(index) = self
+            .pending
+            .windows(QUERY.len())
+            .position(|part| part == QUERY)
+        {
+            self.pending.drain(index..index + QUERY.len());
+            self.answered = true;
+            return (std::mem::take(&mut self.pending), true);
+        }
+        let keep = (1..QUERY.len())
+            .rev()
+            .find(|&length| self.pending.ends_with(&QUERY[..length]))
+            .unwrap_or(0);
+        let length = self.pending.len() - keep;
+        (self.pending.drain(..length).collect(), false)
+    }
+    fn finish(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.pending)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conpty_initial_query_is_answered_once_across_every_read_boundary() {
+        let input = b"before\x1b[6nafter";
+        for split in 0..=input.len() {
+            let mut bootstrap = ConptyCursorBootstrap::default();
+            let (mut output, first) = bootstrap.process(&input[..split]);
+            let (rest, second) = bootstrap.process(&input[split..]);
+            output.extend(rest);
+            output.extend(bootstrap.finish());
+            assert_eq!(output, b"beforeafter");
+            assert_eq!(usize::from(first) + usize::from(second), 1);
+            assert_eq!(bootstrap.process(b"\x1b[6n"), (b"\x1b[6n".to_vec(), false));
+        }
+    }
+    #[test]
+    fn conpty_bootstrap_preserves_other_bytes_and_incomplete_sequences() {
+        let mut bootstrap = ConptyCursorBootstrap::default();
+        let (mut output, reply) = bootstrap.process(b"normal\x1b[?25h\x1b[");
+        assert!(!reply);
+        output.extend(bootstrap.finish());
+        assert_eq!(output, b"normal\x1b[?25h\x1b[");
+    }
 
     #[tokio::test]
     async fn test_pty_spawn_and_output() {

@@ -179,6 +179,6 @@ pub fn windows_gemini_launch(
     .ok_or(GeminiLaunchError::MissingNode)?;
     Ok(Some(GeminiWindowsLaunch {
         command: node,
-        args: vec![entry.to_string_lossy().into_owned()],
+        args: vec![dunce::simplified(&entry).to_string_lossy().into_owned()],
     }))
 }
