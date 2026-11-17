@@ -209,6 +209,20 @@ impl PtyManager {
             .map_err(|e| PtyError::PtyAllocation(e.to_string()))?;
 
         let mut cmd = CommandBuilder::new(&command);
+        #[cfg(windows)]
+        {
+            let dirs: Vec<_> =
+                std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+            if let Some(launch) = crate::agent_discovery::windows_gemini_launch(&command, &dirs)
+                .map_err(|details| PtyError::SpawnFailed {
+                    command: command.clone(),
+                    details: details.to_string(),
+                })?
+            {
+                cmd = CommandBuilder::new(launch.command);
+                cmd.args(launch.args);
+            }
+        }
         cmd.args(&args);
         if let Some(ref dir) = cwd {
             cmd.cwd(dir);

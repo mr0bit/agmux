@@ -53,3 +53,11 @@ The repository uses pinned Groma tooling alongside `.soul`. From the root, run
 `npm ci`, `npm run arch:setup`, then `npm run arch:view` to open the local map.
 See [setup, coverage and architecture rules](docs/archi/groma.md). The checked-in
 map is an initial scan; the module registry remains authoritative.
+
+## Gemini CLI
+
+Gemini is a built-in provider. Install Node.js 20+ and run
+`npm install -g @google/gemini-cli`, then choose **New session → Gemini CLI**.
+Sign in using Gemini's prompts in **Terminal**. An optional Model field passes
+`--model`; leaving it blank uses the CLI default. See the
+[provider guide](crates/agmux-cli/src/companion_gui/ui/README.md#gemini-cli-provider).

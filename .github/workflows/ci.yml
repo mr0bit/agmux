@@ -141,6 +141,10 @@ jobs:
           cd ../../..
           sha256sum ${{ matrix.platform.archive_name }} > ${{ matrix.platform.archive_name }}.sha256
 
+      - name: Install official Gemini CLI for Windows provider verification
+        if: runner.os == 'Windows'
+        run: npm install --global @google/gemini-cli@0.68.0
+
       - name: Verify standalone Windows application
         if: runner.os == 'Windows'
         shell: pwsh
@@ -150,6 +154,7 @@ jobs:
           New-Item -ItemType Directory $root | Out-Null
           Copy-Item "target/${{ matrix.platform.target }}/release/agmux.exe", "target/${{ matrix.platform.target }}/release/agmuxd.exe" $root
           $env:AGMUX_GUI_NO_OPEN = '1'
+          $env:GEMINI_CLI_HOME = Join-Path $root 'gemini-home'
           $env:AGMUX_SOCK = Join-Path $root 'socket'
           $env:AGMUX_AUTH_TOKEN_PATH = Join-Path $root 'token'
           $env:AGMUX_DB_PATH = Join-Path $root 'state.db'
@@ -175,6 +180,19 @@ jobs:
               $response = Invoke-WebRequest ($url.TrimEnd('/') + $asset.Groups[1].Value)
               if ($response.StatusCode -ne 200) { throw 'Embedded asset failed to load' }
             }
+            $info = Invoke-RestMethod ($url + 'api/info') -Headers $headers
+            if (!($info.agents | Where-Object { $_.id -eq 'gemini' -and $_.available })) { throw 'Gemini npm CLI was not discovered' }
+            $headers['Origin'] = $url.TrimEnd('/')
+            $body = @{ agent = 'gemini'; args = @('--version', '--model', 'gemini-2.5-pro'); cwd = $root; title = 'Gemini verification' } | ConvertTo-Json
+            $session = Invoke-RestMethod ($url + 'api/spawn') -Method Post -Headers $headers -ContentType 'application/json' -Body $body
+            $verified = $false
+            for ($attempt = 0; $attempt -lt 100; $attempt++) {
+              $snapshot = Invoke-RestMethod ($url + 'api/snapshot?session_id=' + $session.session_id) -Headers $headers
+              if ($snapshot.screen -match '0[.]68[.]0') { $verified = $true; break }
+              Start-Sleep -Milliseconds 200
+            }
+            if (!$verified) { throw 'Real Gemini CLI did not run in the Windows PTY' }
+            Write-Output 'Gemini CLI npm provider ran inside the real Windows PTY without credentials.'
             Write-Output 'Standalone agmux.exe launched its embedded live UI and connected to agmuxd.exe.'
           } finally {
             Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
