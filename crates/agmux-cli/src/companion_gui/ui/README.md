@@ -89,3 +89,28 @@ behavior are documented in source and covered by state/design tests.
 
 Read [the integration design](../../../docs/companion_ui_lld.md) for authenticated
 transport details, scope boundaries and current limitations.
+
+## Gemini CLI provider
+
+Install Node.js 20+ and the official CLI on the machine running Agmux:
+
+```sh
+npm install -g @google/gemini-cli
+gemini --version
+```
+
+Open **New session → Gemini CLI**. Choose a project directory and optionally a
+model, then start the session. Complete Gemini's own sign-in and permission
+prompts in **Terminal**. Leave Model blank to keep the CLI's configured default.
+The Arguments JSON field accepts native options such as `["--resume", "latest"]`;
+set model in only one field. Refresh installed agents after installation, or
+restart Agmux if the installation changed PATH. The Windows npm installation is
+launched through Node; no `.cmd` shell quoting is involved.
+
+Credential-free provider verification (with the official CLI on PATH):
+
+```sh
+AGMUX_GEMINI_TEST=1 npm run test:live
+```
+
+The provider test probes CLI version `0.68.0`, not an authenticated AI response.

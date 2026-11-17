@@ -268,3 +268,31 @@ test.describe.serial("actual Rust daemon integration", () => {
     expect(files.status).toBe(200);
   });
 });
+
+test("Gemini CLI provider setup and real installed CLI launch", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New session", exact: true }).click();
+  await page.getByLabel("Agent", { exact: true }).selectOption("gemini");
+  await expect(page.getByLabel("Gemini model")).toBeVisible();
+  await expect(page.getByText("Gemini CLI runs locally.", { exact: false })).toBeVisible();
+  const info = await request<{ value: { agents: { id: string; available: boolean }[] } }>(page, "/api/info");
+  if (!info.value.agents.find((agent) => agent.id === "gemini")?.available) {
+    await expect(page.getByRole("button", { name: "Start session", exact: true })).toBeDisabled();
+    await expect(page.getByText("npm install -g @google/gemini-cli", { exact: true })).toBeVisible();
+    return;
+  }
+  // Real provider verification is opt-in; never consume account credentials or API quota.
+  test.skip(process.env.AGMUX_GEMINI_TEST !== "1", "Set AGMUX_GEMINI_TEST=1 with the official CLI on PATH");
+  await page.getByLabel("Session name").fill("Gemini CLI verification");
+  await page.getByLabel("Gemini model").fill("gemini-2.5-pro");
+  await page.getByLabel("Arguments (JSON array)").fill('["--version", "--model=other"]');
+  await page.getByRole("button", { name: "Start session", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "New session" }).getByText("Set the Gemini model in either Model or Arguments, not both.", { exact: true })).toBeVisible();
+  await page.getByLabel("Arguments (JSON array)").fill('["--version"]');
+  await page.getByRole("button", { name: "Start session", exact: true }).click();
+  await expect(page.locator("h1")).toHaveText("Gemini CLI verification");
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  await expect(page.getByLabel("Live session output")).toContainText("0.68.0");
+  await expect(page.locator(".live-chat-header")).toContainText("Gemini");
+  await page.screenshot({ path: path.resolve("../../../../../docs/assets/screenshots/gemini_provider_verification.png"), fullPage: true });
+});

@@ -152,7 +152,8 @@ export default function LiveApp({ token }: { token: string }) {
     [newTitle, setNewTitle] = useState(""),
     [cwd, setCwd] = useState(""),
     [custom, setCustom] = useState(""),
-    [args, setArgs] = useState("[]");
+    [args, setArgs] = useState("[]"),
+    [geminiModel, setGeminiModel] = useState("");
   const [directory, setDirectory] = useState(""),
     [entries, setEntries] = useState<Entry[]>([]),
     [editor, setEditor] = useState<OpenFile | null>(null),
@@ -465,6 +466,11 @@ export default function LiveApp({ token }: { token: string }) {
           !parsed.every((value) => typeof value === "string")
         )
           throw new Error("Arguments must be a JSON array of strings.");
+        if (newAgent === "gemini" && geminiModel.trim()) {
+          if (parsed.some((arg) => arg === "-m" || arg === "--model" || arg.startsWith("--model=")))
+            throw new Error("Set the Gemini model in either Model or Arguments, not both.");
+          parsed.push("--model", geminiModel.trim());
+        }
         const value = await backend.request<{ session_id: string }>(
           "/api/spawn",
           {
@@ -1287,7 +1293,7 @@ export default function LiveApp({ token }: { token: string }) {
                           <option
                             key={agent.id}
                             value={agent.id}
-                            disabled={!agent.available}
+                            disabled={!agent.available && agent.id !== "gemini"}
                           >
                             {agent.name}
                             {agent.available ? "" : " · not installed"}
@@ -1296,6 +1302,19 @@ export default function LiveApp({ token }: { token: string }) {
                         <option value="custom">Custom executable</option>
                       </select>
                     </label>
+                    {newAgent === "gemini" && (
+                      <div className="gemini-provider-setup">
+                        <p className="live-hint">Gemini CLI runs locally. Sign in and answer permission prompts in Terminal.</p>
+                        {!info?.agents.find((agent) => agent.id === "gemini")?.available && (
+                          <p role="status">Install Node.js 20+ and run <code>npm install -g @google/gemini-cli</code>, then restart Agmux if PATH changed.</p>
+                        )}
+                        <button type="button" className="live-action" onClick={() => void act(async () => setInfo(await backend.request<MachineInfo>("/api/info")))}>Refresh installed agents</button>
+                        <label>Model (optional)
+                          <input aria-label="Gemini model" value={geminiModel} onChange={(event) => setGeminiModel(event.target.value)} placeholder="Use Gemini CLI's configured default" />
+                        </label>
+                        <p className="live-hint">Leave Model blank to use your CLI settings. Use Arguments for options such as --resume. No API key is stored in this UI.</p>
+                      </div>
+                    )}
                     {newAgent === "custom" && (
                       <label>
                         Executable
@@ -1325,7 +1344,7 @@ export default function LiveApp({ token }: { token: string }) {
                       </button>
                       <button
                         className="primary-button"
-                        disabled={busy || !connected || !info}
+                        disabled={busy || !connected || !info || (newAgent !== "custom" && !info?.agents.find((agent) => agent.id === newAgent)?.available)}
                       >
                         {busy ? "Starting…" : "Start session"}
                         <ArrowRight size={14} />
