@@ -38,3 +38,18 @@ When working as a delegated implementer (`codex-delegate` or `agy-delegate`):
 3. **Run Gates Before Finishing:** Always verify `cargo check`, `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`, and run `node .soul/tools/v-cycle-checker.mjs` before concluding.
 4. **Capture User's POV Visual Proofs:** For every user-facing task (CLI, TUI, GUI, notifications), capture and save visual proof representing the end user's point-of-view in `docs/assets/screenshots/<task>_verification.png`. Raw `cargo test` console logs do not substitute for user POV visual evidence.
 5. **Report Concisely:** Summarize modified files, verification test results, user POV visual proofs, and spec status updates in your final report.
+
+<!-- groma:start -->
+## Groma
+
+This project uses Groma. Before you scan, inspect, or curate architecture, or change files for a Backlog task, run `groma agent-instructions` and read the guide it names for that job. When it reports a first scan, ask the user whether they want you to curate the architecture. Do not edit Groma-owned architecture files directly.
+<!-- groma:end -->
+
+## Repository architecture tooling
+
+Read [the Groma setup and workflow](docs/archi/groma.md) alongside the
+[portable live-map process](.soul/architecture/live-architecture.md).
+From the root, use `npm ci && npm run arch:setup`, then `npm run arch:scan`.
+Use `npm exec -- groma agent-instructions` with the repository-local installation.
+The module registry and specifications remain authoritative; the initial map is
+scanner evidence and has not yet been curated into an approved C4 model.

@@ -45,6 +45,16 @@ jobs:
         working-directory: crates/agmux-cli/src/companion_gui/ui
         run: npm ci && npm run build && npm run test:state
 
+      - name: Restore architecture tooling
+        run: npm ci && npm run arch:setup
+
+      - name: Verify architecture map
+        run: |
+          npm run arch:check
+          npm run arch:scan
+          git diff --exit-code -- groma
+          test -z "$(git ls-files --others --exclude-standard -- groma)"
+
       - name: Run .soul V-Cycle Traceability Check
         run: node .soul/tools/v-cycle-checker.mjs
 

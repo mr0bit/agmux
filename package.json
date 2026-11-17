@@ -1,0 +1,17 @@
+{
+  "name": "agmux-architecture",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Repository architecture tooling; not part of the shipped application",
+  "scripts": {
+    "arch:setup": "groma plugin install",
+    "arch:check": "groma scanner check",
+    "arch:scan": "groma scan",
+    "arch:view": "groma web",
+    "arch:summary": "groma view --plain",
+    "arch:lint": "groma lint"
+  },
+  "devDependencies": {
+    "groma.md": "0.7.8"
+  }
+}

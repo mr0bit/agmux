@@ -167,3 +167,10 @@ crates/
 | `REQ-GUI-DESKTOP-APP-005` | Desktop companion GUI with SSE streaming and Monaco split panels | `crates/agmux-cli::companion_gui` |
 
 The CLI build script (`crates/agmux-cli/build.rs`) packages `companion_gui` UI assets into the executable; it adds no runtime module or daemon dependency.
+
+## Architecture evidence tooling
+
+The root `package.json` / lockfile pin Groma as development tooling.
+`groma/config.json` scopes and pins scanners; `groma/` contains their architecture
+Markdown records. This is a visualization of the registered modules, not a new
+runtime module or a replacement ownership registry. See [Groma workflow](groma.md).
