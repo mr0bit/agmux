@@ -45,6 +45,7 @@ const env = {
   AGMUX_DB_PATH: path.join(root, "database"),
   AGMUX_CONFIG_PATH: path.join(root, "config"),
   AGMUX_GUI_NO_OPEN: "1",
+  GEMINI_CLI_HOME: path.join(root, "gemini-home"),
   AGMUX_GUI_PORT: process.env.AGMUX_TEST_PORT || "5174",
 };
 // Verify the packaged contract with only the two executables, without UI files.

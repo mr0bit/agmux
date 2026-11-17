@@ -56,7 +56,7 @@ map is an initial scan; the module registry remains authoritative.
 
 ## Windows startup troubleshooting
 
-If v0.1.0 reports `Daemon process exited prematurely ... exit code: 1`, the default
+If an earlier v0.1.0 download reports `Daemon process exited prematurely ... exit code: 1`, the default
 named-pipe lock path has a known bug. In PowerShell, use a regular lock file:
 
 ```powershell
@@ -70,3 +70,11 @@ data directory and includes backend stderr plus a startup-log path on failure.
 For a different failure, `agmux doctor` or running `.\agmuxd.exe` directly from
 the extracted folder can reveal the underlying diagnostic. Do not post token-file
 contents when reporting an issue.
+
+## Gemini CLI
+
+Gemini is a built-in provider. Install Node.js 20+ and run
+`npm install -g @google/gemini-cli`, then choose **New session → Gemini CLI**.
+Sign in using Gemini's prompts in **Terminal**. An optional Model field passes
+`--model`; leaving it blank uses the CLI default. See the
+[provider guide](crates/agmux-cli/src/companion_gui/ui/README.md#gemini-cli-provider).
