@@ -48,7 +48,10 @@ fn discovers_npm_shim_and_launches_official_entry_without_a_command_shell() {
     let launch = windows_gemini_launch("gemini", &dirs).unwrap().unwrap();
     assert_eq!(launch.command, installation.0.join("node.exe"));
     #[cfg(windows)]
-    assert!(!launch.args[0].starts_with(r"\\?\"), "Node must receive an ordinary Windows entry path");
+    assert!(
+        !launch.args[0].starts_with(r"\\?\"),
+        "Node must receive an ordinary Windows entry path"
+    );
     let entry = installation
         .0
         .join("node_modules/@google/gemini-cli/bundle/gemini.js")
