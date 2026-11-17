@@ -30,3 +30,23 @@ with model arguments in a PTY and verifies displayed output. Windows release CI
 installs that package and repeats the version probe through the actual browser
 API and ConPTY. These probes use isolated `GEMINI_CLI_HOME`, require no login, and
 do not claim that authenticated Gemini model responses have been tested.
+
+## Native Windows release follow-up
+
+The combined native probe exposed two additional platform constraints. Canonical
+Win32 paths may carry a verbatim `\\?\` prefix that Node's entry-point loader
+rejects with `EISDIR`. Validate canonical package containment first, then use
+`dunce::simplified` for the executable entry argument and process working directory.
+This preserves the package-boundary check without passing the incompatible prefix
+to Node.
+
+`portable-pty` requests ConPTY cursor inheritance. A fresh host sends `ESC[6n` and
+may wait for its response even before a browser subscribes. `pty_manager` consumes
+only that initial request and replies `ESC[1;1R` for its fresh empty screen. A
+bounded-prefix parser handles split reads; the bootstrap request is not forwarded
+to a later terminal client, avoiding a duplicate response. Later application
+queries and all other bytes continue unchanged. Pending non-query bytes flush at
+EOF. The same input-writer mutex is shared by the bootstrap and normal input.
+Unit tests verify every request split boundary, exactly one reply and unrelated
+byte preservation. The release's real Gemini version probe exercises this path
+without a terminal client and must succeed before assets are published.
