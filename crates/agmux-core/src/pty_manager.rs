@@ -100,6 +100,26 @@ impl ActivePtySession {
         Ok(())
     }
 
+    /// Submit a prompt as keyboard Enter (CR), consistently on Unix and ConPTY.
+    /// Raw terminal bytes continue to use `send_input` unchanged.
+    pub fn submit_prompt(&self, message: &str) -> Result<(), PtyError> {
+        let bracketed = self
+            .screen_buffer
+            .lock()
+            .map_err(|e| PtyError::InputWrite(std::io::Error::other(e.to_string())))?
+            .bracketed_paste();
+        let mut input = Vec::with_capacity(message.len() + 13);
+        if bracketed {
+            input.extend_from_slice(b"\x1b[200~");
+        }
+        input.extend_from_slice(message.as_bytes());
+        if bracketed {
+            input.extend_from_slice(b"\x1b[201~");
+        }
+        input.push(b'\r');
+        self.send_input(&input)
+    }
+
     /// Subscribe to real-time output stream of this session.
     pub fn subscribe_output(&self) -> broadcast::Receiver<Vec<u8>> {
         self.initial_output

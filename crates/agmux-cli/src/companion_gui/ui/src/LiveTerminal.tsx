@@ -24,7 +24,7 @@ export default function LiveTerminal({
     const term = new Terminal({
       cursorBlink: !matchMedia("(prefers-reduced-motion: reduce)").matches,
       fontSize: 13,
-      lineHeight: 1.45,
+      lineHeight: 1,
       fontFamily: "SFMono-Regular, Consolas, monospace",
       scrollback: 10000,
       theme: light
@@ -58,7 +58,13 @@ export default function LiveTerminal({
           }),
         );
     };
-    const observer = new ResizeObserver(resize);
+    // Font loading and browser zoom/DPI changes can change cell metrics without
+    // changing the container's CSS size. Refit at each of those boundaries.
+    const refit = () => { if (!disposed) resize(); };
+    void document.fonts.ready.then(refit);
+    document.fonts.addEventListener("loadingdone", refit);
+    window.addEventListener("resize", refit);
+    const observer = new ResizeObserver(refit);
     observer.observe(host.current!);
     const input = term.onData((data) => {
       if (socket?.readyState === WebSocket.OPEN)
@@ -116,6 +122,8 @@ export default function LiveTerminal({
       clearTimeout(retry);
       socket?.close();
       observer.disconnect();
+      window.removeEventListener("resize", refit);
+      document.fonts.removeEventListener("loadingdone", refit);
       input.dispose();
       term.dispose();
     };

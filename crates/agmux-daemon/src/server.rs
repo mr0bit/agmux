@@ -469,6 +469,88 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
             message
         };
         match message {
+            IpcMessage::CompanionRequest(agmux_proto::CompanionRequest::Chat {
+                session_id,
+                operation,
+                payload,
+            }) => {
+                let session = {
+                    let db = storage.lock().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                    db.get_session(&session_id)?
+                };
+                let result = if let Some(session) = session {
+                    if session.command.split_whitespace().next().is_some_and(|c| {
+                        c.replace('\\', "/")
+                            .rsplit('/')
+                            .next()
+                            .is_some_and(|n| matches!(n, "gemini" | "gemini.exe" | "gemini.cmd"))
+                    }) {
+                        crate::gemini_chat::request(
+                            &session_id,
+                            std::path::Path::new(&session.cwd),
+                            &operation,
+                            &payload,
+                        )
+                        .await
+                    } else {
+                        Err(anyhow::anyhow!(
+                            "Structured chat is available for Gemini sessions"
+                        ))
+                    }
+                } else {
+                    Err(anyhow::anyhow!("Session not found"))
+                };
+                let (content, error) = match result {
+                    Ok(v) => (Some(v), None),
+                    Err(e) => (None, Some(e.to_string())),
+                };
+                out_tx
+                    .send(IpcMessage::CompanionResponse(
+                        agmux_proto::CompanionResponse {
+                            notifications: vec![],
+                            selected_panel: None,
+                            panels: vec![],
+                            selected: None,
+                            content,
+                            error,
+                        },
+                    ))
+                    .await?;
+            }
+            IpcMessage::CompanionRequest(agmux_proto::CompanionRequest::ChatStates) => {
+                let content = Some(crate::gemini_chat::statuses().await);
+                out_tx
+                    .send(IpcMessage::CompanionResponse(
+                        agmux_proto::CompanionResponse {
+                            notifications: vec![],
+                            selected_panel: None,
+                            panels: vec![],
+                            selected: None,
+                            content,
+                            error: None,
+                        },
+                    ))
+                    .await?;
+            }
+            IpcMessage::CompanionRequest(agmux_proto::CompanionRequest::Models { cwd }) => {
+                let result = crate::gemini_chat::models(std::path::Path::new(&cwd)).await;
+                let (content, error) = match result {
+                    Ok(v) => (Some(v), None),
+                    Err(e) => (None, Some(e.to_string())),
+                };
+                out_tx
+                    .send(IpcMessage::CompanionResponse(
+                        agmux_proto::CompanionResponse {
+                            notifications: vec![],
+                            selected_panel: None,
+                            panels: vec![],
+                            selected: None,
+                            content,
+                            error,
+                        },
+                    ))
+                    .await?;
+            }
             IpcMessage::CompanionRequest(agmux_proto::CompanionRequest::Reply {
                 session_id,
                 message,
@@ -477,10 +559,7 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                     Some("Reply too large".to_owned())
                 } else {
                     match pty_manager.get_session(&session_id).await {
-                        Ok(session) => session
-                            .send_input(format!("{message}\n").as_bytes())
-                            .err()
-                            .map(|e| e.to_string()),
+                        Ok(session) => session.submit_prompt(&message).err().map(|e| e.to_string()),
                         Err(e) => Some(e.to_string()),
                     }
                 };
@@ -606,8 +685,13 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                                     }
                                 }
                             }
-                            R::List => {}
-                            R::Reply { .. } => unreachable!(),
+                            R::List => {
+                                response.content =
+                                    Some(agmux_proto::COMPANION_ACP_CAPABILITY.into());
+                            }
+                            R::Reply { .. } | R::Chat { .. } | R::Models { .. } | R::ChatStates => {
+                                unreachable!()
+                            }
                         }
                         response.notifications = db.companion_notifications()?;
                         response.panels = db.companion_panels()?;
@@ -1189,9 +1273,7 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                     let round = db.next_review_round(&sid).map_err(|e| e.to_string())?;
                     let prompt =
                         agmux_core::prompt_flattener::flatten_review_comments(round, &comments);
-                    session
-                        .send_input(format!("{prompt}\n").as_bytes())
-                        .map_err(|e| e.to_string())?;
+                    session.submit_prompt(&prompt).map_err(|e| e.to_string())?;
                     let ids: Vec<_> = comments.iter().map(|c| c.id.clone()).collect();
                     let old = db
                         .complete_review_round(&sid, round, &ids)
@@ -1820,7 +1902,7 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                             return Err("Session is not active".into());
                         }
                         session
-                            .send_input(format!("{}\n", req.message).as_bytes())
+                            .submit_prompt(&req.message)
                             .map_err(|e| e.to_string())?;
                         Ok(false)
                     }
@@ -1870,6 +1952,7 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                 }
             }
             IpcMessage::FreezeSessionRequest(req) => {
+                crate::gemini_chat::close(&req.session_id).await;
                 let session_opt = pty_manager.remove_session(&req.session_id).await;
                 let (success, compressed_size) = if let Some(session) = session_opt {
                     session.kill();
@@ -1955,9 +2038,7 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                     if let Some(session) = active.filter(|s| s.subscribe_exit().borrow().is_none())
                     {
                         for (id, message) in db.pending_messages(&sid).map_err(|e| e.to_string())? {
-                            session
-                                .send_input(format!("{message}\n").as_bytes())
-                                .map_err(|e| e.to_string())?;
+                            session.submit_prompt(&message).map_err(|e| e.to_string())?;
                             db.mark_message_delivered(id).map_err(|e| e.to_string())?;
                         }
                     }
@@ -2439,7 +2520,7 @@ async fn publish_transition(
                     .await
                     {
                         for (_id, msg) in msgs {
-                            let _ = active_session.send_input(format!("{msg}\n").as_bytes());
+                            let _ = active_session.submit_prompt(&msg);
                         }
                     }
                 }

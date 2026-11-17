@@ -6,6 +6,8 @@ use std::{path::Path, process::Command};
 pub enum DiffError {
     #[error("Git I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("This project is not a Git repository")]
+    NotRepository,
     #[error("Git failed: {0}")]
     Git(String),
     #[error("Session has no initial Git commit")]
@@ -21,6 +23,22 @@ pub fn calculate_diff(
     baseline: Option<&str>,
     target: Option<&str>,
 ) -> Result<Vec<FileDiff>, DiffError> {
+    // Probe separately: `git diff` outside a repository prints pages of usage.
+    let probe = Command::new("git")
+        .env("LC_ALL", "C")
+        .current_dir(cwd)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()?;
+    if !probe.status.success() {
+        let detail = String::from_utf8_lossy(&probe.stderr);
+        if detail.contains("not a git repository") {
+            return Err(DiffError::NotRepository);
+        }
+        return Err(DiffError::Git(detail.trim().to_owned()));
+    }
+    if probe.stdout != b"true\n" && probe.stdout != b"true\r\n" {
+        return Err(DiffError::NotRepository);
+    }
     let mut command = Command::new("git");
     command.current_dir(cwd).args([
         "-c",

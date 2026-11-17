@@ -176,3 +176,14 @@ Markdown records. This is a visualization of the registered modules, not a new
 runtime module or a replacement ownership registry. See [Groma workflow](groma.md).
 
 Daemon startup diagnostics are owned by the existing CLI `daemon_spawner` module ([LLD](../../crates/agmux-cli/docs/daemon_spawner_lld.md)); named-pipe lock placement remains owned by daemon `instance_lock`.
+
+## Issue #17 conversation ownership
+
+`crates/agmux-daemon::gemini_chat` owns the approved S4/S6 Gemini ACP subprocess,
+authoritative structured messages, model discovery and turn/permission state.
+It communicates through typed companion IPC; the browser never receives provider
+credentials. `companion_gui` renders those messages and retains Terminal as the
+separate native CLI view. This module is introduced for the user-approved slices,
+not a new ownership registry.
+
+`crates/agmux-daemon::server` owns authenticated IPC dispatch and native prompt submission.

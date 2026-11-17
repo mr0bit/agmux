@@ -37,6 +37,7 @@ import type { DiffLine } from "./diff-model";
 import { Diff } from "./CodeViews";
 import AgentIcon from "./AgentAvatar";
 import Composer from "./Composer";
+import GeminiChat from "./GeminiChat";
 import EmptyState from "./EmptyState";
 import { AnimatedCheck, AnimatedOverlay, Selection } from "./MotionUI";
 import { motionTiming } from "./motion-spec";
@@ -73,6 +74,8 @@ export function normalizeSession(
         codex: "Codex",
         opencode: "OpenCode",
         gemini: "Gemini",
+        "gemini.exe": "Gemini",
+        "gemini.cmd": "Gemini",
         "cursor-agent": "Cursor",
         sh: "Shell",
         bash: "Shell",
@@ -154,11 +157,27 @@ export default function LiveApp({ token }: { token: string }) {
     [custom, setCustom] = useState(""),
     [args, setArgs] = useState("[]"),
     [geminiModel, setGeminiModel] = useState("");
+  const [models, setModels] = useState<{availableModels: {modelId: string; name: string}[]; currentModelId: string} | null>(null);
+  const [modelsError, setModelsError] = useState(""), [modelsLoading, setModelsLoading] = useState(false), [modelRetry, setModelRetry] = useState(0);
+  useEffect(() => {
+    let cancelled=false;
+    setModels(null); setModelsError(""); setGeminiModel(""); setModelsLoading(false);
+    if (modal !== "new" || newAgent !== "gemini" || !cwd || !info?.agents.find(a => a.id === "gemini")?.available) return;
+    const timer=window.setTimeout(async () => {
+      setModelsLoading(true);
+      try {const value=await backend.request<{availableModels: {modelId: string; name: string}[]; currentModelId: string} | null>("/api/models", {cwd}); if (!cancelled) {setModels(value); if (!value?.availableModels?.length) setModelsError("This CLI did not advertise a model inventory. Its configured default is available.");}}
+      catch(e) {if (!cancelled) setModelsError(`Model discovery unavailable: ${e instanceof Error ? e.message : String(e)}. Sign in through the CLI and retry, or use its configured default.`);}
+      finally {if (!cancelled) setModelsLoading(false);}
+    }, 500);
+    return () => {cancelled=true; clearTimeout(timer);};
+  }, [modal, newAgent, cwd, info, backend, modelRetry]);
   const [directory, setDirectory] = useState(""),
     [entries, setEntries] = useState<Entry[]>([]),
     [editor, setEditor] = useState<OpenFile | null>(null),
     [filesLoading, setFilesLoading] = useState(false);
   const [diffs, setDiffs] = useState<NativeDiff[]>([]),
+    [diffError, setDiffError] = useState(""),
+    [isRepository, setIsRepository] = useState(true),
     [diffScope, setDiffScope] = useState("FullUncommitted"),
     [diffLayout, setDiffLayout] = useState<"unified" | "split">("unified"),
     [diffLoading, setDiffLoading] = useState(false);
@@ -167,14 +186,23 @@ export default function LiveApp({ token }: { token: string }) {
   const chooseSequence = useRef(0),
     output = useRef<HTMLPreElement>(null),
     follow = useRef(true),
-    fileSequence = useRef(0);
+    fileSequence = useRef(0),
+    diffSequence = useRef(0);
   const [readingBack, setReadingBack] = useState(false);
+  const [chatStatuses, setChatStatuses] = useState<Record<string,string>>({});
+  useEffect(() => {if(snapshot?.chat_states) setChatStatuses(snapshot.chat_states);}, [snapshot?.chat_states]);
   const sessions = useMemo(
     () =>
-      (snapshot?.sessions || []).map((item) =>
-        normalizeSession(item, snapshot?.metadata[item.session_id]),
-      ),
-    [snapshot?.sessions, snapshot?.metadata],
+      (snapshot?.sessions || []).map((item) => {
+        const session=normalizeSession(item, snapshot?.metadata[item.session_id]);
+        if (session.agent === "Gemini" && session.state !== "stopped") {
+          const status=chatStatuses[session.id] || "idle";
+          session.state=status === "working" || status === "cancelling" ? "working" : status === "permission" || status === "failed" ? "attention" : "idle";
+          session.time=status;
+        }
+        return session;
+      }),
+    [snapshot?.sessions, snapshot?.metadata, chatStatuses],
   );
   const session =
     sessions.find((item) => item.id === selected) ||
@@ -376,18 +404,23 @@ export default function LiveApp({ token }: { token: string }) {
   };
   const loadDiff = async () => {
     if (!session) return;
+    const sequence=++diffSequence.current;
     setDiffLoading(true);
     try {
-      const value = await backend.request<{ files: NativeDiff[] }>(
+      const value = await backend.request<{ files: NativeDiff[]; repository: boolean }>(
         "/api/diff",
         { session_id: session.id, scope: diffScope },
       );
+      if(sequence!==diffSequence.current) return;
       setDiffs(value.files);
+      setIsRepository(value.repository);
+      setDiffError("");
     } catch (failure) {
-      showError(failure);
+      if(sequence!==diffSequence.current) return;
+      setDiffError(failure instanceof Error ? failure.message : String(failure));
       setDiffs([]);
     } finally {
-      setDiffLoading(false);
+      if(sequence===diffSequence.current) setDiffLoading(false);
     }
   };
   useEffect(() => {
@@ -484,7 +517,7 @@ export default function LiveApp({ token }: { token: string }) {
         setSelected(value.session_id);
         setDirectory("");
         setEditor(null);
-        setTab("Terminal");
+        setTab(newAgent === "gemini" ? "Chat" : "Terminal");
         setModal(null);
         setNewTitle("");
         setNotice("Session started");
@@ -555,12 +588,13 @@ export default function LiveApp({ token }: { token: string }) {
           Loading changes…
         </p>
       )}
-      {!diffLoading && !diffs.length && (
+      {diffError && <details className="diff-error"><summary>Could not load changes</summary><pre>{diffError}</pre></details>}
+      {!diffLoading && !diffs.length && !diffError && (
         <EmptyState
           compact
           kind="completed"
-          title="No tracked changes"
-          description="There are no tracked changes for this comparison. Untracked files remain available in Files."
+          title={isRepository ? "No tracked changes" : "Not a Git repository"}
+          description={isRepository ? "There are no tracked changes for this comparison. Untracked files remain available in Files." : "Chat, Terminal and Files are available. To use Git review, open a project that has a Git repository."}
         />
       )}
       {diffs.map((file) => (
@@ -771,7 +805,7 @@ export default function LiveApp({ token }: { token: string }) {
           )}
           {error && (
             <div className="live-error" role="alert">
-              <span>{error}</span>
+              <div><span>{error.split("\n")[0].slice(0, 220)}</span>{error.length > 220 || error.includes("\n") ? <details><summary>Error details</summary><pre>{error}</pre></details> : null}</div>
               <button aria-label="Dismiss error" onClick={() => setError("")}>
                 <X size={14} />
               </button>
@@ -832,7 +866,8 @@ export default function LiveApp({ token }: { token: string }) {
                 />
               ) : (
                 <>
-                  {tab === "Chat" && (
+                  {tab === "Chat" && session.agent === "Gemini" && <GeminiChat key={session.id} backend={backend} sessionId={session.id} connected={connected && alive} onStatus={status => setChatStatuses(previous => previous[session.id] === status ? previous : {...previous, [session.id]: status})}/>}
+                  {tab === "Chat" && session.agent !== "Gemini" && (
                     <>
                       <div className="live-chat-header">
                         <AgentIcon agent={session.agent} />
@@ -1252,7 +1287,7 @@ export default function LiveApp({ token }: { token: string }) {
                     <X size={17} />
                   </button>
                 </div>
-                {error && <p className="live-error">{error}</p>}
+                {error && <div className="live-error" role="alert"><div><span>{error.split("\n")[0].slice(0,220)}</span><details><summary>Error details</summary><pre>{error}</pre></details></div></div>}
                 {modal === "new" && (
                   <form
                     onSubmit={(event) => {
@@ -1304,15 +1339,20 @@ export default function LiveApp({ token }: { token: string }) {
                     </label>
                     {newAgent === "gemini" && (
                       <div className="gemini-provider-setup">
-                        <p className="live-hint">Gemini CLI runs locally. Sign in and answer permission prompts in Terminal.</p>
+                        <p className="live-hint">Gemini runs locally. Sign in through the CLI; Chat displays tool approval requests in your conversation.</p>
                         {!info?.agents.find((agent) => agent.id === "gemini")?.available && (
                           <p role="status">Install Node.js 20+ and run <code>npm install -g @google/gemini-cli</code>, then restart Agmux if PATH changed.</p>
                         )}
                         <button type="button" className="live-action" onClick={() => void act(async () => setInfo(await backend.request<MachineInfo>("/api/info")))}>Refresh installed agents</button>
-                        <label>Model (optional)
-                          <input aria-label="Gemini model" value={geminiModel} onChange={(event) => setGeminiModel(event.target.value)} placeholder="Use Gemini CLI's configured default" />
+                        <label>Model
+                          <select aria-label="Gemini model" value={geminiModel} onChange={(event) => setGeminiModel(event.target.value)}>
+                            <option value="">CLI configured default{models?.currentModelId ? ` (${models.currentModelId})` : ""}</option>
+                            {models?.availableModels?.map(model => <option key={model.modelId} value={model.modelId}>{model.name || model.modelId}</option>)}
+                          </select>
                         </label>
-                        <p className="live-hint">Leave Model blank to use your CLI settings. Use Arguments for options such as --resume. No API key is stored in this UI.</p>
+                        {modelsLoading && <p className="live-hint" role="status">Discovering models from Gemini CLI…</p>}
+                        {modelsError && <details className="model-discovery-error"><summary>Using CLI configured default</summary><p>{modelsError}</p><button type="button" className="live-action" onClick={() => setModelRetry(n => n+1)}>Retry model discovery</button></details>}
+                        <p className="live-hint">Use the configured default or a model advertised by your CLI. Advanced settings accept options such as --resume for the native terminal. No API key is stored in this UI.</p>
                       </div>
                     )}
                     {newAgent === "custom" && (
@@ -1326,6 +1366,7 @@ export default function LiveApp({ token }: { token: string }) {
                         />
                       </label>
                     )}
+                    <details className="advanced-settings"><summary>Advanced settings</summary>
                     <label>
                       Arguments (JSON array)
                       <input
@@ -1334,6 +1375,7 @@ export default function LiveApp({ token }: { token: string }) {
                         placeholder={'["--flag"]'}
                       />
                     </label>
+                    </details>
                     <div className="modal-footer">
                       <button
                         type="button"

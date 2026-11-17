@@ -353,3 +353,31 @@
 .gemini-provider-setup { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; }
 .gemini-provider-setup .live-hint { margin: 0; }
 .gemini-provider-setup code { overflow-wrap: anywhere; }
+
+.live-error { max-height: 180px; overflow: auto; flex-shrink: 0; }
+.live-error > div { min-width: 0; overflow-wrap: anywhere; }
+.live-error pre, .diff-error pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 120px; overflow: auto; }
+.diff-error { padding: 14px; color: var(--danger); }
+
+.gemini-chat { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.gemini-chat > .live-hint { margin: 8px 24px; flex-shrink: 0; }
+.conversation-messages { flex: 1; overflow: auto; padding: 24px max(24px, calc((100% - 820px) / 2)); scroll-behavior: smooth; min-height: 80px; }
+.conversation-empty { text-align: center; margin: 12vh 0; color: var(--muted); }
+.conversation-empty h2 { color: var(--text); font-size: 22px; font-weight: 500; }
+.conversation-message { padding: 14px 18px; margin: 0 0 18px; border-radius: 14px; overflow-wrap: anywhere; }
+.conversation-message.user { background: var(--surface-2, rgba(128,128,128,.09)); margin-left: 32px; }
+.conversation-message > strong { font-size: 11px; color: var(--muted); }
+.conversation-message > div { white-space: pre-wrap; line-height: 1.7; font-size: 14px; margin-top: 8px; }
+.conversation-message.tool { border: 1px solid var(--line); font-size: 12px; }
+.conversation-message small, .conversation-progress { color: var(--muted); font-size: 12px; }
+.conversation-composer { margin: 12px 24px 20px; padding: 12px; border: 1px solid var(--line); border-radius: 16px; display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 10px; flex-shrink: 0; }
+.conversation-composer textarea { resize: vertical; min-height: 56px; max-height: 200px; border: 0; background: transparent; color: inherit; font: inherit; padding: 8px; }
+.conversation-composer small { grid-column: 1 / -1; color: var(--muted); font-size: 10px; }
+.conversation-permission, .conversation-error { margin: 8px 24px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; max-height: 180px; overflow: auto; flex-shrink: 0; }
+.conversation-permission > div { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.conversation-error { color: var(--danger); font-size: 12px; }
+.conversation-error pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.advanced-settings { padding: 12px 0; }
+.advanced-settings summary { cursor: pointer; color: var(--muted); }
+.advanced-settings label { display: grid; gap: 8px; margin-top: 12px; }
+@media (prefers-reduced-motion: reduce) { .conversation-messages { scroll-behavior: auto; } }

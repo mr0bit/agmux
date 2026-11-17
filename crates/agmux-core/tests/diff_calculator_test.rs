@@ -64,3 +64,14 @@ fn five_scopes_and_line_positions() {
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn non_git_directory_is_an_explicit_state_without_initializing_it() {
+    use agmux_core::diff_calculator::DiffError;
+    let dir = std::env::temp_dir().join(format!("agmux-nongit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let result = calculate_diff(&dir, DiffScope::FullUncommitted, None, None);
+    assert!(matches!(result, Err(DiffError::NotRepository)));
+    assert!(!dir.join(".git").exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}

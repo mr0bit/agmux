@@ -56,7 +56,7 @@ jobs:
           test -z "$(git ls-files --others --exclude-standard -- groma)"
 
       - name: Run .soul V-Cycle Traceability Check
-        run: node .soul/tools/v-cycle-checker.mjs
+        run: node .soul/tools/v-cycle-checker.mjs --strict
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -232,6 +232,26 @@ jobs:
           Compress-Archive -Path "target/${{ matrix.platform.target }}/release/agmux.exe", "target/${{ matrix.platform.target }}/release/agmuxd.exe" -DestinationPath $archive
           $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
           "$hash  $archive" | Out-File -Encoding ascii "$archive.sha256"
+
+      - name: Install Chromium for packaged companion regression
+        working-directory: crates/agmux-cli/src/companion_gui/ui
+        run: npx playwright install --with-deps chromium
+
+      - name: Exercise packaged UI and daemon with external ACP fixture
+        working-directory: crates/agmux-cli/src/companion_gui/ui
+        env:
+          AGMUX_TEST_BIN: ${{ github.workspace }}/target/${{ matrix.platform.target }}/release
+        run: npx playwright test -c playwright.qa17.config.ts
+
+      - name: Upload companion verification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: companion-qa-${{ matrix.platform.artifact_slug }}
+          path: |
+            docs/assets/screenshots/qa17_*_verification.png
+            crates/agmux-cli/src/companion_gui/ui/test-results
+          retention-days: 30
 
       - name: Upload Executable Artifacts
         uses: actions/upload-artifact@v7

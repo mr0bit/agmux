@@ -9,6 +9,7 @@ name = "agmuxd"
 path = "src/main.rs"
 
 [dependencies]
+dunce = "1"
 agmux-proto = { path = "../agmux-proto" }
 agmux-core = { path = "../agmux-core" }
 anyhow.workspace = true

@@ -64,6 +64,7 @@ dependencies = [
  "agmux-proto",
  "anyhow",
  "clap",
+ "dunce",
  "futures-util",
  "libc",
  "reqwest",

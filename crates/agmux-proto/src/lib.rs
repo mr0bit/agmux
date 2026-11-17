@@ -1,5 +1,8 @@
 //! Shared protocol definitions and framed transport for agmux IPC.
 
+/// Capability advertised in the existing Companion List response for safe UI upgrades.
+pub const COMPANION_ACP_CAPABILITY: &str = "companion-acp-v1";
+
 pub mod auth;
 pub mod ipc;
 pub mod messages;

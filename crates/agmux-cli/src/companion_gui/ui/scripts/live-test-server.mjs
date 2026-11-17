@@ -40,7 +40,7 @@ execFileSync(
 );
 const env = {
   ...process.env,
-  AGMUX_SOCK: path.join(root, "socket"),
+  AGMUX_SOCK: path.join(root, path.basename(root)+"-socket"),
   AGMUX_AUTH_TOKEN_PATH: path.join(root, "token"),
   AGMUX_DB_PATH: path.join(root, "database"),
   AGMUX_CONFIG_PATH: path.join(root, "config"),
@@ -48,13 +48,32 @@ const env = {
   GEMINI_CLI_HOME: path.join(root, "gemini-home"),
   AGMUX_GUI_PORT: process.env.AGMUX_TEST_PORT || "5174",
 };
+if (process.env.AGMUX_GEMINI_TEST === "1") {
+  // This suite deliberately verifies missing-auth behavior without account access.
+  for (const key of ["GEMINI_API_KEY","GOOGLE_API_KEY","GOOGLE_APPLICATION_CREDENTIALS","GOOGLE_GENAI_USE_VERTEXAI","GOOGLE_CLOUD_PROJECT"]) env[key]="";
+}
 // Verify the packaged contract with only the two executables, without UI files.
 const { copyFile } = await import("node:fs/promises");
 const bin = path.join(root, "bin");
 await mkdir(bin);
 const suffix = process.platform === "win32" ? ".exe" : "";
 for (const name of ["agmux", "agmuxd"]) {
-  await copyFile(path.join(repo, "target/debug", name + suffix), path.join(bin, name + suffix));
+  await copyFile(path.join(process.env.AGMUX_TEST_BIN || path.join(repo, "target/debug"), name + suffix), path.join(bin, name + suffix));
+}
+if (process.env.AGMUX_ACP_FIXTURE === "1") {
+  const { chmod } = await import("node:fs/promises");
+  const packageRoot=path.join(bin, "node_modules/@google/gemini-cli");
+  await mkdir(packageRoot, {recursive:true});
+  await copyFile(path.join(ui,"tests/fixtures/acp-provider.mjs"), path.join(packageRoot,"fixture.mjs"));
+  await writeFile(path.join(packageRoot,"package.json"), JSON.stringify({bin:{gemini:"fixture.mjs"}}));
+  if (process.platform === "win32") {
+    await copyFile(process.execPath,path.join(bin,"node.exe"));
+    await writeFile(path.join(bin,"gemini.cmd"), "@echo off\r\n");
+  } else {
+    await writeFile(path.join(bin,"gemini"), `#!${process.execPath}\nimport './node_modules/@google/gemini-cli/fixture.mjs';\n`);
+    await chmod(path.join(bin,"gemini"),0o755);
+  }
+  env.PATH=bin+path.delimiter+(env.PATH || "");
 }
 delete env.AGMUX_UI_DIST;
 const daemon = spawn(path.join(bin, "agmuxd" + suffix), [], {
@@ -79,7 +98,7 @@ process.on("SIGTERM", () => void stop());
 process.on("SIGINT", () => void stop());
 for (let attempt = 0; attempt < 300; attempt++) {
   try {
-    await access(env.AGMUX_SOCK);
+    await access(process.platform === "win32" ? env.AGMUX_AUTH_TOKEN_PATH : env.AGMUX_SOCK);
     break;
   } catch {
     if (daemon.exitCode !== null) throw Error("Daemon exited during startup");

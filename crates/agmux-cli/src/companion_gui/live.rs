@@ -80,6 +80,13 @@ pub async fn serve(socket: PathBuf, daemon_token: String) -> Result<()> {
         streams: Arc::new(Semaphore::new(32)),
         directory,
     });
+    // The existing List request is understood by older daemons. Check its
+    // capability before sending any new enum variant to an already-running one.
+    let capabilities = companion(&ctx, CompanionRequest::List).await?;
+    anyhow::ensure!(
+        capabilities.content.as_deref() == Some(agmux_proto::COMPANION_ACP_CAPABILITY),
+        "Agmux found an older background service still running. Close Agmux sessions, stop the old agmuxd process, and run agmux gui again with the updated agmux and agmuxd executables together. No sessions were stopped automatically."
+    );
     let router = Router::new()
         .route("/", get(index))
         .route("/api/snapshot", get(snapshot))
@@ -214,7 +221,16 @@ async fn index(State(ctx): State<Ctx>) -> Html<String> {
 }
 async fn rpc(ctx: &Bridge, request: IpcMessage) -> Result<IpcMessage> {
     tokio::time::timeout(
-        Duration::from_secs(10),
+        Duration::from_secs(
+            if matches!(
+                &request,
+                IpcMessage::CompanionRequest(CompanionRequest::Models { .. })
+            ) {
+                100
+            } else {
+                10
+            },
+        ),
         crate::ipc_client::review_request(&ctx.socket, &ctx.daemon_token, request),
     )
     .await
@@ -240,6 +256,13 @@ struct Selection {
 }
 async fn current_snapshot(ctx: &Bridge, selected: Option<&str>) -> Result<Value> {
     let panels = companion(ctx, CompanionRequest::List).await?;
+    let chat_states: Value = serde_json::from_str(
+        companion(ctx, CompanionRequest::ChatStates)
+            .await?
+            .content
+            .as_deref()
+            .unwrap_or("{}"),
+    )?;
     let workspace = match rpc(
         ctx,
         IpcMessage::WorkspaceRequest(agmux_proto::WorkspaceRequest::List),
@@ -264,7 +287,7 @@ async fn current_snapshot(ctx: &Bridge, selected: Option<&str>) -> Result<Value>
             )
         })
         .count();
-    let mut value = json!({"sessions":workspace.sessions,"metadata":workspace.metadata,"panels":panels.panels,"notifications":panels.notifications,"selected_panel":panels.selected_panel,"selected":panels.selected,"attention":attention,"screen":""});
+    let mut value = json!({"chat_states":chat_states,"sessions":workspace.sessions,"metadata":workspace.metadata,"panels":panels.panels,"notifications":panels.notifications,"selected_panel":panels.selected_panel,"selected":panels.selected,"attention":attention,"screen":""});
     let id = selected
         .map(str::to_owned)
         .or_else(|| value["selected"].as_str().map(str::to_owned))
@@ -327,7 +350,7 @@ fn machine_info() -> Value {
         0,
         json!({"id":"shell","name":"Shell","command":shell(),"available":true}),
     );
-    json!({"version":env!("CARGO_PKG_VERSION"),"machine":std::env::var("HOSTNAME").unwrap_or_else(|_|"Local machine".into()),"cwd":std::env::current_dir().ok(),"agents":agents,"capabilities":{"terminal":true,"files":true,"diff":true,"structured_chat":false,"permission_decisions":false,"agent_handoff":false}})
+    json!({"version":env!("CARGO_PKG_VERSION"),"machine":std::env::var("HOSTNAME").unwrap_or_else(|_|"Local machine".into()),"cwd":std::env::current_dir().ok(),"agents":agents,"capabilities":{"terminal":true,"files":true,"diff":true,"structured_chat":true,"permission_decisions":true,"agent_handoff":false}})
 }
 fn shell() -> String {
     if cfg!(windows) {
@@ -382,6 +405,8 @@ async fn api(
         "/api/select" => serde_json::to_value(companion(&ctx,CompanionRequest::Select{session_id:field(&value,"session_id")?}).await?)?,
         "/api/reply" => { let id=field(&value,"session_id")?; let message=field(&value,"message")?; if message.is_empty() || message.len()>65536 { bail!("Message must be between 1 and 65536 bytes"); } serde_json::to_value(companion(&ctx,CompanionRequest::Reply{session_id:id,message}).await?)? },
         "/api/send" => { match rpc(&ctx,IpcMessage::SendMessageRequest(agmux_proto::SendMessageRequest{target_session_id:field(&value,"session_id")?,message:field(&value,"message")?})).await? { IpcMessage::SendMessageResponse(r) => { if !r.success { bail!("{}",r.error.unwrap_or_default()); } serde_json::to_value(r)? }, _=>bail!("Unexpected send response") } },
+        "/api/chat" => { let response=companion(&ctx,CompanionRequest::Chat {session_id:field(&value,"session_id")?,operation:field(&value,"operation")?,payload:value.to_string()}).await?; serde_json::from_str(response.content.as_deref().context("Missing chat state")?)? },
+        "/api/models" => { let cwd=tokio::fs::canonicalize(field(&value,"cwd")?).await?; let response=companion(&ctx,CompanionRequest::Models {cwd:cwd.to_string_lossy().into_owned()}).await?; serde_json::from_str(response.content.as_deref().context("Missing models")?)? },
         "/api/spawn" => {
             let agent=field(&value,"agent")?; let cwd=tokio::fs::canonicalize(field(&value,"cwd")?).await.context("Project directory does not exist")?; if !cwd.is_dir() { bail!("Project must be a directory"); }
             let extra: Vec<String>=serde_json::from_value(value.get("args").cloned().unwrap_or_else(||json!([])))?;
@@ -389,8 +414,10 @@ async fn api(
             let (command,args)=if agent=="shell" {(shell(),extra)} else if agent=="custom" {(field(&value,"command")?,extra)} else { let plugin=agmux_core::builtin_plugins::all_builtin_plugins().into_iter().find(|p|p.id()==agent).context("Unknown agent")?; (plugin.binary_name().to_owned(),plugin.spawn_args(None,&extra)) };
             if command.is_empty() || command.contains('\0') { bail!("Invalid executable"); }
             let mut random=[0u8;16]; getrandom::fill(&mut random).map_err(|e|anyhow::anyhow!("Session ID: {e}"))?; let id=format!("ui-{}",random.iter().map(|b|format!("{b:02x}")).collect::<String>());
+            let model=extra_model(&args);
             let req=agmux_proto::SpawnSessionRequest{session_id:id.clone(),command,args,cwd:Some(cwd.to_string_lossy().into_owned()),detached:true,cols:Some(100),rows:Some(30),worktree_branch:None};
             match rpc(&ctx,IpcMessage::SpawnSessionRequest(req)).await? { IpcMessage::SpawnSessionResponse(r) if r.success=>{}, IpcMessage::SpawnSessionResponse(r)=>bail!("{}",r.error.unwrap_or_default()), _=>bail!("Unexpected spawn response") }
+            if agent=="gemini" {companion(&ctx,CompanionRequest::Chat{session_id:id.clone(),operation:"configure".into(),payload:json!({"model":model}).to_string()}).await?;}
             let title=value["title"].as_str().filter(|s|!s.trim().is_empty()).unwrap_or(&agent).chars().take(120).collect();
             match rpc(&ctx,IpcMessage::WorkspaceRequest(agmux_proto::WorkspaceRequest::Set{session_id:id.clone(),metadata:agmux_proto::WorkspaceMetadata{project:title,..Default::default()}})).await? { IpcMessage::WorkspaceResponse(r) if r.error.is_none()=>{}, _=>bail!("Session started but metadata could not be saved") }
             companion(&ctx,CompanionRequest::Select{session_id:id.clone()}).await?; json!({"session_id":id})
@@ -418,7 +445,7 @@ async fn api(
             while let Some(entry)=reader.next_entry().await? { let name=entry.file_name().to_string_lossy().into_owned(); if matches!(name.as_str(),".git"|"node_modules"|"target") { continue; } let resolved=match tokio::fs::canonicalize(entry.path()).await {Ok(p) if p.starts_with(&root)=>p,_=>continue}; let metadata=tokio::fs::metadata(&resolved).await?; entries.push(json!({"name":name,"path":resolved.strip_prefix(&root)?.to_string_lossy(),"is_dir":metadata.is_dir()})); if entries.len()>=512 {break;} }
             entries.sort_by_key(|e|(!e["is_dir"].as_bool().unwrap_or(false),e["name"].as_str().unwrap_or("").to_lowercase())); json!({"entries":entries})
         },
-        "/api/diff" => { let scope=serde_json::from_value(value.get("scope").cloned().unwrap_or_else(||json!("FullUncommitted")))?; match rpc(&ctx,IpcMessage::GetDiffRequest(agmux_proto::GetDiffRequest{session_id:field(&value,"session_id")?,scope,target:None})).await? {IpcMessage::GetDiffResponse(r)=>{if let Some(e)=r.error {bail!("{e}");} json!({"files":r.files})}, _=>bail!("Unexpected diff response")} },
+        "/api/diff" => { let scope=serde_json::from_value(value.get("scope").cloned().unwrap_or_else(||json!("FullUncommitted")))?; match rpc(&ctx,IpcMessage::GetDiffRequest(agmux_proto::GetDiffRequest{session_id:field(&value,"session_id")?,scope,target:None})).await? {IpcMessage::GetDiffResponse(r)=>{if let Some(e)=r.error {if e == "This project is not a Git repository" {json!({"files":[],"repository":false})} else {bail!("{e}");}} else {json!({"files":r.files,"repository":true})}}, _=>bail!("Unexpected diff response")} },
         _=>bail!("Unknown endpoint"),
     }) }.await;
     match result {
@@ -486,11 +513,12 @@ async fn events(
     let stream = async_stream::stream! {
         let _permit=permit; let mut previous=initial.to_string();
         yield Ok::<Event,Infallible>(Event::default().event("snapshot").data(previous.clone()));
-        let mut tick=tokio::time::interval(Duration::from_millis(20)); tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip); let mut dirty=false;
+        let mut tick=tokio::time::interval(Duration::from_millis(20)); tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip); let mut dirty=false; let mut refresh=tokio::time::interval(Duration::from_millis(700));
         loop {
             tokio::select! {
                 frame=journal.next()=>match frame {Some(Ok(IpcMessage::WatchEventFrame(frame)))=>{if let Some(event)=frame.event {dirty=true; yield Ok(Event::default().event("journal").id(event.seq.to_string()).data(serde_json::to_string(&event).unwrap_or_default()));}},Some(Ok(_))=>{dirty=true;},_=>{yield Ok(Event::default().event("offline").data("Daemon disconnected"));break;}},
                 frame=viewport.next()=>match frame {Some(Ok(_))=>dirty=true,_=>{yield Ok(Event::default().event("offline").data("Viewport disconnected"));break;}},
+                _=refresh.tick()=>dirty=true,
                 _=tick.tick(), if dirty=>{dirty=false; match current_snapshot(&ctx,query.session_id.as_deref()).await {Ok(value)=>{let current=value.to_string();if current!=previous {previous=current.clone();yield Ok(Event::default().event("update").data(current));}},Err(error)=>{yield Ok(Event::default().event("offline").data(error.to_string()));break;}}},
             }
         }
@@ -539,4 +567,14 @@ async fn terminal_socket(
         }
     }
     Ok(())
+}
+
+fn extra_model(args: &[String]) -> Option<String> {
+    args.iter().enumerate().find_map(|(i, arg)| {
+        if arg == "--model" || arg == "-m" {
+            args.get(i + 1).cloned()
+        } else {
+            arg.strip_prefix("--model=").map(str::to_owned)
+        }
+    })
 }
