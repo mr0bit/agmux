@@ -76,6 +76,7 @@ impl DaemonServer {
 
         let db_path = if std::env::var_os("AGMUX_DB_PATH").is_some()
             || self.socket_path == agmux_core::default_socket_path()
+            || crate::instance_lock::is_named_pipe_path(&self.socket_path)
         {
             agmux_core::storage_engine::default_database_path()
         } else {

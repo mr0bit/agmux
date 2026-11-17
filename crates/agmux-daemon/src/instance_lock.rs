@@ -16,6 +16,14 @@ impl InstanceLock {
         if let Some(p) = std::env::var_os("AGMUX_LOCK_PATH") {
             return PathBuf::from(p);
         }
+        if is_named_pipe_path(socket_path) {
+            let database = agmux_core::storage_engine::default_database_path();
+            let root = database
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            return named_pipe_lock_path(socket_path, root);
+        }
         let stem = socket_path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -63,11 +71,18 @@ impl InstanceLock {
                 .truncate(false)
                 .share_mode(0)
                 .open(lock_path)
-                .map_err(|_| {
-                    anyhow::anyhow!(
-                        "Another agmuxd instance already holds the lock at {}",
-                        lock_path.display()
-                    )
+                .map_err(|error| {
+                    if matches!(error.raw_os_error(), Some(32 | 33)) {
+                        anyhow::anyhow!(
+                            "Another agmuxd instance already holds the lock at {}",
+                            lock_path.display()
+                        )
+                    } else {
+                        anyhow::Error::new(error).context(format!(
+                            "Unable to open daemon lock file at {}",
+                            lock_path.display()
+                        ))
+                    }
                 })?
         };
 
@@ -84,5 +99,55 @@ impl InstanceLock {
     /// Path to the locked PID file.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+}
+
+/// Named pipes are IPC addresses, never filesystem paths for lock or database files.
+pub fn is_named_pipe_path(path: &Path) -> bool {
+    path.to_string_lossy()
+        .to_ascii_lowercase()
+        .starts_with(r"\\.\pipe\")
+}
+
+fn named_pipe_lock_path(pipe: &Path, data_directory: &Path) -> PathBuf {
+    // Stable FNV-1a identity keeps arbitrary pipe names out of filesystem paths.
+    // It identifies the endpoint; it is not used for authentication.
+    let hash = pipe
+        .to_string_lossy()
+        .to_ascii_lowercase()
+        .bytes()
+        .fold(0xcbf29ce484222325u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        });
+    data_directory
+        .join("run")
+        .join(format!("agmuxd-{hash:016x}.pid"))
+}
+
+#[cfg(test)]
+mod startup_path_tests {
+    use super::*;
+    #[test]
+    fn named_pipe_locks_are_regular_files_outside_the_pipe_namespace() {
+        let root =
+            std::env::temp_dir().join(format!("agmux-pipe-lock-test-{}", std::process::id()));
+        let pipe = Path::new(r"\\.\pipe\agmuxd-test-user");
+        assert!(is_named_pipe_path(pipe));
+        let path = named_pipe_lock_path(pipe, &root);
+        assert!(path.starts_with(&root));
+        assert!(!is_named_pipe_path(&path));
+        assert_eq!(
+            path,
+            named_pipe_lock_path(Path::new(r"\\.\PIPE\AGMUXD-TEST-USER"), &root)
+        );
+        assert_ne!(
+            path,
+            named_pipe_lock_path(Path::new(r"\\.\pipe\another-daemon"), &root)
+        );
+        let guard = InstanceLock::acquire(&path)
+            .expect("acquire a real filesystem lock for a pipe endpoint");
+        assert!(path.is_file());
+        drop(guard);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
