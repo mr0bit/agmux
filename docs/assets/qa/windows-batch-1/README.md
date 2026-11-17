@@ -34,4 +34,3 @@ No application source or release assets are changed by this evidence branch.
 ## E5 — 1000064744.heic
 
 ![E5: user report photo](1000064744.jpg)
-
