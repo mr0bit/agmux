@@ -1,6 +1,7 @@
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, access, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createConnection } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 const ui = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -73,7 +74,11 @@ if (process.env.AGMUX_ACP_FIXTURE === "1") {
     await writeFile(path.join(bin,"gemini"), `#!${process.execPath}\nimport './node_modules/@google/gemini-cli/fixture.mjs';\n`);
     await chmod(path.join(bin,"gemini"),0o755);
   }
-  env.PATH=bin+path.delimiter+(env.PATH || "");
+  const inheritedPath=process.env.PATH || process.env.Path || "";
+  // A spread object loses process.env's case-insensitive Windows lookup.
+  // Avoid passing both Path and PATH, which Node de-duplicates by key order.
+  for (const key of Object.keys(env)) if (key.toUpperCase() === "PATH") delete env[key];
+  env.PATH=bin+path.delimiter+inheritedPath;
 }
 delete env.AGMUX_UI_DIST;
 const daemon = spawn(path.join(bin, "agmuxd" + suffix), [], {
@@ -98,7 +103,13 @@ process.on("SIGTERM", () => void stop());
 process.on("SIGINT", () => void stop());
 for (let attempt = 0; attempt < 300; attempt++) {
   try {
-    await access(process.platform === "win32" ? env.AGMUX_AUTH_TOKEN_PATH : env.AGMUX_SOCK);
+    const address=process.platform === "win32" ? "\\\\.\\pipe\\"+path.basename(env.AGMUX_SOCK) : env.AGMUX_SOCK;
+    await new Promise((resolve,reject) => {
+      const client=createConnection(address);
+      client.once("connect",()=>{client.destroy();resolve();});
+      client.once("error",reject);
+      client.setTimeout(200,()=>{client.destroy();reject(Error("IPC probe timed out"));});
+    });
     break;
   } catch {
     if (daemon.exitCode !== null) throw Error("Daemon exited during startup");
