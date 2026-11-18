@@ -256,7 +256,7 @@ struct Selection {
 }
 async fn current_snapshot(ctx: &Bridge, selected: Option<&str>) -> Result<Value> {
     let panels = companion(ctx, CompanionRequest::List).await?;
-    let chat_states: Value = serde_json::from_str(
+    let chat_info: Value = serde_json::from_str(
         companion(ctx, CompanionRequest::ChatStates)
             .await?
             .content
@@ -287,7 +287,7 @@ async fn current_snapshot(ctx: &Bridge, selected: Option<&str>) -> Result<Value>
             )
         })
         .count();
-    let mut value = json!({"chat_states":chat_states,"sessions":workspace.sessions,"metadata":workspace.metadata,"panels":panels.panels,"notifications":panels.notifications,"selected_panel":panels.selected_panel,"selected":panels.selected,"attention":attention,"screen":""});
+    let mut value = json!({"chat_states":chat_info["states"],"chat_activity":chat_info["activity"],"managed_sessions":chat_info["managed"],"sessions":workspace.sessions,"metadata":workspace.metadata,"panels":panels.panels,"notifications":panels.notifications,"selected_panel":panels.selected_panel,"selected":panels.selected,"attention":attention,"screen":""});
     let id = selected
         .map(str::to_owned)
         .or_else(|| value["selected"].as_str().map(str::to_owned))
@@ -297,6 +297,13 @@ async fn current_snapshot(ctx: &Bridge, selected: Option<&str>) -> Result<Value>
                 .map(str::to_owned)
         });
     if let Some(id) = id {
+        if value["managed_sessions"]
+            .as_array()
+            .is_some_and(|ids| ids.iter().any(|v| v.as_str() == Some(&id)))
+        {
+            value["selected"] = id.into();
+            return Ok(value);
+        }
         if !value["sessions"].as_array().is_some_and(|rows| {
             rows.iter()
                 .any(|row| row["session_id"].as_str() == Some(&id))
@@ -415,9 +422,16 @@ async fn api(
             if command.is_empty() || command.contains('\0') { bail!("Invalid executable"); }
             let mut random=[0u8;16]; getrandom::fill(&mut random).map_err(|e|anyhow::anyhow!("Session ID: {e}"))?; let id=format!("ui-{}",random.iter().map(|b|format!("{b:02x}")).collect::<String>());
             let model=extra_model(&args);
+            let managed=agent=="gemini" && !args.iter().any(|a|a=="--version");
+            if managed {
+                let mut at=0;let mut models=0;
+                while at<args.len() { if matches!(args[at].as_str(),"--model"|"-m") {anyhow::ensure!(args.get(at+1).is_some_and(|v|!v.starts_with('-')),"Missing model value");models+=1;at+=2;} else if args[at].starts_with("--model="){models+=1;at+=1;} else {bail!("Shared Gemini sessions accept the Model setting; unsupported argument {}. Use a custom executable for native CLI diagnostics.",args[at]);} }
+                anyhow::ensure!(models<=1,"Set the Gemini model only once");
+                companion(&ctx,CompanionRequest::StartChat{session_id:id.clone(),cwd:cwd.to_string_lossy().into_owned(),model:model.clone()}).await?;
+            } else {
             let req=agmux_proto::SpawnSessionRequest{session_id:id.clone(),command,args,cwd:Some(cwd.to_string_lossy().into_owned()),detached:true,cols:Some(100),rows:Some(30),worktree_branch:None};
             match rpc(&ctx,IpcMessage::SpawnSessionRequest(req)).await? { IpcMessage::SpawnSessionResponse(r) if r.success=>{}, IpcMessage::SpawnSessionResponse(r)=>bail!("{}",r.error.unwrap_or_default()), _=>bail!("Unexpected spawn response") }
-            if agent=="gemini" {companion(&ctx,CompanionRequest::Chat{session_id:id.clone(),operation:"configure".into(),payload:json!({"model":model}).to_string()}).await?;}
+            }
             let title=value["title"].as_str().filter(|s|!s.trim().is_empty()).unwrap_or(&agent).chars().take(120).collect();
             match rpc(&ctx,IpcMessage::WorkspaceRequest(agmux_proto::WorkspaceRequest::Set{session_id:id.clone(),metadata:agmux_proto::WorkspaceMetadata{project:title,..Default::default()}})).await? { IpcMessage::WorkspaceResponse(r) if r.error.is_none()=>{}, _=>bail!("Session started but metadata could not be saved") }
             companion(&ctx,CompanionRequest::Select{session_id:id.clone()}).await?; json!({"session_id":id})
@@ -502,7 +516,11 @@ async fn events(
         .await
         .map_err(anyhow::Error::from)?;
     let mut viewport = authenticated(&ctx).await?;
-    if let Some(id) = initial["selected"].as_str() {
+    if let Some(id) = initial["selected"].as_str().filter(|id| {
+        !initial["managed_sessions"]
+            .as_array()
+            .is_some_and(|ids| ids.iter().any(|v| v.as_str() == Some(*id)))
+    }) {
         viewport
             .send(IpcMessage::SubscribeViewport {
                 session_id: id.into(),

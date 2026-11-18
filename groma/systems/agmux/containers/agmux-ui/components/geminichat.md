@@ -12,3 +12,9 @@ groma:
       file: crates/agmux-cli/src/companion_gui/ui/src/GeminiChat.tsx
       symbol: GeminiChat
 ---
+
+## Derived relationships
+
+| Source | Target | Description | Technology |
+| --- | --- | --- | --- |
+| [crates/agmux-cli/src/companion_gui/ui/src/GeminiChat.tsx](../../../../../../crates/agmux-cli/src/companion_gui/ui/src/GeminiChat.tsx) | [crates/agmux-cli/src/companion_gui/ui/src/LiveApp.tsx](../../../../../../crates/agmux-cli/src/companion_gui/ui/src/LiveApp.tsx) | Invokes supplied callback: onDraft | react |

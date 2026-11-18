@@ -37,7 +37,9 @@ import type { DiffLine } from "./diff-model";
 import { Diff } from "./CodeViews";
 import AgentIcon from "./AgentAvatar";
 import Composer from "./Composer";
-import GeminiChat from "./GeminiChat";
+import CommandPalette, { type WorkspaceCommand } from "./CommandPalette";
+import GeminiChat, { type ChatState, type Permission } from "./GeminiChat";
+import { diffLines as compareLines } from "diff";
 import EmptyState from "./EmptyState";
 import { AnimatedCheck, AnimatedOverlay, Selection } from "./MotionUI";
 import { motionTiming } from "./motion-spec";
@@ -95,7 +97,7 @@ export function normalizeSession(
       ? "attention"
       : ["WORKING", "RUNNING", "STARTING"].includes(session.state)
         ? "working"
-        : ["DEAD", "COMPLETED", "EXITED"].includes(session.state)
+        : ["DEAD", "COMPLETED", "EXITED", "ARCHIVED"].includes(session.state)
           ? "stopped"
           : "idle",
     time: session.state.toLowerCase().replaceAll("_", " "),
@@ -141,7 +143,7 @@ export default function LiveApp({ token }: { token: string }) {
       saved("agmux-appearance", { light: false }).light,
     ),
     [density, setDensity] = useState<"comfortable" | "compact">(
-      saved("agmux-appearance", { density: "comfortable" }).density as
+      saved("agmux-appearance", { density: "compact" }).density as
         | "comfortable"
         | "compact",
     );
@@ -151,26 +153,93 @@ export default function LiveApp({ token }: { token: string }) {
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
-  const [newAgent, setNewAgent] = useState("shell"),
+  const [paletteMode, setPaletteMode] = useState<
+    "commands" | "sessions" | "shortcuts" | null
+  >(null);
+  const chord = useRef(0);
+  const paletteOrigin = useRef<HTMLElement | null>(null);
+  const openPalette = (mode: "commands" | "sessions" | "shortcuts") => {
+    if (!paletteMode)
+      paletteOrigin.current =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+    setPaletteMode(mode);
+  };
+  const closePalette = () => {
+    setPaletteMode(null);
+    // An exiting animated dialog can still own the modal layer for a frame.
+    // Restore after it leaves, without stealing focus from a newly opened dialog.
+    const deadline = performance.now() + 1000;
+    const restore = () => {
+      if (document.querySelector('[role="dialog"]')) {
+        if (performance.now() < deadline) requestAnimationFrame(restore);
+        return;
+      }
+      if (paletteOrigin.current?.isConnected) paletteOrigin.current.focus();
+    };
+    requestAnimationFrame(restore);
+  };
+  const [newAgent, setNewAgent] = useState(""),
     [newTitle, setNewTitle] = useState(""),
     [cwd, setCwd] = useState(""),
     [custom, setCustom] = useState(""),
     [args, setArgs] = useState("[]"),
     [geminiModel, setGeminiModel] = useState("");
-  const [models, setModels] = useState<{availableModels: {modelId: string; name: string}[]; currentModelId: string} | null>(null);
-  const [modelsError, setModelsError] = useState(""), [modelsLoading, setModelsLoading] = useState(false), [modelRetry, setModelRetry] = useState(0);
+  const [models, setModels] = useState<{
+    availableModels: { modelId: string; name: string }[];
+    currentModelId: string;
+  } | null>(null);
+  const [modelsError, setModelsError] = useState(""),
+    [modelsLoading, setModelsLoading] = useState(false),
+    [modelRetry, setModelRetry] = useState(0);
   useEffect(() => {
-    let cancelled=false;
-    setModels(null); setModelsError(""); setGeminiModel(""); setModelsLoading(false);
-    if (modal !== "new" || newAgent !== "gemini" || !cwd || !info?.agents.find(a => a.id === "gemini")?.available) return;
-    const timer=window.setTimeout(async () => {
+    let cancelled = false;
+    setModels(null);
+    setModelsError("");
+    setGeminiModel("");
+    setModelsLoading(false);
+    if (
+      modal !== "new" ||
+      newAgent !== "gemini" ||
+      !cwd ||
+      !info?.agents.find((a) => a.id === "gemini")?.available
+    )
+      return;
+    const timer = window.setTimeout(async () => {
       setModelsLoading(true);
-      try {const value=await backend.request<{availableModels: {modelId: string; name: string}[]; currentModelId: string} | null>("/api/models", {cwd}); if (!cancelled) {setModels(value); if (!value?.availableModels?.length) setModelsError("This CLI did not advertise a model inventory. Its configured default is available.");}}
-      catch(e) {if (!cancelled) setModelsError(`Model discovery unavailable: ${e instanceof Error ? e.message : String(e)}. Sign in through the CLI and retry, or use its configured default.`);}
-      finally {if (!cancelled) setModelsLoading(false);}
+      try {
+        const value = await backend.request<{
+          availableModels: { modelId: string; name: string }[];
+          currentModelId: string;
+        } | null>("/api/models", { cwd });
+        if (!cancelled) {
+          setModels(value);
+          if (!value?.availableModels?.length)
+            setModelsError(
+              "This CLI did not advertise a model inventory. Its configured default is available.",
+            );
+        }
+      } catch (e) {
+        if (!cancelled)
+          setModelsError(
+            `Model discovery unavailable: ${e instanceof Error ? e.message : String(e)}. Sign in through the CLI and retry, or use its configured default.`,
+          );
+      } finally {
+        if (!cancelled) setModelsLoading(false);
+      }
     }, 500);
-    return () => {cancelled=true; clearTimeout(timer);};
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [modal, newAgent, cwd, info, backend, modelRetry]);
+  const agents = info?.agents.filter((agent) => agent.id !== "shell") || [];
+  useEffect(() => {
+    if (newAgent === "custom") return;
+    if (!agents.some((a) => a.id === newAgent))
+      setNewAgent(agents.find((a) => a.available)?.id || "");
+  }, [info, newAgent]);
   const [directory, setDirectory] = useState(""),
     [entries, setEntries] = useState<Entry[]>([]),
     [editor, setEditor] = useState<OpenFile | null>(null),
@@ -179,7 +248,7 @@ export default function LiveApp({ token }: { token: string }) {
     [diffError, setDiffError] = useState(""),
     [isRepository, setIsRepository] = useState(true),
     [diffScope, setDiffScope] = useState("FullUncommitted"),
-    [diffLayout, setDiffLayout] = useState<"unified" | "split">("unified"),
+    [diffLayout, setDiffLayout] = useState<"unified" | "split">("split"),
     [diffLoading, setDiffLoading] = useState(false);
   const [recipient, setRecipient] = useState(""),
     [outgoing, setOutgoing] = useState("");
@@ -189,16 +258,28 @@ export default function LiveApp({ token }: { token: string }) {
     fileSequence = useRef(0),
     diffSequence = useRef(0);
   const [readingBack, setReadingBack] = useState(false);
-  const [chatStatuses, setChatStatuses] = useState<Record<string,string>>({});
-  useEffect(() => {if(snapshot?.chat_states) setChatStatuses(snapshot.chat_states);}, [snapshot?.chat_states]);
+  const [reviewChats, setReviewChats] = useState<Record<string, ChatState>>({});
+  const [reviewDecision, setReviewDecision] = useState(false);
+  const [chatStatuses, setChatStatuses] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (snapshot?.chat_states) setChatStatuses(snapshot.chat_states);
+  }, [snapshot?.chat_states]);
   const sessions = useMemo(
     () =>
       (snapshot?.sessions || []).map((item) => {
-        const session=normalizeSession(item, snapshot?.metadata[item.session_id]);
+        const session = normalizeSession(
+          item,
+          snapshot?.metadata[item.session_id],
+        );
         if (session.agent === "Gemini" && session.state !== "stopped") {
-          const status=chatStatuses[session.id] || "idle";
-          session.state=status === "working" || status === "cancelling" ? "working" : status === "permission" || status === "failed" ? "attention" : "idle";
-          session.time=status;
+          const status = chatStatuses[session.id] || "idle";
+          session.state =
+            status === "working" || status === "cancelling"
+              ? "working"
+              : status === "permission" || status === "failed"
+                ? "attention"
+                : "idle";
+          session.time = status;
         }
         return session;
       }),
@@ -212,7 +293,19 @@ export default function LiveApp({ token }: { token: string }) {
     (item) => item.session_id === session?.id,
   );
   const alive =
-    !!native && !["DEAD", "COMPLETED", "EXITED"].includes(native.state);
+    !!native &&
+    !["DEAD", "COMPLETED", "EXITED", "ARCHIVED"].includes(native.state);
+  const [sessionView, setSessionView] = useState<"activity" | "projects">(() =>
+    saved("agmux-session-view", "activity"),
+  );
+  const [showArchived, setShowArchived] = useState(false);
+  useEffect(
+    () =>
+      localStorage.setItem("agmux-session-view", JSON.stringify(sessionView)),
+    [sessionView],
+  );
+  const managed =
+    !!session && !!snapshot?.managed_sessions?.includes(session.id);
   const dirty = !!editor && editor.content !== editor.original;
   const showError = (failure: unknown) =>
     setError(failure instanceof Error ? failure.message : String(failure));
@@ -332,8 +425,61 @@ export default function LiveApp({ token }: { token: string }) {
   }, [modal]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      if (modal) return;
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "n") {
+      if (modal || event.isComposing) return;
+      const mod = event.ctrlKey || event.metaKey,
+        key = event.key.toLowerCase();
+      // Re-pressing Ctrl/Cmd between chord keys must not cancel the chord.
+      if (["control", "meta", "shift", "alt"].includes(key)) return;
+      if (mod && event.shiftKey && key === "p") {
+        event.preventDefault();
+        openPalette("commands");
+        return;
+      }
+      if (paletteMode) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          closePalette();
+        }
+        return;
+      }
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const nativeTerminal = !!target?.closest(".xterm");
+      if (nativeTerminal) return;
+      if (mod && key === "p") {
+        event.preventDefault();
+        openPalette("sessions");
+        return;
+      }
+      if (mod && key === "b") {
+        event.preventDefault();
+        setSidebar((v) => !v);
+        return;
+      }
+      if (mod && event.code === "Backquote") {
+        event.preventDefault();
+        setTab((t) => (t === "Terminal" ? "Chat" : "Terminal"));
+        return;
+      }
+      if (mod && key === "s" && Date.now() - chord.current < 1500) {
+        event.preventDefault();
+        chord.current = 0;
+        openPalette("shortcuts");
+        return;
+      }
+      if (mod && key === "k") {
+        event.preventDefault();
+        chord.current = Date.now();
+        return;
+      }
+      chord.current = 0;
+      if (target?.closest('input,textarea,[contenteditable="true"]')) return;
+      if (event.key === "F1") {
+        event.preventDefault();
+        openPalette("commands");
+        return;
+      }
+      if (mod && key === "n") {
         event.preventDefault();
         setModal("new");
       }
@@ -354,7 +500,7 @@ export default function LiveApp({ token }: { token: string }) {
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
-  }, [session?.id, sessions, modal, dirty]);
+  }, [session?.id, sessions, modal, paletteMode, dirty]);
   const refresh = async () => {
     const value = await backend.request<Snapshot>(
       "/api/snapshot" +
@@ -402,25 +548,37 @@ export default function LiveApp({ token }: { token: string }) {
       if (sequence === fileSequence.current) setFilesLoading(false);
     }
   };
-  const loadDiff = async () => {
+  const diffBusy = useRef(false);
+  const loadDiff = async (background = false) => {
     if (!session) return;
-    const sequence=++diffSequence.current;
-    setDiffLoading(true);
+    if (background && diffBusy.current) return;
+    diffBusy.current = true;
+    const sequence = ++diffSequence.current;
+    if (!background) setDiffLoading(true);
     try {
-      const value = await backend.request<{ files: NativeDiff[]; repository: boolean }>(
-        "/api/diff",
-        { session_id: session.id, scope: diffScope },
+      const value = await backend.request<{
+        files: NativeDiff[];
+        repository: boolean;
+      }>("/api/diff", { session_id: session.id, scope: diffScope });
+      if (sequence !== diffSequence.current) return;
+      setDiffs((previous) =>
+        JSON.stringify(previous) === JSON.stringify(value.files)
+          ? previous
+          : value.files,
       );
-      if(sequence!==diffSequence.current) return;
-      setDiffs(value.files);
       setIsRepository(value.repository);
       setDiffError("");
     } catch (failure) {
-      if(sequence!==diffSequence.current) return;
-      setDiffError(failure instanceof Error ? failure.message : String(failure));
+      if (sequence !== diffSequence.current) return;
+      setDiffError(
+        failure instanceof Error ? failure.message : String(failure),
+      );
       setDiffs([]);
     } finally {
-      if(sequence===diffSequence.current) setDiffLoading(false);
+      if (sequence === diffSequence.current) {
+        setDiffLoading(false);
+        diffBusy.current = false;
+      }
     }
   };
   useEffect(() => {
@@ -428,6 +586,9 @@ export default function LiveApp({ token }: { token: string }) {
   }, [session?.id, directory, tab]);
   useEffect(() => {
     if ((tab === "Git" || review) && session) void loadDiff();
+    if (!session || (tab !== "Git" && !review)) return;
+    const timer = window.setInterval(() => void loadDiff(true), 1000);
+    return () => clearInterval(timer);
   }, [session?.id, diffScope, tab, review]);
   const save = () =>
     act(async () => {
@@ -500,8 +661,15 @@ export default function LiveApp({ token }: { token: string }) {
         )
           throw new Error("Arguments must be a JSON array of strings.");
         if (newAgent === "gemini" && geminiModel.trim()) {
-          if (parsed.some((arg) => arg === "-m" || arg === "--model" || arg.startsWith("--model=")))
-            throw new Error("Set the Gemini model in either Model or Arguments, not both.");
+          if (
+            parsed.some(
+              (arg) =>
+                arg === "-m" || arg === "--model" || arg.startsWith("--model="),
+            )
+          )
+            throw new Error(
+              "Set the Gemini model in either Model or Arguments, not both.",
+            );
           parsed.push("--model", geminiModel.trim());
         }
         const value = await backend.request<{ session_id: string }>(
@@ -552,49 +720,266 @@ export default function LiveApp({ token }: { token: string }) {
       }
     });
   const selectedMetadata = snapshot?.metadata[session?.id] || fallbackMetadata;
-  const filtered = sessions.filter((item) =>
-    item.title.toLowerCase().includes(search.toLowerCase()),
+  const projectPath = (id: string) => {
+    let value = snapshot?.sessions.find((s) => s.session_id === id)?.cwd || "";
+    if (value.startsWith("\\\\?\\UNC\\")) value = "\\\\" + value.slice(8);
+    else if (value.startsWith("\\\\?\\")) value = value.slice(4);
+    return value
+      .replaceAll("\\", "/")
+      .replace(/^[a-z]:/, (s) => s.toUpperCase())
+      .replace(/\/$/, "");
+  };
+  const isArchived = (id: string) => !!snapshot?.metadata[id]?.archived;
+  const activity = (id: string) =>
+    snapshot?.chat_activity?.[id] ||
+    (snapshot?.sessions.find((s) => s.session_id === id)?.created_at || 0) *
+      1000;
+  const filtered = sessions
+    .filter((s) =>
+      (s.title + " " + projectPath(s.id))
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+    )
+    .sort(
+      (a, b) => activity(b.id) - activity(a.id) || a.id.localeCompare(b.id),
+    );
+  const active = filtered.filter(
+    (s) => s.state !== "stopped" && !isArchived(s.id),
   );
+  const inactive = filtered.filter(
+    (s) => s.state === "stopped" && !isArchived(s.id),
+  );
+  const archived = filtered.filter((s) => isArchived(s.id));
+  const projects = new Map<string, Session[]>();
+  for (const item of active) {
+    const path = projectPath(item.id);
+    projects.set(path, [...(projects.get(path) || []), item]);
+  }
+  const projectLabel = (full: string) => {
+    const parts = full.split("/");
+    for (let count = 2; count <= parts.length; count++) {
+      const suffix = parts.slice(-count).join("/");
+      if (
+        ![...projects.keys()].some(
+          (other) =>
+            other !== full &&
+            (other === suffix || other.endsWith("/" + suffix)),
+        )
+      )
+        return suffix === full ? full : "…/" + suffix;
+    }
+    return full;
+  };
   const groups = [
+    ...(sessionView === "activity"
+      ? [{ name: "Active", items: active }]
+      : [...projects]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([name, items]) => ({
+            name,
+            label: projectLabel(name),
+            items,
+          }))),
+    { name: "Inactive", items: inactive },
+    ...(showArchived ? [{ name: "Archived", items: archived }] : []),
+  ];
+  const archiveSession = () =>
+    void act(async () => {
+      if (!session || alive) return;
+      const archived = !isArchived(session.id);
+      await backend.request("/api/workspace", {
+        session_id: session.id,
+        metadata: {
+          ...(snapshot?.metadata[session.id] || fallbackMetadata),
+          archived,
+        },
+      });
+      setShowArchived(archived);
+      setNotice(
+        archived
+          ? "Session archived · history retained"
+          : "Session restored to Inactive",
+      );
+      await refresh();
+    });
+  const workspaceCommands: WorkspaceCommand[] = [
     {
-      name: "Needs attention",
-      items: filtered.filter((item) => item.state === "attention"),
+      id: "new",
+      label: "New agent session",
+      shortcut: "Ctrl/⌘ N",
+      run: () => setModal("new"),
+    },
+    { id: "chat", label: "Show Chat", run: () => setTab("Chat") },
+    {
+      id: "terminal",
+      label: "Show Terminal",
+      shortcut: "Ctrl/⌘ `",
+      run: () => setTab("Terminal"),
+    },
+    { id: "git", label: "Show Git changes", run: () => setTab("Git") },
+    {
+      id: "sidebar",
+      label: "Toggle sidebar",
+      shortcut: "Ctrl/⌘ B",
+      run: () => setSidebar((v) => !v),
     },
     {
-      name: "Working",
-      items: filtered.filter((item) => item.state === "working"),
+      id: "review",
+      label: "Toggle review panel",
+      run: () => setReview((v) => !v),
     },
     {
-      name: "Pinned",
-      items: filtered.filter(
-        (item) =>
-          item.pinned && item.state !== "working" && item.state !== "attention",
-      ),
+      id: "activity",
+      label: "Activity session view",
+      run: () => setSessionView("activity"),
     },
     {
-      name: "Sessions",
-      items: filtered.filter(
-        (item) =>
-          !item.pinned &&
-          item.state !== "working" &&
-          item.state !== "attention",
-      ),
+      id: "projects",
+      label: "Project session view",
+      run: () => setSessionView("projects"),
+    },
+    {
+      id: "compact",
+      label: "Toggle compact session rows",
+      run: () =>
+        setDensity((v) => (v === "compact" ? "comfortable" : "compact")),
+    },
+    {
+      id: "quick",
+      label: "Quick session switcher",
+      shortcut: "Ctrl/⌘ P",
+      run: () => openPalette("sessions"),
+    },
+    {
+      id: "shortcuts",
+      label: "Keyboard shortcuts",
+      shortcut: "Ctrl/⌘ K, Ctrl/⌘ S",
+      run: () => openPalette("shortcuts"),
+    },
+    {
+      id: "settings",
+      label: "Workspace settings",
+      run: () => setModal("settings"),
     },
   ];
+  const paletteCommands =
+    paletteMode === "sessions"
+      ? sessions
+          .filter((s) => showArchived || !isArchived(s.id))
+          .sort((a, b) => activity(b.id) - activity(a.id))
+          .map((s) => ({
+            id: s.id,
+            label: s.title,
+            detail: `${projectPath(s.id)} · ${s.state === "stopped" ? "Inactive" : s.time}`,
+            run: () => void choose(s.id),
+          }))
+      : workspaceCommands;
+  const pendingPermissions = managed
+    ? reviewChats[session.id]?.permissions || []
+    : [];
+  const decide = (permission: Permission, optionId: string) =>
+    void act(async () => {
+      setReviewDecision(true);
+      try {
+        const state = await backend.request<ChatState>("/api/chat", {
+          session_id: session.id,
+          operation: "permission",
+          id: permission.id,
+          option_id: optionId,
+        });
+        setReviewChats((p) => ({ ...p, [session.id]: state }));
+      } finally {
+        setReviewDecision(false);
+      }
+    });
+  const proposalLines = (
+    oldText: string | null,
+    newText: string,
+  ): DiffLine[] => {
+    let old = 0,
+      next = 0;
+    const lines: DiffLine[] = [];
+    for (const part of compareLines(oldText || "", newText))
+      for (const text of part.value
+        .split("\n")
+        .slice(0, part.value.endsWith("\n") ? -1 : undefined)) {
+        if (part.added) lines.push({ kind: "add", text, next: ++next });
+        else if (part.removed) lines.push({ kind: "del", text, old: ++old });
+        else lines.push({ kind: "context", text, old: ++old, next: ++next });
+      }
+    return lines;
+  };
   const renderDiff = () => (
     <>
+      {pendingPermissions.length > 0 && (
+        <section className="proposed-changes" aria-label="Proposed changes">
+          <h3>Proposed · awaiting approval</h3>
+          {pendingPermissions.map((permission, index) => (
+            <div key={index} className="proposed-edit">
+              <strong>{permission.title}</strong>
+              {Array.isArray(permission.tool_call?.content) &&
+                permission.tool_call.content
+                  .filter(
+                    (block) =>
+                      block.type === "diff" &&
+                      typeof block.path === "string" &&
+                      typeof block.newText === "string",
+                  )
+                  .map((block, i) => (
+                    <div key={i}>
+                      <div className="diff-file-header">{block.path}</div>
+                      <Diff
+                        lines={proposalLines(block.oldText, block.newText)}
+                        layout="split"
+                        language={block.path.endsWith(".rs") ? "rust" : "tsx"}
+                      />
+                    </div>
+                  ))}
+              {!permission.tool_call?.content?.some(
+                (b) => b.type === "diff",
+              ) && (
+                <p className="live-hint">
+                  The provider has not supplied a text diff for this operation.
+                </p>
+              )}
+              <div className="permission-actions">
+                {permission.options.map((option) => (
+                  <button
+                    key={option.optionId}
+                    disabled={reviewDecision}
+                    className="live-action"
+                    onClick={() => decide(permission, option.optionId)}
+                  >
+                    {option.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+      <h3 className="applied-heading">Applied · on disk</h3>
       {diffLoading && (
         <p className="live-hint" role="status">
           Loading changes…
         </p>
       )}
-      {diffError && <details className="diff-error"><summary>Could not load changes</summary><pre>{diffError}</pre></details>}
+      {diffError && (
+        <details className="diff-error">
+          <summary>Could not load changes</summary>
+          <pre>{diffError}</pre>
+        </details>
+      )}
       {!diffLoading && !diffs.length && !diffError && (
         <EmptyState
           compact
           kind="completed"
-          title={isRepository ? "No tracked changes" : "Not a Git repository"}
-          description={isRepository ? "There are no tracked changes for this comparison. Untracked files remain available in Files." : "Chat, Terminal and Files are available. To use Git review, open a project that has a Git repository."}
+          title={isRepository ? "No applied changes" : "Not a Git repository"}
+          description={
+            isRepository
+              ? "There are no file changes for this comparison."
+              : "Chat, Terminal and Files are available. To use Git review, open a project that has a Git repository."
+          }
         />
       )}
       {diffs.map((file) => (
@@ -603,6 +988,11 @@ export default function LiveApp({ token }: { token: string }) {
             <FileCode2 size={14} />
             <span>{file.new_path || file.old_path}</span>
           </div>
+          {!file.hunks.length && (
+            <p className="live-hint">
+              No text preview available for this empty, binary or large file.
+            </p>
+          )}
           <Diff
             lines={diffLines(file)}
             layout={diffLayout}
@@ -623,6 +1013,13 @@ export default function LiveApp({ token }: { token: string }) {
         data-theme={light ? "light" : "dark"}
         data-density={density}
       >
+        {paletteMode && (
+          <CommandPalette
+            mode={paletteMode}
+            commands={paletteCommands}
+            onClose={closePalette}
+          />
+        )}
         {sidebar && (
           <aside className="sidebar">
             <div className="sidebar-chrome">
@@ -667,9 +1064,46 @@ export default function LiveApp({ token }: { token: string }) {
                 onChange={(event) => setSearch(event.target.value)}
               />
             </div>
+            <div
+              className="session-view-controls"
+              role="group"
+              aria-label="Session view"
+            >
+              <button
+                aria-pressed={sessionView === "activity"}
+                onClick={() => setSessionView("activity")}
+              >
+                Activity
+              </button>
+              <button
+                aria-pressed={sessionView === "projects"}
+                onClick={() => setSessionView("projects")}
+              >
+                Projects
+              </button>
+              <button
+                aria-pressed={showArchived}
+                onClick={() => setShowArchived((v) => !v)}
+              >
+                Archived ({sessions.filter((s) => isArchived(s.id)).length})
+              </button>
+              <button
+                aria-label="Compact session rows"
+                title="Compact session rows"
+                aria-pressed={density === "compact"}
+                onClick={() =>
+                  setDensity((v) =>
+                    v === "compact" ? "comfortable" : "compact",
+                  )
+                }
+              >
+                ≡
+              </button>
+            </div>
             <SessionList
               density={density}
               groups={groups}
+              singleLineCompact
               selected={session?.id || ""}
               collapsed={collapsed}
               onCollapse={(name) =>
@@ -752,15 +1186,26 @@ export default function LiveApp({ token }: { token: string }) {
                     disabled={!alive || !connected}
                     onClick={() =>
                       void act(async () => {
-                        await backend.request("/api/interrupt", {
-                          session_id: session.id,
-                        });
+                        await backend.request(
+                          managed ? "/api/chat" : "/api/interrupt",
+                          {
+                            session_id: session.id,
+                            ...(managed ? { operation: "cancel" } : {}),
+                          },
+                        );
                         setNotice("Interrupt sent to this session");
                       })
                     }
                   >
                     Interrupt
                   </button>
+                  {!alive && (
+                    <button className="live-action" onClick={archiveSession}>
+                      {isArchived(session.id)
+                        ? "Restore from archive"
+                        : "Archive session"}
+                    </button>
+                  )}
                   <button
                     className="live-action"
                     disabled={!alive || !connected}
@@ -769,7 +1214,7 @@ export default function LiveApp({ token }: { token: string }) {
                         await backend.request("/api/freeze", {
                           session_id: session.id,
                         });
-                        setNotice("Session ended · snapshot retained");
+                        setNotice("Session ended · moved to Inactive");
                         await refresh();
                       })
                     }
@@ -778,6 +1223,14 @@ export default function LiveApp({ token }: { token: string }) {
                   </button>
                 </>
               )}
+              <button
+                className="live-action"
+                aria-label="Open command palette"
+                title="Command palette (Ctrl/⌘ Shift P)"
+                onClick={() => openPalette("commands")}
+              >
+                <Search size={14} /> Commands
+              </button>
               <button
                 className="icon-button"
                 aria-label="Toggle review panel"
@@ -805,7 +1258,15 @@ export default function LiveApp({ token }: { token: string }) {
           )}
           {error && (
             <div className="live-error" role="alert">
-              <div><span>{error.split("\n")[0].slice(0, 220)}</span>{error.length > 220 || error.includes("\n") ? <details><summary>Error details</summary><pre>{error}</pre></details> : null}</div>
+              <div>
+                <span>{error.split("\n")[0].slice(0, 220)}</span>
+                {error.length > 220 || error.includes("\n") ? (
+                  <details>
+                    <summary>Error details</summary>
+                    <pre>{error}</pre>
+                  </details>
+                ) : null}
+              </div>
               <button aria-label="Dismiss error" onClick={() => setError("")}>
                 <X size={14} />
               </button>
@@ -860,14 +1321,52 @@ export default function LiveApp({ token }: { token: string }) {
                 <EmptyState
                   kind="workspace"
                   title="Your next idea starts here"
-                  description="Launch a real shell or an installed coding agent. Sessions run in the Rust daemon and survive closing this tab."
+                  description="Launch an installed coding agent. Sessions run in the Rust daemon and survive closing this tab."
                   action="Start your first session"
                   onAction={() => setModal("new")}
                 />
               ) : (
                 <>
-                  {tab === "Chat" && session.agent === "Gemini" && <GeminiChat key={session.id} backend={backend} sessionId={session.id} connected={connected && alive} onStatus={status => setChatStatuses(previous => previous[session.id] === status ? previous : {...previous, [session.id]: status})}/>}
-                  {tab === "Chat" && session.agent !== "Gemini" && (
+                  {managed && (
+                    <div
+                      className="managed-conversation-host"
+                      style={{
+                        display:
+                          tab === "Chat" || tab === "Terminal"
+                            ? "flex"
+                            : "none",
+                      }}
+                    >
+                      <GeminiChat
+                        key={session.id}
+                        backend={backend}
+                        sessionId={session.id}
+                        connected={connected && alive}
+                        onSnapshot={(state) =>
+                          setReviewChats((previous) => ({
+                            ...previous,
+                            [session.id]: state,
+                          }))
+                        }
+                        presentation={tab === "Terminal" ? "terminal" : "chat"}
+                        draft={drafts[session.id] || ""}
+                        onDraft={(text) =>
+                          setDrafts((previous) => ({
+                            ...previous,
+                            [session.id]: text,
+                          }))
+                        }
+                        onStatus={(status) =>
+                          setChatStatuses((previous) =>
+                            previous[session.id] === status
+                              ? previous
+                              : { ...previous, [session.id]: status },
+                          )
+                        }
+                      />
+                    </div>
+                  )}
+                  {tab === "Chat" && !managed && (
                     <>
                       <div className="live-chat-header">
                         <AgentIcon agent={session.agent} />
@@ -972,7 +1471,7 @@ export default function LiveApp({ token }: { token: string }) {
                       />
                     </>
                   )}
-                  {tab === "Terminal" && (
+                  {tab === "Terminal" && !managed && (
                     <Suspense
                       fallback={<p className="live-hint">Opening terminal…</p>}
                     >
@@ -1169,7 +1668,7 @@ export default function LiveApp({ token }: { token: string }) {
                       </div>
                       <div className="live-agent-list">
                         <h3>Installed agent CLIs</h3>
-                        {info?.agents.map((agent) => (
+                        {agents.map((agent) => (
                           <div key={agent.id}>
                             <AgentIcon agent={agent.name} />
                             <strong>{agent.name}</strong>
@@ -1287,7 +1786,17 @@ export default function LiveApp({ token }: { token: string }) {
                     <X size={17} />
                   </button>
                 </div>
-                {error && <div className="live-error" role="alert"><div><span>{error.split("\n")[0].slice(0,220)}</span><details><summary>Error details</summary><pre>{error}</pre></details></div></div>}
+                {error && (
+                  <div className="live-error" role="alert">
+                    <div>
+                      <span>{error.split("\n")[0].slice(0, 220)}</span>
+                      <details>
+                        <summary>Error details</summary>
+                        <pre>{error}</pre>
+                      </details>
+                    </div>
+                  </div>
+                )}
                 {modal === "new" && (
                   <form
                     onSubmit={(event) => {
@@ -1324,7 +1833,12 @@ export default function LiveApp({ token }: { token: string }) {
                         value={newAgent}
                         onChange={(event) => setNewAgent(event.target.value)}
                       >
-                        {info?.agents.map((agent) => (
+                        {!newAgent && (
+                          <option value="">
+                            Install an agent to get started
+                          </option>
+                        )}
+                        {agents.map((agent) => (
                           <option
                             key={agent.id}
                             value={agent.id}
@@ -1337,22 +1851,99 @@ export default function LiveApp({ token }: { token: string }) {
                         <option value="custom">Custom executable</option>
                       </select>
                     </label>
+                    {!agents.some((a) => a.available) && (
+                      <p className="live-hint" role="status">
+                        No agent provider is installed. Install Gemini CLI,
+                        Claude Code, Codex or another supported agent, then
+                        refresh installed agents.{" "}
+                        <button
+                          type="button"
+                          className="live-action"
+                          onClick={() =>
+                            void act(async () =>
+                              setInfo(
+                                await backend.request<MachineInfo>("/api/info"),
+                              ),
+                            )
+                          }
+                        >
+                          Refresh providers
+                        </button>
+                      </p>
+                    )}
                     {newAgent === "gemini" && (
                       <div className="gemini-provider-setup">
-                        <p className="live-hint">Gemini runs locally. Sign in through the CLI; Chat displays tool approval requests in your conversation.</p>
-                        {!info?.agents.find((agent) => agent.id === "gemini")?.available && (
-                          <p role="status">Install Node.js 20+ and run <code>npm install -g @google/gemini-cli</code>, then restart Agmux if PATH changed.</p>
+                        <p className="live-hint">
+                          Gemini runs locally. Sign in through the CLI; Chat
+                          displays tool approval requests in your conversation.
+                        </p>
+                        {!info?.agents.find((agent) => agent.id === "gemini")
+                          ?.available && (
+                          <p role="status">
+                            Install Node.js 20+ and run{" "}
+                            <code>npm install -g @google/gemini-cli</code>, then
+                            restart Agmux if PATH changed.
+                          </p>
                         )}
-                        <button type="button" className="live-action" onClick={() => void act(async () => setInfo(await backend.request<MachineInfo>("/api/info")))}>Refresh installed agents</button>
-                        <label>Model
-                          <select aria-label="Gemini model" value={geminiModel} onChange={(event) => setGeminiModel(event.target.value)}>
-                            <option value="">CLI configured default{models?.currentModelId ? ` (${models.currentModelId})` : ""}</option>
-                            {models?.availableModels?.map(model => <option key={model.modelId} value={model.modelId}>{model.name || model.modelId}</option>)}
+                        <button
+                          type="button"
+                          className="live-action"
+                          onClick={() =>
+                            void act(async () =>
+                              setInfo(
+                                await backend.request<MachineInfo>("/api/info"),
+                              ),
+                            )
+                          }
+                        >
+                          Refresh installed agents
+                        </button>
+                        <label>
+                          Model
+                          <select
+                            aria-label="Gemini model"
+                            value={geminiModel}
+                            onChange={(event) =>
+                              setGeminiModel(event.target.value)
+                            }
+                          >
+                            <option value="">
+                              CLI configured default
+                              {models?.currentModelId
+                                ? ` (${models.currentModelId})`
+                                : ""}
+                            </option>
+                            {models?.availableModels?.map((model) => (
+                              <option key={model.modelId} value={model.modelId}>
+                                {model.name || model.modelId}
+                              </option>
+                            ))}
                           </select>
                         </label>
-                        {modelsLoading && <p className="live-hint" role="status">Discovering models from Gemini CLI…</p>}
-                        {modelsError && <details className="model-discovery-error"><summary>Using CLI configured default</summary><p>{modelsError}</p><button type="button" className="live-action" onClick={() => setModelRetry(n => n+1)}>Retry model discovery</button></details>}
-                        <p className="live-hint">Use the configured default or a model advertised by your CLI. Advanced settings accept options such as --resume for the native terminal. No API key is stored in this UI.</p>
+                        {modelsLoading && (
+                          <p className="live-hint" role="status">
+                            Discovering models from Gemini CLI…
+                          </p>
+                        )}
+                        {modelsError && (
+                          <details className="model-discovery-error">
+                            <summary>Using CLI configured default</summary>
+                            <p>{modelsError}</p>
+                            <button
+                              type="button"
+                              className="live-action"
+                              onClick={() => setModelRetry((n) => n + 1)}
+                            >
+                              Retry model discovery
+                            </button>
+                          </details>
+                        )}
+                        <p className="live-hint">
+                          Use the configured default or a model advertised by
+                          your CLI. Shared Gemini sessions accept the Model
+                          setting. Other CLI arguments are available for custom
+                          executables. No API key is stored in this UI.
+                        </p>
                       </div>
                     )}
                     {newAgent === "custom" && (
@@ -1366,15 +1957,16 @@ export default function LiveApp({ token }: { token: string }) {
                         />
                       </label>
                     )}
-                    <details className="advanced-settings"><summary>Advanced settings</summary>
-                    <label>
-                      Arguments (JSON array)
-                      <input
-                        value={args}
-                        onChange={(event) => setArgs(event.target.value)}
-                        placeholder={'["--flag"]'}
-                      />
-                    </label>
+                    <details className="advanced-settings">
+                      <summary>Advanced settings</summary>
+                      <label>
+                        Arguments (JSON array)
+                        <input
+                          value={args}
+                          onChange={(event) => setArgs(event.target.value)}
+                          placeholder={'["--flag"]'}
+                        />
+                      </label>
                     </details>
                     <div className="modal-footer">
                       <button
@@ -1386,7 +1978,15 @@ export default function LiveApp({ token }: { token: string }) {
                       </button>
                       <button
                         className="primary-button"
-                        disabled={busy || !connected || !info || (newAgent !== "custom" && !info?.agents.find((agent) => agent.id === newAgent)?.available)}
+                        disabled={
+                          busy ||
+                          !connected ||
+                          !info ||
+                          !newAgent ||
+                          (newAgent !== "custom" &&
+                            !info?.agents.find((agent) => agent.id === newAgent)
+                              ?.available)
+                        }
                       >
                         {busy ? "Starting…" : "Start session"}
                         <ArrowRight size={14} />

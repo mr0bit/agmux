@@ -1,6 +1,6 @@
 //! Structured Git review diffs.
 pub use agmux_proto::{DiffHunk, DiffLine, DiffLineType, DiffScope, FileDiff};
-use std::{path::Path, process::Command};
+use std::{io::Read, path::Path, process::Command};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DiffError {
@@ -39,6 +39,13 @@ pub fn calculate_diff(
     if probe.stdout != b"true\n" && probe.stdout != b"true\r\n" {
         return Err(DiffError::NotRepository);
     }
+    let has_head = Command::new("git")
+        .current_dir(cwd)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()?
+        .status
+        .success();
+    let include_untracked = matches!(scope, DiffScope::FullUncommitted | DiffScope::SessionDiff);
     let mut command = Command::new("git");
     command.current_dir(cwd).args([
         "-c",
@@ -54,7 +61,25 @@ pub fn calculate_diff(
             command.arg(baseline.ok_or(DiffError::MissingBaseline)?);
         }
         DiffScope::FullUncommitted => {
-            command.arg("HEAD");
+            if has_head {
+                command.arg("HEAD");
+            } else {
+                // Compare the final working tree against Git's empty tree, so
+                // staged additions also appear before the first commit. Ask
+                // Git for the hash to respect SHA-256 repositories, without
+                // writing an object or changing the index.
+                let empty = Command::new("git")
+                    .current_dir(cwd)
+                    .stdin(std::process::Stdio::null())
+                    .args(["hash-object", "-t", "tree", "--stdin"])
+                    .output()?;
+                if !empty.status.success() {
+                    return Err(DiffError::Git(
+                        String::from_utf8_lossy(&empty.stderr).trim().into(),
+                    ));
+                }
+                command.arg(String::from_utf8_lossy(&empty.stdout).trim());
+            }
         }
         DiffScope::VersusTarget => {
             let target = target.unwrap_or("main");
@@ -67,7 +92,10 @@ pub fn calculate_diff(
             command.args(["HEAD~1", "HEAD"]);
         }
         DiffScope::Staged => {
-            command.args(["--cached", "HEAD"]);
+            command.arg("--cached");
+            if has_head {
+                command.arg("HEAD");
+            }
         }
     }
     let output = command.arg("--").output()?;
@@ -76,7 +104,82 @@ pub fn calculate_diff(
             String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         ));
     }
-    parse(&String::from_utf8_lossy(&output.stdout))
+    let mut files = parse(&String::from_utf8_lossy(&output.stdout))?;
+    if include_untracked {
+        let untracked = Command::new("git")
+            .current_dir(cwd)
+            .args(["ls-files", "--others", "--exclude-standard", "-z"])
+            .output()?;
+        if !untracked.status.success() {
+            return Err(DiffError::Git(
+                String::from_utf8_lossy(&untracked.stderr).trim().into(),
+            ));
+        }
+        for bytes in untracked
+            .stdout
+            .split(|b| *b == 0)
+            .filter(|b| !b.is_empty())
+        {
+            let name = String::from_utf8_lossy(bytes).into_owned();
+            let path = cwd.join(&name);
+            let metadata = match std::fs::symlink_metadata(&path) {
+                Ok(m) => m,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            let text = if metadata.file_type().is_symlink() {
+                std::fs::read_link(&path)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .ok()
+            } else if metadata.is_file() && metadata.len() <= 1_000_000 {
+                let mut text = String::new();
+                std::fs::File::open(&path)
+                    .and_then(|file| file.take(1_000_001).read_to_string(&mut text))
+                    .ok()
+                    .and_then(|_| (text.len() <= 1_000_000 && !text.contains('\0')).then_some(text))
+            } else {
+                None
+            };
+            let mut file = FileDiff {
+                old_path: None,
+                new_path: Some(name),
+                hunks: Vec::new(),
+            };
+            if let Some(text) = text {
+                let mut lines: Vec<_> = text
+                    .lines()
+                    .enumerate()
+                    .map(|(i, line)| DiffLine {
+                        kind: DiffLineType::Added,
+                        content: line.into(),
+                        old_line: None,
+                        new_line: Some(i as u64 + 1),
+                    })
+                    .collect();
+                let count = lines.len() as u64;
+                if !text.is_empty() && !text.ends_with('\n') {
+                    lines.push(DiffLine {
+                        kind: DiffLineType::NoNewline,
+                        content: " No newline at end of file".into(),
+                        old_line: None,
+                        new_line: None,
+                    });
+                }
+                if count > 0 {
+                    file.hunks.push(DiffHunk {
+                        old_start: 0,
+                        old_count: 0,
+                        new_start: 1,
+                        new_count: count,
+                        header: format!("@@ -0,0 +1,{count} @@"),
+                        lines,
+                    });
+                }
+            }
+            files.push(file);
+        }
+    }
+    Ok(files)
 }
 
 fn range(s: &str) -> Result<(u64, u64), DiffError> {

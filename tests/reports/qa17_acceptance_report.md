@@ -1,5 +1,10 @@
 # Issue #17 — implementation and acceptance record
 
+> Historical batch-1 record. The approved batch-2 shared-context design supersedes
+> the independent Terminal/context behavior described below. See
+> [the current batch-2 report](qa17_batch2_acceptance_report.md) for runtime behavior
+> and current verification evidence.
+
 Date: 2026-11-18 (Africa/Cairo). Source: this PR, based on main
 `93f6790cd22e122c245146f309dec40ee548afff`. Local results refer to the PR working
 tree before commit; CI records its exact head SHA. No new release has been made.

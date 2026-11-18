@@ -1,63 +1,72 @@
+# Gemini managed conversation design
 
-# Gemini conversation design — issue #17
+## Ownership — LLD-UX-SHARED-CONTEXT-113 / LLD-UX-CHAT-MESSAGES-105
+A managed GUI Gemini session owns one lazy ACP process and one provider session
+ID. Chat and Agent Terminal are two presentations of that same conversation.
+Terminal is explicitly a provider transcript/prompt interface, not an OS shell
+or a second native Gemini TUI. Switching views never starts a provider or forks
+context. Legacy native/custom/CLI sessions retain their raw PTY interface.
+The API's explicit --version diagnostic path remains native for launch checks.
 
-## LLD-UX-CHAT-MESSAGES-105 / LLD-UX-TURN-LIFECYCLE-106
-The daemon supervises one lazy `gemini --acp` subprocess for each Gemini session.
-ACP uses JSON-RPC lines on stdio: initialize v1, session/new, session/prompt,
-session/update and session/cancel. The official Windows npm launcher resolution
-is reused; no shell-assembled command is executed. `GEMINI_CLI_NO_RELAUNCH=1`
-keeps the directly supervised process responsible for ACP. Credentials stay in
-the CLI's local settings/environment. No browser credential fields are added.
-The client advertises no filesystem/terminal proxy capabilities. Native Gemini
-tools remain under the provider's normal approval policy; approval requests are
-queued and surfaced with the exact provider options, never auto-approved.
+Managed creation records an IDLE logical session (PID zero until its provider
+starts), its project, initial Git baseline and conversation record. The actual
+ACP PID is recorded after spawn. Existing PTY teardown only kills actual PTYs;
+managed end uses the conversation lifecycle, never PID-zero process signalling.
+Companion Reply and SendMessage entry points route to the same managed actor;
+a busy actor rejects a concurrent new message explicitly rather than silently
+injecting text into another process. The browser uses authenticated IPC only.
 
-The native PTY and ACP are **independent conversation contexts**, sharing the
-project and configured model. The UI explains this. ACP JSON never enters the
-PTY stream; native TUI banners never become assistant messages.
+## Turn state — LLD-UX-TURN-LIFECYCLE-106 / LLD-UX-CHAT-ISOLATION-111
+Initialize v1, session/new, session/prompt and session/update use JSON-RPC stdio.
+State is idle/working/permission/cancelling/cancelled/failed/ended. Request IDs
+are deduplicated per session under the state lock. Native CLI process lifetime
+does not imply an active turn. Initialization/session creation have 45-second
+deadlines; turns have a 300-second watchdog; an unacknowledged Stop reaps the
+provider after five seconds. Explicit options are returned for permissions;
+the adapter never auto-approves or fabricates an assistant response.
 
-States: idle → working → idle; permission suspends working; Stop requests
-cancellation; cancelled allows another turn on a healthy ACP session. Failures,
-startup errors and timeouts become failed with guidance to start a new session.
-Initialization and session creation each have a 45-second deadline; a turn has a
-300-second deadline including approval wait. Stop kills an unresponsive provider
-after five seconds. Ending a session and graceful daemon shutdown reap ACP too.
-The bridge returns immediately after accepting a turn. Browser reload/switching
-recovers daemon-held messages; daemon restart does not persist ACP conversations.
-The first phase intentionally does not claim durable provider-session recovery.
+Frame/text limits are 2 MiB, active loaded conversations 32 and pending approvals
+32. Transports are reaped on session end and graceful daemon shutdown, using
+process groups on Unix and process-tree termination on Windows. Official npm
+launcher resolution and ordinary Windows project paths are retained.
+GEMINI_CLI_NO_RELAUNCH keeps the supervised process directly responsible for ACP.
 
-## LLD-UX-CHAT-ISOLATION-111
-A bounded session map owns transports and histories. Per-session state lock
-atomically validates idle state, deduplicates the supplied request ID and records
-the user message before spawning work. Repeated accepted IDs return the same
-state without a second provider prompt. The browser reuses an ID after an
-ambiguous HTTP failure. Concurrent new requests are rejected, never silently
-queued. Session-scoped ACP IDs filter incoming updates. Histories cap text bytes
-at 2 MiB, user turns at under 190 message records, and open conversations at 32;
-frames cap at 2 MiB. Browser snapshots contain lightweight statuses for all
-conversations so the sidebar updates even outside Chat. Full transcript polling
-is limited to the open conversation.
+## Shared data — LLD-UX-SHARED-STATE-114 / LLD-UX-RETAINED-HISTORY-124
+Both views read daemon-owned messages, provider identity, tool events, pending
+approvals and state. Their input draft is controlled by per-session UI state;
+presentation changes keep the same component/operation/request-ID ownership.
+Lightweight snapshot metadata contains states, actual activity timestamps and
+managed IDs. Ended records are loaded read-only without consuming live slots.
 
-## LLD-UX-PROVIDER-MODELS-108
-A separate short-lived ACP session discovers `models.availableModels` and
-`currentModelId`; it does not send a model prompt. Successful inventories cache
-by canonical project directory for 60 seconds, at most 32 entries; at most two
-probes run concurrently. The probe is terminated after discovery/failure. Missing
-authentication or unsupported inventories produce an honest configured-default
-fallback. CLI-advertised inventory is not a promise of account quota/entitlement.
-The chosen model is passed once to the native process and stored in the daemon
-conversation configuration for ACP. Advanced native CLI options are not blindly
-forwarded into the structured adapter.
+SQLite managed_conversations retains transcript/model/request identifiers and
+activity on accepted input, completed/failed turn and end. No provider credentials
+are stored in the browser or transcript. Ending stops transport and retains
+history. Existing startup recovery makes orphaned sessions inactive; opening
+that history never automatically resends a prompt or starts a new provider.
+This is retained history, not automatic active-provider recovery after a daemon
+restart. Old volatile histories cannot be reconstructed from a terminal screenshot.
 
-## Verification seams
-`TEST-VER-UX-105/106/111` exercise real HTTP + IPC + daemon + external ACP fixture:
-ordered chunks, two turns, multiline, idempotency, rejected concurrency, separate
-sessions/reload, explicit permission rejection, Stop and provider exit.
-`TEST-VER-UX-108` probes the provider boundary and checks the advertised default.
-Fixtures cover the protocol contract, not authenticated Gemini/model quality.
-Authenticated two-turn native Windows evidence is still required for acceptance.
+## Edit review — LLD-UX-PROPOSED-DIFF-116 / LLD-UX-EDIT-APPROVAL-117
+Tool updates retain actual content blocks and tool IDs. Approval requests retain
+the provider's complete toolCall, including diff path/oldText/newText when
+provided. Pending permissions are queued and separately exposed in snapshots.
+Only advertised option IDs for the currently pending request are accepted.
+Review shows a truthful unavailable-preview message when no diff is supplied.
+A preview never writes files. The real provider writes after approval; applied
+review is recalculated independently from Git/filesystem state.
 
-Windows ACP project paths are simplified with dunce before both process launch
-and session/new serialization. The provider fixture rejects Windows verbatim
-project paths, guarding Node module resolution alongside the existing launcher
-entry-path regression.
+## Models — LLD-UX-PROVIDER-MODELS-108
+Inventory/default comes from an actual transient ACP session/new, without a
+model prompt. Successful project-scoped probes cache for 60 seconds, max 32
+entries and two concurrent probes. Unsupported/auth/deadline failures preserve
+an honest CLI-default fallback. Shared sessions accept one explicit model flag;
+unsupported native CLI arguments fail clearly rather than being ignored.
+Other native diagnostics remain available through explicit custom executables.
+
+## Verification
+Public browser/HTTP/IPC/daemon tests use an external provider boundary fixture
+with process/session IDs and ordered request history. They prove shared routing,
+concurrency, request dedupe, approval/rejection and retention without claiming
+fixture text is a real model response. Native Windows packaging runs the same
+regressions. Authenticated Windows context and actual display scaling remain
+separate user acceptance evidence.

@@ -19,6 +19,8 @@ export type Panel = {
   kind: string;
 };
 export type Snapshot = {
+  managed_sessions?: string[];
+  chat_activity?: Record<string,number>;
   chat_states?: Record<string,string>;
   sessions: NativeSession[];
   metadata: Record<string, Metadata>;

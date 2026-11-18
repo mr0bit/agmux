@@ -1,5 +1,5 @@
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createConnection } from "node:net";
 import path from "node:path";
@@ -39,6 +39,7 @@ execFileSync(
   ],
   { cwd: project },
 );
+await writeFile(path.join(project,".git/info/exclude"),"acp-requests.jsonl\n");
 const env = {
   ...process.env,
   AGMUX_SOCK: path.join(root, path.basename(root)+"-socket"),
@@ -81,16 +82,17 @@ if (process.env.AGMUX_ACP_FIXTURE === "1") {
   env.PATH=bin+path.delimiter+inheritedPath;
 }
 delete env.AGMUX_UI_DIST;
-const daemon = spawn(path.join(bin, "agmuxd" + suffix), [], {
-  cwd: project,
-  env,
-  stdio: ["ignore", "inherit", "inherit"],
-});
+function launchDaemon() {
+ return spawn(path.join(bin,"agmuxd"+suffix),[],{cwd:project,env,stdio:["ignore","inherit","inherit"]});
+}
+let daemon=launchDaemon();
 let gui;
+let restartTimer;
 let stopping = false;
 async function stop() {
   if (stopping) return;
   stopping = true;
+  clearInterval(restartTimer);
   gui?.kill("SIGTERM");
   daemon.kill("SIGTERM");
   await new Promise((resolve) => setTimeout(resolve, 300));
@@ -127,3 +129,20 @@ gui.on("exit", (code) => {
     void stop();
   }
 });
+
+// Test-only restart control lives outside the application/HTTP API.
+let restarting=false;
+restartTimer=setInterval(async()=>{
+ if(stopping||restarting)return;
+ try {await readFile(path.join(root,"restart-request"));}catch{return;}
+ restarting=true;
+ try {
+  await rm(path.join(root,"restart-request"),{force:true});
+  if(daemon.exitCode===null){
+   const exited=new Promise(resolve=>daemon.once("exit",resolve));daemon.kill("SIGTERM");
+   await Promise.race([exited,new Promise(resolve=>setTimeout(resolve,2000))]);
+   if(daemon.exitCode===null){daemon.kill("SIGKILL");await exited;}
+  }
+  if(!stopping){daemon=launchDaemon();await writeFile(path.join(root,"restart-complete"),String(daemon.pid));}
+ } finally {restarting=false;}
+},100);

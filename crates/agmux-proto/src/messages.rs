@@ -855,6 +855,11 @@ pub enum CompanionRequest {
     Models {
         cwd: String,
     },
+    StartChat {
+        session_id: String,
+        cwd: String,
+        model: Option<String>,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CompanionResponse {

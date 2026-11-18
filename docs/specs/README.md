@@ -32,3 +32,5 @@ Every requirement in these specifications is atomic (implementable within a sing
 10. [`10_remote_federation_spec.md`](./10_remote_federation_spec.md): SSH & Tailscale remote daemon federation (`C`), token authentication, remote host subtree mounting, GitHub release asset binary bootstrap with SHA-256 verification, and self-healing diagnostics.
 
 12. [`12_companion_acceptance_spec.md`](12_companion_acceptance_spec.md): Issue #17 interactive browser and native Windows acceptance contracts; tracked separately from version-launch smoke checks.
+
+13. [Session workflow acceptance](13_session_workflow_spec.md): shared context, live/proposed diffs, session lifecycle, navigation and keyboard contracts.

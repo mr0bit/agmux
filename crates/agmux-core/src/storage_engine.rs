@@ -58,6 +58,7 @@ impl StorageEngine {
         tx.execute_batch("CREATE TABLE IF NOT EXISTS workspace_metadata (session_id TEXT PRIMARY KEY, project TEXT NOT NULL, group_path TEXT NOT NULL, favorite INTEGER NOT NULL, archived INTEGER NOT NULL);")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS companion_notifications (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, timestamp INTEGER NOT NULL);")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS companion_panels (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, UNIQUE(session_id, kind, target)); CREATE TABLE IF NOT EXISTS companion_selection (id INTEGER PRIMARY KEY CHECK(id=1), session_id TEXT NOT NULL); CREATE TABLE IF NOT EXISTS companion_panel_selection (id INTEGER PRIMARY KEY CHECK(id=1), panel_id INTEGER NOT NULL);")?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS managed_conversations (session_id TEXT PRIMARY KEY, content TEXT NOT NULL, status TEXT NOT NULL, updated_at INTEGER NOT NULL);")?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS session_notes (session_id TEXT NOT NULL, page INTEGER NOT NULL, content TEXT NOT NULL, PRIMARY KEY(session_id, page));")?;
         tx.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS session_notes_fts USING fts5(session_id UNINDEXED, page UNINDEXED, content, tokenize='trigram'); CREATE TRIGGER IF NOT EXISTS session_notes_insert AFTER INSERT ON session_notes BEGIN INSERT INTO session_notes_fts(rowid, session_id, page, content) VALUES (new.rowid, new.session_id, new.page, new.content); END; CREATE TRIGGER IF NOT EXISTS session_notes_update AFTER UPDATE ON session_notes BEGIN DELETE FROM session_notes_fts WHERE rowid=old.rowid; INSERT INTO session_notes_fts(rowid, session_id, page, content) VALUES (new.rowid, new.session_id, new.page, new.content); END; CREATE TRIGGER IF NOT EXISTS session_notes_delete AFTER DELETE ON session_notes BEGIN DELETE FROM session_notes_fts WHERE rowid=old.rowid; END;")?;
         tx.execute_batch("INSERT INTO session_notes_fts(rowid, session_id, page, content) SELECT rowid, session_id, page, content FROM session_notes WHERE rowid NOT IN (SELECT rowid FROM session_notes_fts);")?;
@@ -542,6 +543,39 @@ impl StorageEngine {
             "INSERT INTO sessions (id,pid,cwd,command,created_at,state) VALUES (?1,?2,?3,?4,?5,?6)",
             params![s.session_id, s.pid, s.cwd, s.command, s.created_at, s.state],
         )?;
+        Ok(())
+    }
+    /// Persist a managed provider transcript without storing provider credentials.
+    pub fn save_conversation(
+        &self,
+        id: &str,
+        content: &str,
+        status: &str,
+        updated: u64,
+    ) -> Result<(), StorageError> {
+        self.connection.execute("INSERT INTO managed_conversations(session_id,content,status,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(session_id) DO UPDATE SET content=excluded.content,status=excluded.status,updated_at=excluded.updated_at",params![id,content,status,updated])?;
+        Ok(())
+    }
+    pub fn conversation(&self, id: &str) -> Result<Option<String>, StorageError> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT content FROM managed_conversations WHERE session_id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+    pub fn conversation_index(&self) -> Result<Vec<(String, String, u64)>, StorageError> {
+        let mut q = self
+            .connection
+            .prepare("SELECT session_id,status,updated_at FROM managed_conversations")?;
+        Ok(q.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+    pub fn set_session_pid(&self, id: &str, pid: u32) -> Result<(), StorageError> {
+        self.connection
+            .execute("UPDATE sessions SET pid=?1 WHERE id=?2", params![pid, id])?;
         Ok(())
     }
     /// Record the Git commit captured at session startup.
@@ -1046,5 +1080,29 @@ mod tests {
         db.update_session_state("one", "DEAD").expect("update");
         assert!(db.list_active_sessions().expect("list").is_empty());
         db.remove_session("one").expect("remove");
+    }
+}
+
+#[cfg(test)]
+mod conversation_retention_tests {
+    #[test]
+    fn retained_history_survives_database_reopen() {
+        let root = std::env::temp_dir().join(format!("agmux-history-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("db");
+        {
+            let db = super::StorageEngine::open(&path).unwrap();
+            db.save_conversation("one", r#"{"messages":[{"text":"kept"}]}"#, "ended", 123)
+                .unwrap();
+        }
+        {
+            let db = super::StorageEngine::open(&path).unwrap();
+            assert!(db.conversation("one").unwrap().unwrap().contains("kept"));
+            assert_eq!(
+                db.conversation_index().unwrap(),
+                vec![("one".into(), "ended".into(), 123)]
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

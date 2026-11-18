@@ -22,13 +22,12 @@ async function request<T>(
   ) as Promise<T>;
 }
 async function createShell(page: Page, title: string) {
-  await page.getByRole("button", { name: "New session", exact: true }).click();
-  await page.getByLabel("Session name").fill(title);
-  await page.getByLabel("Agent", { exact: true }).selectOption("shell");
-  await page
-    .getByRole("button", { name: "Start session", exact: true })
-    .click();
+  // Shell remains a native backend capability, not a GUI provider choice.
+  const info=await request<{value:{cwd:string}}>(page,"/api/info");
+  const result=await request<{status:number}>(page,"/api/spawn",{agent:"shell",cwd:info.value.cwd,title,args:[]});
+  expect(result.status).toBe(200);await page.reload();
   await expect(page.locator("h1")).toHaveText(title);
+  await page.getByRole("button",{name:"Terminal",exact:true}).click();
   await expect(page.locator(".xterm-screen")).toBeVisible();
 }
 async function send(page: Page, text: string) {
@@ -107,9 +106,7 @@ test.describe.serial("actual Rust daemon integration", () => {
       "# Saved by the live UI\n",
     );
     await page.getByRole("button", { name: "Git", exact: true }).click();
-    await expect(page.locator(".git-view .diff-code")).toContainText(
-      "Saved by the live UI",
-    );
+    await expect(page.locator(".git-view").getByText("# Saved by the live UI", {exact: true})).toBeVisible();
     await page.getByRole("button", { name: "Files", exact: true }).click();
     await editor.fill("# Unsaved browser edit\n");
     await writeFile(
@@ -292,7 +289,7 @@ test("Gemini CLI provider setup and real installed CLI launch", async ({ page })
   await expect(page.locator("h1")).toHaveText("Gemini CLI verification");
   await page.getByRole("button", { name: "Chat", exact: true }).click();
   await expect.poll(async () => (await request<{value:{screen:string}}>(page,"/api/snapshot")).value.screen).toContain("0.68.0");
-  await expect(page.getByRole("log",{name:"Conversation messages"})).not.toContainText("0.68.0");
+  await expect(page.getByRole("log",{name:"Conversation messages"})).toHaveCount(0);
   await expect(page.locator(".live-chat-header")).toContainText("Gemini");
   await page.screenshot({ path: path.resolve("../../../../../docs/assets/screenshots/gemini_provider_verification.png"), fullPage: true });
 });

@@ -1,6 +1,14 @@
 //! Persistent Gemini ACP conversations, independent of the interactive terminal.
 use anyhow::{Context, Result, bail, ensure};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+type Db = Arc<std::sync::Mutex<agmux_core::storage_engine::StorageEngine>>;
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 use std::{
     collections::HashMap,
     path::Path,
@@ -18,8 +26,10 @@ use tokio::{
 };
 
 type Pending = HashMap<u64, oneshot::Sender<Result<Value, String>>>;
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
 struct State {
+    updated_at: u64,
     messages: Vec<Value>,
     status: String,
     error: Option<String>,
@@ -37,6 +47,7 @@ struct Wire {
     next: AtomicU64,
 }
 struct Chat {
+    owner: Option<(Db, String)>,
     state: Arc<Mutex<State>>,
     wire: Mutex<Option<Arc<Wire>>>,
 }
@@ -45,17 +56,43 @@ fn chats() -> &'static Mutex<HashMap<String, Arc<Chat>>> {
     CHATS.get_or_init(Mutex::default)
 }
 fn snapshot(s: &State) -> Value {
-    json!({"messages":s.messages,"status":s.status,"error":s.error,"permission":s.permissions.first(),"models":s.models,"model":s.model})
+    json!({"messages":s.messages,"status":s.status,"error":s.error,"permission":s.permissions.first(),"permissions":s.permissions,"models":s.models,"model":s.model,"provider_session_id":s.session,"updated_at":s.updated_at})
 }
 impl Chat {
     fn new() -> Self {
         Self {
+            owner: None,
             state: Arc::new(Mutex::new(State {
                 status: "idle".into(),
                 ..Default::default()
             })),
             wire: Mutex::new(None),
         }
+    }
+    async fn save(&self) -> Result<()> {
+        let Some((db, id)) = &self.owner else {
+            return Ok(());
+        };
+        let (content, status, updated) = {
+            let state = self.state.lock().await;
+            (
+                serde_json::to_string(&*state)?,
+                state.status.clone(),
+                state.updated_at,
+            )
+        };
+        let db = db.clone();
+        let id = id.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let db = db.lock().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            db.save_conversation(&id, &content, &status, updated)?;
+            if status == "ended" {
+                db.update_session_state(&id, "DEAD")?;
+            }
+            Ok(())
+        })
+        .await??;
+        Ok(())
     }
     async fn connect(&self, cwd: &Path) -> Result<(Arc<Wire>, String)> {
         // Node's project/module resolution expects ordinary Windows paths,
@@ -69,6 +106,12 @@ impl Chat {
         }
         let model = self.state.lock().await.model.clone();
         let w = Wire::start(cwd, model.as_deref(), self.state.clone()).await?;
+        if let Some((db, id)) = &self.owner {
+            let pid = w.child.lock().await.id().unwrap_or(0);
+            db.lock()
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?
+                .set_session_pid(id, pid)?;
+        }
         // Publish the wire before handshaking so Stop can kill startup as well.
         *slot = Some(w.clone());
         drop(slot);
@@ -171,6 +214,7 @@ impl Wire {
                         if s.session.as_deref() != v["params"]["sessionId"].as_str() {
                             continue;
                         }
+                        s.updated_at = now();
                         if update["sessionUpdate"] == "agent_message_chunk" {
                             if let Some(text) = update["content"]["text"].as_str() {
                                 if s.bytes + text.len() > 2 * 1024 * 1024 {
@@ -180,6 +224,7 @@ impl Wire {
                                     );
                                     break;
                                 }
+                                s.updated_at = now();
                                 s.bytes += text.len();
                                 if s.messages.last().is_none_or(|m| m["role"] != "assistant") {
                                     let id = format!("assistant-{}", s.messages.len());
@@ -207,14 +252,19 @@ impl Wire {
                                 .chars()
                                 .take(1000)
                                 .collect();
-                            let item = json!({"id":format!("tool-{id}"),"role":"tool","text":title,"status":update["status"]});
+                            let item = json!({"id":format!("tool-{id}"),"role":"tool","text":title,"status":update["status"],"content":update["content"],"tool_call_id":update["toolCallId"]});
                             if let Some(existing) =
                                 s.messages.iter_mut().find(|m| m["id"] == item["id"])
                             {
                                 if update["title"].is_string() {
                                     existing["text"] = item["text"].clone();
                                 }
-                                existing["status"] = item["status"].clone();
+                                if !item["status"].is_null() {
+                                    existing["status"] = item["status"].clone();
+                                }
+                                if item["content"].is_array() {
+                                    existing["content"] = item["content"].clone();
+                                }
                             } else if s.messages.len() < 1000 {
                                 s.messages.push(item);
                             }
@@ -222,13 +272,14 @@ impl Wire {
                     } else if method == "session/request_permission" {
                         let mut s = state.lock().await;
                         if s.session.as_deref() == v["params"]["sessionId"].as_str() {
+                            s.updated_at = now();
                             s.status = "permission".into();
                             if s.permissions.len() >= 32 {
                                 s.error = Some("Too many pending provider approvals".into());
                                 break;
                             }
                             s.permissions.push(
-                                json!({"id":v["id"],"title":v["params"]["toolCall"]["title"],"options":v["params"]["options"]}),
+                                json!({"id":v["id"],"title":v["params"]["toolCall"]["title"],"options":v["params"]["options"],"tool_call":v["params"]["toolCall"]}),
                             );
                         }
                     } else if v.get("id").is_some() {
@@ -308,7 +359,14 @@ impl Wire {
 }
 
 /// Authenticated daemon seam. Caller resolves actual session/project ownership.
-pub async fn request(id: &str, cwd: &Path, operation: &str, payload: &str) -> Result<String> {
+pub async fn request(
+    id: &str,
+    cwd: &Path,
+    operation: &str,
+    payload: &str,
+    db: Db,
+    ended: bool,
+) -> Result<String> {
     if operation == "close" {
         close(id).await;
         return Ok("{}".into());
@@ -316,14 +374,45 @@ pub async fn request(id: &str, cwd: &Path, operation: &str, payload: &str) -> Re
     let chat = {
         let mut hub = chats().lock().await;
         ensure!(
-            hub.len() < 32 || hub.contains_key(id),
+            ended || hub.len() < 32 || hub.contains_key(id),
             "Too many open conversations. End an unused session."
         );
-        hub.entry(id.into())
-            .or_insert_with(|| Arc::new(Chat::new()))
-            .clone()
+        if let Some(chat) = hub.get(id) {
+            chat.clone()
+        } else {
+            let saved=db.lock().map_err(|e|anyhow::anyhow!(e.to_string()))?.conversation(id)?.context("This is a native CLI session. Start a managed Gemini session for shared views.")?;
+            let mut state: State = serde_json::from_str(&saved)?;
+            if ended {
+                state.status = "ended".into();
+                state.permissions.clear();
+            } else if matches!(
+                state.status.as_str(),
+                "working" | "permission" | "cancelling"
+            ) {
+                state.status = "failed".into();
+                state.permissions.clear();
+                state.error = Some(
+                    "The previous turn was interrupted. Start a new session to continue safely."
+                        .into(),
+                );
+            }
+            let chat = Arc::new(Chat {
+                owner: Some((db.clone(), id.into())),
+                state: Arc::new(Mutex::new(state)),
+                wire: Mutex::new(None),
+            });
+            // Retained inactive records do not consume the live-session limit.
+            if !ended {
+                hub.insert(id.into(), chat.clone());
+            }
+            chat
+        }
     };
     let value: Value = serde_json::from_str(payload)?;
+    ensure!(
+        !ended || operation == "state",
+        "This session has ended; its history is read-only"
+    );
     match operation {
         "state" => {}
         "configure" => {
@@ -365,6 +454,7 @@ pub async fn request(id: &str, cwd: &Path, operation: &str, payload: &str) -> Re
                 s.messages.len() < 190 && s.bytes + text.len() <= 2 * 1024 * 1024,
                 "Conversation is full. Start a new session."
             );
+            s.updated_at = now();
             s.bytes += text.len();
             s.requests.push(request.clone());
             s.messages
@@ -386,6 +476,10 @@ pub async fn request(id: &str, cwd: &Path, operation: &str, payload: &str) -> Re
                 }
                 .await;
                 let mut s = owned.state.lock().await;
+                if s.status == "ended" {
+                    return;
+                }
+                s.updated_at = now();
                 s.permissions.clear();
                 match result {
                     Ok(v) => {
@@ -401,14 +495,24 @@ pub async fn request(id: &str, cwd: &Path, operation: &str, payload: &str) -> Re
                         s.status = if cancelled { "cancelled" } else { "failed" }.into();
                         if !cancelled {
                             s.error = Some(format!(
-                                "{e}. Check Gemini sign-in in Terminal, then start a new session. Your message has not been resent."
+                                "{e}. Check Gemini CLI sign-in on this machine, then start a new session. Your message has not been resent."
                             ));
                         }
                         drop(s);
                         if let Some(w) = owned.wire.lock().await.take() {
                             w.stop().await;
                         }
+                        if let Err(e) = owned.save().await {
+                            owned.state.lock().await.error =
+                                Some(format!("Could not retain conversation: {e}"));
+                        }
+                        return;
                     }
+                }
+                drop(s);
+                if let Err(e) = owned.save().await {
+                    owned.state.lock().await.error =
+                        Some(format!("Could not retain conversation: {e}"));
                 }
             });
         }
@@ -477,13 +581,25 @@ pub async fn request(id: &str, cwd: &Path, operation: &str, payload: &str) -> Re
         }
         _ => bail!("Unknown chat operation"),
     }
+    if operation != "state" {
+        chat.save().await?;
+    }
     Ok(snapshot(&*chat.state.lock().await).to_string())
 }
 /// Reap ACP subprocesses when their owning native session is ended.
 pub async fn close(id: &str) {
     if let Some(chat) = chats().lock().await.remove(id) {
+        {
+            let mut s = chat.state.lock().await;
+            s.status = "ended".into();
+            s.permissions.clear();
+            s.updated_at = now();
+        }
         if let Some(w) = chat.wire.lock().await.take() {
             w.stop().await;
+        }
+        if let Err(e) = chat.save().await {
+            tracing::error!(%e,"Retaining ended conversation failed");
         }
     }
 }
@@ -528,16 +644,68 @@ pub async fn close_all() {
 }
 
 /// Lightweight status snapshot for all conversations; transcripts are fetched separately.
-pub async fn statuses() -> String {
+pub async fn statuses(db: Db) -> Result<String> {
+    let records = db
+        .lock()
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?
+        .conversation_index()?;
+    let mut states = serde_json::Map::new();
+    let mut activity = serde_json::Map::new();
+    let mut managed = Vec::new();
+    for (id, status, at) in records {
+        managed.push(id.clone());
+        states.insert(id.clone(), json!(status));
+        activity.insert(id, json!(at));
+    }
     let entries: Vec<_> = chats()
         .lock()
         .await
         .iter()
-        .map(|(id, chat)| (id.clone(), chat.clone()))
+        .map(|(id, c)| (id.clone(), c.clone()))
         .collect();
-    let mut states = serde_json::Map::new();
     for (id, chat) in entries {
-        states.insert(id, json!(chat.state.lock().await.status));
+        let state = chat.state.lock().await;
+        states.insert(id.clone(), json!(state.status));
+        activity.insert(id, json!(state.updated_at));
     }
-    Value::Object(states).to_string()
+    Ok(json!({"states":states,"activity":activity,"managed":managed}).to_string())
+}
+
+pub fn create(db: &Db, id: &str, model: Option<String>) -> Result<()> {
+    let state = State {
+        status: "idle".into(),
+        model,
+        updated_at: now(),
+        ..Default::default()
+    };
+    db.lock()
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?
+        .save_conversation(
+            id,
+            &serde_json::to_string(&state)?,
+            &state.status,
+            state.updated_at,
+        )?;
+    Ok(())
+}
+
+/// End without deleting retained history, including a session never prompted.
+pub async fn end(db: Db, id: &str) -> Result<()> {
+    close(id).await;
+    let mut state: State = {
+        let db = db.lock().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        serde_json::from_str(&db.conversation(id)?.context("Conversation not found")?)?
+    };
+    state.status = "ended".into();
+    state.permissions.clear();
+    state.updated_at = now();
+    let db = db.lock().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    db.save_conversation(
+        id,
+        &serde_json::to_string(&state)?,
+        &state.status,
+        state.updated_at,
+    )?;
+    db.update_session_state(id, "DEAD")?;
+    Ok(())
 }

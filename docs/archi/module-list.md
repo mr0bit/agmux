@@ -187,3 +187,10 @@ separate native CLI view. This module is introduced for the user-approved slices
 not a new ownership registry.
 
 `crates/agmux-daemon::server` owns authenticated IPC dispatch and native prompt submission.
+
+## Batch 2 shared-conversation contract
+The existing `crates/agmux-daemon::gemini_chat` owns one managed provider context
+for both Chat and Terminal presentations. `crates/agmux-core::storage_engine`
+retains conversation snapshots and lifecycle metadata. Existing companion UI
+modules render both views, proposed/applied review and keyboard navigation;
+no browser-side provider process or synthetic assistant response is introduced.

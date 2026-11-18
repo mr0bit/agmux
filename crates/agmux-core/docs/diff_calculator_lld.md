@@ -12,3 +12,10 @@ string is mapped at the browser bridge to `{repository:false,files:[]}`. The
 explicitly scoped sentinel avoids classifying arbitrary Git failures as empty
 changes. `TEST-VER-UX-102` uses a real plain directory and the browser/daemon seam;
 the existing five-scope test retains repository coverage.
+
+## LLD-UX-LIVE-CHANGES-115
+A visible review/Git view refreshes at one-second intervals without resetting its
+loading display. Sequenced responses prevent cross-session/scope overwrites.
+Full/session diffs include git-ignored-aware untracked files, including new text
+files and symlink targets (never dereferencing a link outside the project).
+An unborn HEAD uses the index comparison instead of a failing HEAD revision.

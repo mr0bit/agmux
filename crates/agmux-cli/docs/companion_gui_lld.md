@@ -24,8 +24,7 @@ Browser fixtures check borders/input and resizing. Native Windows fonts and
 
 ### LLD-UX-CHAT-MESSAGES-105 (view)
 `GeminiChat` renders actual ACP user/assistant/tool records, permission controls,
-errors, state and Stop. It never consumes screen snapshots. Other providers keep
-their explicit native transcript view until a structured adapter exists.
+errors, state and Stop. It never consumes screen snapshots. Other native providers retain their explicit native transcript view.
 History remains daemon-owned across UI reload; rendering uses React text nodes.
 
 ### LLD-UX-ADVANCED-SETUP-107
@@ -54,3 +53,45 @@ existing List operation and checks its content capability marker. Older daemons
 respond safely without the marker; the GUI explains how to stop the old daemon
 and relaunch matching executables. It never silently terminates active sessions.
 `TEST-VER-UX-112` has a real IPC stand-in for the prior backend contract.
+
+## Batch 2 session workflow
+LLD-UX-SHARED-CONTEXT-113 / LLD-UX-SHARED-STATE-114: managed Chat and Terminal
+share one component, per-session draft and daemon context. Agent Terminal is a
+monospace presentation of actual provider messages, not a second native CLI.
+
+LLD-UX-INACTIVE-ARCHIVE-118: active and ended session collections are disjoint.
+Inactive retains read-only conversation history. Explicit archive toggles durable
+workspace metadata, exposes Archived separately and supports restoration to
+Inactive. No implicit archive or history deletion occurs.
+
+LLD-UX-SESSION-VIEWS-119: Activity is a flat recent-activity ordering with status
+badges. Projects groups active sessions by full canonical project path, avoiding
+same-basename collisions. Inactive is separate in both views. View preference
+survives reload; archived sessions require explicit visibility.
+
+LLD-UX-COMPACT-ROWS-120: live compact rows are 34px buttons in 36px virtual rows.
+Titles remain one line with truncation, accessible labels and status. Comfortable
+mode remains available; existing user density preference is respected.
+
+LLD-UX-AGENT-ONLY-121: Shell is removed from GUI choices/defaults. An installed
+agent is selected, or the UI provides installation/refresh guidance. Explicit
+custom executables and underlying native CLI capabilities remain available.
+
+LLD-UX-KEYBOARD-WORKFLOW-122: Ctrl/Cmd+Shift+P opens commands, Ctrl/Cmd+P quick
+switching, Ctrl/Cmd+B sidebar, Ctrl/Cmd+backquote Terminal, and Ctrl/Cmd+K then
+Ctrl/Cmd+S shortcut help. IME composition is ignored. Native xterm input passes
+through except the explicit command-palette chord. Ordinary editing shortcuts
+remain intact. Palette owns arrow/Enter/Escape/Tab navigation and restores focus
+after its DOM is removed; another modal retains its own focus ownership.
+
+LLD-UX-PROPOSED-DIFF-116 / LLD-UX-EDIT-APPROVAL-117: pending provider diff blocks
+are rendered using a line-diff library in a before/after split, independently of
+Applied filesystem diffs. Narrow review panes wrap both columns visibly.
+Unsupported proposals are labeled truthfully. Approving sends an advertised
+permission option, not a browser filesystem write; rejecting leaves disk intact.
+
+LLD-UX-BATCH2-ACCEPTANCE-123: the existing packaged CI suite now also executes
+shared-session, actual file-change, proposed edit, end/archive, project/compact
+and keyboard flows. Capture actual app screenshots and preserve explicit
+external-provider fixture labeling. Authenticated/native display acceptance is
+recorded separately and does not follow from a version-only launch probe.

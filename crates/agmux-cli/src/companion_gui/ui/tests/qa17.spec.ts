@@ -91,7 +91,7 @@ test.describe('QA17 public browser → real Rust daemon → external ACP fixture
  test('TEST-VER-UX-106: explicit permission, cancel and provider exit cannot remain Working',async({page})=>{
   await page.goto('/');await start(page,'Lifecycle');
   await send(page,'ask-permission');await expect(page.getByLabel('Tool permission')).toBeVisible();
-  await page.getByRole('button',{name:'Reject',exact:true}).click();await expect(log(page)).toContainText('Permission: reject-once');await expect(page.getByLabel('Conversation status')).toHaveText('idle');
+  await page.getByLabel('Tool permission').getByRole('button',{name:'Reject',exact:true}).click();await expect(log(page)).toContainText('Permission: reject-once');await expect(page.getByLabel('Conversation status')).toHaveText('idle');
   await send(page,'wait-for-cancel');await expect(page.getByRole('button',{name:'Stop response'})).toBeVisible();await page.getByRole('button',{name:'Stop response'}).click();await expect(page.getByLabel('Conversation status')).toHaveText('cancelled');
   await send(page,'after stop');await expect(log(page)).toContainText('Response 3: after stop');
   await start(page,'Provider rejection');await send(page,'reject-provider');await expect(page.getByLabel('Conversation status')).toHaveText('failed');await expect(page.getByRole('alert').first()).toContainText('Provider rejected this request');
@@ -106,7 +106,7 @@ test.describe('QA17 public browser → real Rust daemon → external ACP fixture
   await page.getByLabel('Arguments (JSON array)').fill('["--model=other"]');await page.getByRole('button',{name:'Start session',exact:true}).click();
   await expect(page.getByRole('dialog').getByRole('alert')).toContainText('Set the Gemini model in either Model or Arguments');
   await page.getByLabel('Arguments (JSON array)').fill('[]');
-  await page.getByLabel('Agent',{exact:true}).selectOption('shell');await expect(page.getByLabel('Gemini model')).toHaveCount(0);
+  await page.getByLabel('Agent',{exact:true}).selectOption('custom');await expect(page.getByLabel('Gemini model')).toHaveCount(0);
   await page.route('**/api/models',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Provider requires sign-in'})}));
   await page.getByLabel('Agent',{exact:true}).selectOption('gemini');
   await expect(page.getByLabel('Gemini model')).toHaveValue('');await expect(page.getByText('Using CLI configured default',{exact:true})).toBeVisible();
@@ -129,7 +129,7 @@ test.describe('QA17 public browser → real Rust daemon → external ACP fixture
   expect(timedOut.status).not.toBe(200);expect(timedOut.value.error).toContain('timed out');expect(Date.now()-before).toBeLessThan(100000);
  });
  test('TEST-VER-UX-104: native terminal borders and resize use cell geometry',async({page})=>{
-  await page.goto('/');await start(page,'Terminal geometry');await page.getByRole('button',{name:'Terminal',exact:true}).click();
+  await page.goto('/');const info=await api(page,'/api/info');await api(page,'/api/spawn',{agent:'custom',command:'gemini',args:[],cwd:info.value.cwd,title:'Terminal geometry'});await page.reload();await expect(page.locator('h1')).toHaveText('Terminal geometry');await page.getByRole('button',{name:'Terminal',exact:true}).click();
   await expect(page.locator('.xterm-screen')).toBeVisible();
   await expect.poll(async()=> (await api(page,'/api/snapshot')).value.screen).toContain('┌──────────┐');
   const id=(await api(page,'/api/snapshot')).value.selected;
