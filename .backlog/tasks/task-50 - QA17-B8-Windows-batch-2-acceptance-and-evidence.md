@@ -4,7 +4,7 @@ title: 'QA17 B8: Windows batch 2 acceptance and evidence'
 status: In Progress
 assignee: []
 created_date: '2026-11-18T01:54:00Z'
-updated_date: '2026-11-18T03:08:00Z'
+updated_date: '2026-11-18T03:27:00Z'
 labels: []
 dependencies:
   - TASK-45
@@ -33,6 +33,10 @@ modified_files:
   - docs/assets/screenshots/qa17_terminal_verification.png
   - docs/specs/TRACEABILITY_MATRIX.md
   - docs/assets/screenshots/embedded_companion_verification.png
+  - crates/agmux-proto/docs/transport_lld.md
+  - docs/archi/module-list.md
+  - crates/agmux-proto/src/ipc.rs
+  - .github/workflows/ci.yml
 priority: medium
 type: enhancement
 ordinal: 50000
@@ -59,4 +63,6 @@ Use one live provider conversation with two presentations; no second independent
 
 <!-- SECTION:NOTES:BEGIN -->
 All local gates pass and source-backed screenshots/traceability are committed with the implementation. Native Windows package CI and signed-in user acceptance remain explicit. AC1 stays open; do not infer account-backed Gemini or DPI acceptance from deterministic protocol fixture screenshots. PR #18 stays draft; release v0.1.0 unchanged. Native runtime SHA/archive/checksum results are recorded in PR #18 and issue #17.
+
+Windows CI run 97 exposed ERROR_PIPE_BUSY (231) during concurrent GUI IPC connections. Add REQ-IPC-CONNECT-CONTENTION-125 under the existing transport owner, bounded pre-request retry and native pipe recovery/deadline regression. Qualification remains open until the corrected Windows build passes.
 <!-- SECTION:NOTES:END -->

@@ -126,6 +126,10 @@ jobs:
         with:
           key: ${{ matrix.platform.target }}
 
+      - name: Verify native Windows pipe contention recovery
+        if: runner.os == 'Windows'
+        run: cargo test -p agmux-proto --target ${{ matrix.platform.target }} connection_tests
+
       - name: Build Release Executables
         env:
           CC_x86_64_unknown_linux_musl: musl-gcc
@@ -235,7 +239,7 @@ jobs:
 
       - name: Install Chromium for packaged companion regression
         working-directory: crates/agmux-cli/src/companion_gui/ui
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps --only-shell chromium
 
       - name: Exercise packaged UI and daemon with external ACP fixture
         working-directory: crates/agmux-cli/src/companion_gui/ui

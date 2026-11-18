@@ -58,7 +58,7 @@ The LLD owners are `crates/agmux-daemon/docs/gemini_chat_lld.md`,
 | Official Gemini CLI 0.68.0 | 6 passed; official version launch, isolated missing-auth and real native PTY/files/security regressions. No account-backed model turn claimed |
 | Formatting and all-target Clippy | Passed; Cargo reports the existing unused `futures-util` manifest dependency warning |
 | Groma readiness and scan | Passed; new CommandPalette owner and callback evidence recorded. Initial scanner map remains uncurated; documented callback/duplicate compilation-context gaps remain |
-| Strict V-cycle schema and Backlog linkage | 87/87 requirement records structurally valid; final verification matrix generated alongside the results |
+| Strict V-cycle schema and Backlog linkage | 88/88 requirement records structurally valid; final verification matrix generated alongside the results |
 | Native Windows packaged suite | TEST-VER-UX-123 pending native/user qualification. Exact runtime SHA, CI results and archive checksum are maintained in PR #18 and issue #17 after packaging |
 | Signed-in Gemini shared context/edit approval | **Not executed here**; user-machine acceptance remains open |
 | Native Windows DPI 100/125/150% | **Not executed here**; inherited batch-1 acceptance remains open |
@@ -111,7 +111,18 @@ packaged evidence contracts. CI's Windows and Linux release-binary jobs run
 both QA suites and upload real screenshots, preventing a mere successful
 launch or terminal screenshot from being treated as conversation acceptance.
 
-Expanded baseline: 70/87 verified, 75/87 implemented before batch 2.
-The 12 batch-2 contracts bring implementation to 87/87. 11/12 batch-2 contracts are verified, giving 81/87 (93.1%) globally.
-Native/account/user acceptance remains explicit; requirement 123 remains Implemented/Failed (pending), not claimed as passed.
+Expanded baseline: 70/88 verified, 75/88 implemented before batch 2 and the native IPC finding.
+The 13 batch-2/qualification contracts bring implementation to 88/88. Eleven are verified locally, giving 81/88 (92.0%) before the native retry regression runs.
+Native/account/user acceptance remains explicit; requirements 123 and 125 remain Implemented/Failed (pending), not claimed as passed until their respective acceptance runs.
 See `docs/specs/TRACEABILITY_MATRIX.md` for the generated exact totals.
+
+## Native Windows qualification finding — TEST-VER-IPC-125
+
+Run 97 passed all seven new workflow cases on Windows but failed an earlier
+non-Git check because the shared IPC client surfaced Windows ERROR_PIPE_BUSY
+(231) during concurrent connections. This was a transport race, not a Git error.
+Requirement REQ-IPC-CONNECT-CONTENTION-125 now specifies bounded connection
+recovery before any request is transmitted. Native public named-pipe tests are
+added to the Windows packaging job. The corrected source and final CI evidence
+are recorded in PR #18 / issue #17; no failed Windows archive was delivered.
+The expanded scope is now 88 requirements. Account/user acceptance remains open.

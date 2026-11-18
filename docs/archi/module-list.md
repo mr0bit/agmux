@@ -21,7 +21,7 @@ crates/
 ## 3. Component & Module Directory
 
 ### 3.1 `agmux-proto` (Framed Transport & Types)
-* **`transport`**: Framed length-delimited stream abstraction over Unix sockets and Windows Named Pipes using Bincode 2.0.
+* **`transport`**: Framed length-delimited stream abstraction over Unix sockets and Windows Named Pipes using Bincode 2.0. Owns the existing `ipc.rs` connection/listener helpers, including bounded pre-request recovery from transient Windows pipe contention.
 * **`auth`**: 256-bit cookie authentication token generation, loading, and handshake validation.
 * **`messages`**: Strongly-typed `ClientToDaemon` and `DaemonToClient` IPC request/response enums.
 

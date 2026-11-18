@@ -134,3 +134,14 @@ Approved 2026-11-18. One live provider conversation has Chat and Terminal presen
 * **Downstream Test:** `TEST-VER-UX-124`
 * **Test Status:** Passed
 
+
+### REQ-IPC-CONNECT-CONTENTION-125
+* **Unique ID:** `REQ-IPC-CONNECT-CONTENTION-125`
+* **Text:** As a Windows user switching shared session views, the IPC client shall tolerate transient busy named-pipe instances with a bounded asynchronous retry before transmitting a request, so concurrent UI connections do not produce spurious failures or duplicate commands.
+* **Criticality:** High
+* **SW Component:** `crates/agmux-proto::transport`
+* **Implementation Status:** Implemented
+* **Verification Criteria:** On native Windows, occupy the available pipe instance, start a second public connection and accept the first; the second shall recover and transfer data. If contention persists, return a readable timeout within a bounded two-second retry budget. Never replay a transmitted request.
+* **Downstream Req:** `LLD-IPC-CONNECT-CONTENTION-125`
+* **Downstream Test:** `TEST-VER-IPC-125`
+* **Test Status:** Failed
