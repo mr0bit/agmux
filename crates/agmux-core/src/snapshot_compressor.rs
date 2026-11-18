@@ -49,7 +49,7 @@ impl ScreenBuffer {
 
     /// Capture full formatted ANSI contents.
     pub fn capture_formatted(&self) -> Vec<u8> {
-        self.parser.screen().contents_formatted().into_bytes()
+        self.parser.screen().state_formatted().into_bytes()
     }
 
     /// Capture plain text contents.
@@ -63,7 +63,7 @@ impl ScreenBuffer {
         let (rows, cols) = screen.size();
         let (cursor_row, cursor_col) = screen.cursor_position();
         let scrollback_offset = screen.scrollback();
-        let formatted_screen = screen.contents_formatted().into_bytes();
+        let formatted_screen = screen.state_formatted().into_bytes();
         let lines = screen.contents().lines().map(str::to_owned).collect();
         agmux_proto::ScreenSyncFrame {
             session_id: session_id.to_string(),
@@ -119,5 +119,11 @@ mod resize_regressions {
         let frame = screen.capture_sync_frame("native");
         assert_eq!((frame.cursor_row, frame.cursor_col), (4, 11));
         assert_eq!((frame.rows, frame.cols), (30, 100));
+        let mut attached = super::ScreenBuffer::new(30, 100);
+        attached.process(&frame.formatted_screen);
+        assert!(
+            attached.bracketed_paste(),
+            "reattaching must preserve native input modes"
+        );
     }
 }
