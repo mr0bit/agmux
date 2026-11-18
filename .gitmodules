@@ -1,0 +1,3 @@
+[submodule ".soul/plugins/craft-anything/upstream"]
+	path = .soul/plugins/craft-anything/upstream
+	url = https://github.com/storytold/craft-anything.git

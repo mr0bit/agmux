@@ -7,6 +7,8 @@ Any rule, process, or standard codified inside `.soul/` must be capable of being
 
 Project-specific configurations, names, paths, and business logic belong in the project's own files (`AGENTS.md`, `docs/`, `config.toml`), **never inside `.soul/`**.
 
+Optional reusable tool dependencies may live under `.soul/plugins/` as pinned, unchanged upstream submodules with separately maintained adapters. Tool identity and dependency-relative paths belong to those adapters; this exception does not permit host-project names, target inspection evidence, application specifications or generated applications inside `.soul`. Keep plugins optional so the core process remains usable without installing them.
+
 ```
 +-----------------------------------------------------------------------------------+
 |                           THE PORTABILITY FIREWALL                                |

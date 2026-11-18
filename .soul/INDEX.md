@@ -2,7 +2,7 @@
 
 Welcome, Agent. This `.soul` directory defines the foundational, project-agnostic software engineering methodology, requirements management discipline, architectural invariants, testing standards, self-evolution protocols, and behavioral cognitive guidelines.
 
-**The Golden Law:** `.soul` is strictly portable. It actively rejects project-specific customizations, names, and assumptions. All project-specific context belongs in the host repository's `AGENTS.md` and `docs/`, never in `.soul`.
+**The Golden Law:** `.soul` is strictly portable. It actively rejects project-specific customizations, names, and assumptions. All project-specific context belongs in the host repository's `AGENTS.md` and `docs/`, never in `.soul`. Optional reusable tool dependencies and their adapters may live in `plugins/`; target evidence and generated applications stay in the host project.
 
 ```mermaid
 flowchart TD
@@ -67,6 +67,10 @@ When entering a session or tackling any task, **do not read the entire operating
 1. **Foundational Behavioral Baseline (Always Read):**
    * [`guidelines/karpathy-guidelines.md`](./guidelines/karpathy-guidelines.md): Non-negotiable cognitive posture (Think Before Coding, Simplicity First, Surgical Changes, Goal-Driven Execution).
 2. **Task-Specific Execution Selection:**
+   * **Pull/merge request feedback or equivalent change reviews on any provider:** Read [`process/pr-discussion.md`](./process/pr-discussion.md) for tool selection, agent identity tags, discussion, agreement before implementation and follow-up.
+   * **Any plugin installation, use, upgrade, or relevant `.soul` update:** Read [`process/plugin-lifecycle.md`](./process/plugin-lifecycle.md) and run the shared compatibility checks at its required triggers.
+   * **Reverse engineering, clean room recreation, or Craft Anything setup/upgrades:** Read [`plugins/craft-anything/SKILL.md`](./plugins/craft-anything/SKILL.md), including its readiness gate, before using the optional dependency.
+   * **Clean room process documentation or evidence review:** Read [`process/clean-room-evidence.md`](./process/clean-room-evidence.md) for collection, approvals, integrity and report completion criteria.
    * **Implementing a feature, bugfix, or refactor:** Read [`process/agent-execution-rules.md`](./process/agent-execution-rules.md) and [`process/backlog-workflow.md`](./process/backlog-workflow.md).
    * **Writing tests or verifying behavior:** Read [`testing/testing-seams.md`](./testing/testing-seams.md) and [`testing/unit-vs-verification.md`](./testing/unit-vs-verification.md).
    * **Inspecting or maintaining a live architecture map:** Read [`architecture/live-architecture.md`](./architecture/live-architecture.md), then use the host repository's pinned tooling and setup instructions.
