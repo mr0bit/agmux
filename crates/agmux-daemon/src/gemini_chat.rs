@@ -641,7 +641,7 @@ pub async fn close(id: &str) {
         if let Err(e) = chat.refresh_native(std::path::Path::new(".")).await {
             tracing::warn!(%e,"Reading native history on end failed");
         }
-        if let Err(e) = chat.stop_native().await {
+        if let Err(e) = chat.stop_native(true).await {
             tracing::error!(%e,"Stopping native Gemini failed");
         }
         {
@@ -905,8 +905,20 @@ fn native_messages(text: &str, id: &str) -> Result<Vec<Value>> {
 }
 
 impl Chat {
-    async fn stop_native(&self) -> Result<()> {
-        let native = { self.native.lock().await.take() };
+    async fn stop_native(&self, force: bool) -> Result<bool> {
+        let native = {
+            let mut slot = self.native.lock().await;
+            // Recheck readiness atomically with detaching input ownership: a
+            // received key must not race the earlier view-switch snapshot.
+            if !force
+                && slot
+                    .as_ref()
+                    .is_some_and(|n| !n.idle && n.session.subscribe_exit().borrow().is_none())
+            {
+                return Ok(false);
+            }
+            slot.take()
+        };
         if let Some(native) = native {
             let mut exit = native.session.subscribe_exit();
             let already_exited = exit.borrow().is_some();
@@ -924,7 +936,7 @@ impl Chat {
             }
             let _ = tokio::fs::remove_dir_all(native.dir).await;
         }
-        Ok(())
+        Ok(true)
     }
     async fn refresh_native(&self, _cwd: &Path) -> Result<()> {
         use std::io::Read;
@@ -1109,7 +1121,10 @@ impl Chat {
                 return Ok(());
             }
             self.state.lock().await.status = "switching".into();
-            self.stop_native().await?;
+            if !self.stop_native(false).await? {
+                self.state.lock().await.status = "working".into();
+                return Ok(());
+            }
             if let Err(e) = self.connect(cwd).await {
                 let mut s = self.state.lock().await;
                 s.owner = "chat".into();
@@ -1170,8 +1185,38 @@ pub async fn native_input(id: &str, data: &[u8]) -> Result<bool> {
     let Some(native) = native.as_mut() else {
         return Ok(false);
     };
-    native.last_input = now();
-    native.idle = false;
+    // Terminal protocol replies are not a user draft or model submission.
+    // Deliver them unchanged without revoking the last confirmed idle boundary.
+    if !terminal_report(data) {
+        native.last_input = now();
+        native.idle = false;
+    }
     native.session.send_input(data)?;
     Ok(true)
+}
+
+fn terminal_report(data: &[u8]) -> bool {
+    if matches!(data, b"\x1b[I" | b"\x1b[O") {
+        return true;
+    }
+    if data.len() > 3
+        && data.starts_with(b"\x1b[")
+        && matches!(data.last(), Some(b'R' | b'c' | b't' | b'y'))
+    {
+        return data[2..data.len() - 1]
+            .iter()
+            .all(|b| b.is_ascii_digit() || b";?=>$:".contains(b));
+    }
+    if data.starts_with(b"\x1b[?")
+        && data.ends_with(b"u")
+        && data[3..data.len() - 1]
+            .iter()
+            .all(|b| b.is_ascii_digit() || *b == b';')
+    {
+        return true;
+    }
+    let color = data.starts_with(b"\x1b]10;")
+        || data.starts_with(b"\x1b]11;")
+        || data.starts_with(b"\x1b]12;");
+    color && (data.ends_with(b"\x07") || data.ends_with(b"\x1b\\"))
 }

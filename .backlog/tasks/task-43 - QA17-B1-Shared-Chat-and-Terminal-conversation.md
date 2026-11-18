@@ -4,7 +4,7 @@ title: 'QA17 B1: Shared Chat and Terminal conversation'
 status: Done
 assignee: []
 created_date: '2026-11-18T01:54:00Z'
-updated_date: '2026-11-18T20:11:00Z'
+updated_date: '2026-11-18T20:29:00Z'
 labels: []
 dependencies: []
 references:
@@ -82,4 +82,8 @@ Implemented and public-seam regressions passed. See tests/reports/qa17_batch2_ac
 User correction 2026-11-18: preserve proper Chat and actual native Gemini CLI/TUI. Reopen shared-session slice; replace terminal-styled Chat with single-writer persisted-session handoff (ACP loadSession / native --resume), live native transcript synchronization and turn/approval handoff guards. No second independent conversation.
 
 Native correction public-seam verification passed: 18 full workflow cases, six final focused handoff/PID/tool-activity cases, seven official CLI/application cases (actual Gemini 0.68 native authentication TUI), 126 Rust tests and 11 state/design/motion cases. Updated 113/114 contracts are verified; signed-in Windows model/DPI acceptance remains under TASK-50. See tests/reports/qa17_native_terminal_report.md.
+
+Native TUI follow-up: real cursor/device reports were being classified as user input, incorrectly preventing an idle handoff. Reproduced through actual PTY → xterm → WebSocket → native input with a provider CSI 6n query. Add a public round-trip regression and exclude only recognized automatic reports from the draft guard; raw bytes still pass unchanged.
+
+Follow-up native protocol regression fixed: a real provider CSI 6n request receives a real xterm reply before idle is asserted. The earlier false Working state reproduced; all six final handoff/PID/tool/approval/exit/rapid-switch cases pass with the fix. Terminal replies pass unchanged, while real input invalidates readiness; ownership readiness is rechecked atomically before reaping.
 <!-- SECTION:NOTES:END -->

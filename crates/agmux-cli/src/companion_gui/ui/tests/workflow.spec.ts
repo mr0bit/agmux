@@ -62,6 +62,8 @@ test("TEST-VER-UX-113/114: real native terminal and proper Chat synchronize one 
     page.getByLabel("Message Gemini", { exact: true }),
   ).not.toBeVisible();
   await expect(page.locator(".xterm-screen")).toBeVisible();
+  const project=(await api(page,"/api/info")).value.cwd;
+  await expect.poll(async()=>{try{return await readFile(path.join(path.dirname(project),"gemini-home","terminal-reports.jsonl"),"utf8");}catch{return "";}}).toContain(first.provider_session_id);
   await expect
     .poll(
       async () =>

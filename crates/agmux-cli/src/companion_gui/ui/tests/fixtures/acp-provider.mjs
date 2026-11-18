@@ -70,6 +70,7 @@ if (
       (item.type === "user" ? "You: " : "Gemini: ") + item.content + "\r\n",
     );
   hook(id, "SessionStart");
+  const query=setInterval(()=>process.stdout.write("\x1b[6n"),100);query.unref();
   if (process.stdin.isTTY) process.stdin.setRawMode(true);
   let input = "",
     turn = records(id).filter((m) => m.type === "user").length,
@@ -95,6 +96,10 @@ if (
   };
   process.stdin.on("data", (data) => {
     input += data.toString().replace(/\x1b\[20[01]~/g, "");
+    if(/\x1b\[[0-9;]+R/.test(input)){
+      fs.appendFileSync(path.join(home,"terminal-reports.jsonl"),JSON.stringify({sessionId:id})+"\n");clearInterval(query);
+      input=input.replace(/\x1b\[[0-9;]+R/g,"");
+    }
     if (input.includes("\x03")) {
       input = "";
       complete("Cancelled");

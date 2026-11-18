@@ -107,3 +107,13 @@ Chat. Check native exit/resume and End → Inactive/Archive retention.
 Record the archive checksum, Windows/Gemini version, display scaling, actual
 result and screenshots in issue #17. TASK-50 and authenticated/user acceptance
 remain open; the PR stays draft until that acceptance is recorded.
+
+## Native terminal protocol regression
+
+A real CSI 6n query/response reproduced an incorrect permanent Working state:
+automatic xterm replies were being treated as user draft edits. The readiness
+guard now distinguishes known cursor/device/mode/size/color/focus reports while
+forwarding every byte unchanged. Actual keys, edits, pastes and prompts still
+invalidate readiness until the provider's next lifecycle boundary. The public
+native-context regression waits for an actual xterm reply before asserting idle
+and proceeding through the same saved provider session.

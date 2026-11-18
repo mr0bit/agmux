@@ -101,3 +101,9 @@ sessionId and replaces repeated record IDs; terminal screens/banners are never
 parsed into assistant messages. Ended transcripts remain retained in SQLite.
 Native PTY output/input/resize uses existing authenticated daemon/WebSocket
 seams, preserving actual ANSI rendering and keyboard semantics.
+
+Automatic terminal replies (cursor/device/mode/size/color and focus reports) are
+forwarded unchanged but do not revoke native readiness. They are protocol traffic,
+not user input drafts. The native external-provider regression requests a real
+CSI 6n cursor position and verifies xterm's reply arrives before checking idle,
+so a fake text terminal or a false-busy guard cannot satisfy the test.
