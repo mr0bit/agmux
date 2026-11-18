@@ -4,7 +4,7 @@ title: 'QA17 B8: Windows batch 2 acceptance and evidence'
 status: In Progress
 assignee: []
 created_date: '2026-11-18T01:54:00Z'
-updated_date: '2026-11-18T03:27:00Z'
+updated_date: '2026-11-18T03:36:00Z'
 labels: []
 dependencies:
   - TASK-45
@@ -65,4 +65,6 @@ Use one live provider conversation with two presentations; no second independent
 All local gates pass and source-backed screenshots/traceability are committed with the implementation. Native Windows package CI and signed-in user acceptance remain explicit. AC1 stays open; do not infer account-backed Gemini or DPI acceptance from deterministic protocol fixture screenshots. PR #18 stays draft; release v0.1.0 unchanged. Native runtime SHA/archive/checksum results are recorded in PR #18 and issue #17.
 
 Windows CI run 97 exposed ERROR_PIPE_BUSY (231) during concurrent GUI IPC connections. Add REQ-IPC-CONNECT-CONTENTION-125 under the existing transport owner, bounded pre-request retry and native pipe recovery/deadline regression. Qualification remains open until the corrected Windows build passes.
+
+REQ-IPC-CONNECT-CONTENTION-125 verified: both native Windows public named-pipe recovery/deadline tests passed in CI run 99 (Windows job 134556326194), runtime source 352ec6b03c8f84f450554fbe1087ddb312d796e5. Full package/browser results and exact-source artifact remain in PR #18 / issue #17. Signed-in user acceptance remains open; AC1 not closed.
 <!-- SECTION:NOTES:END -->

@@ -2,7 +2,8 @@
 
 Date: 2026-11-18 UTC. Tracker: https://github.com/mr0bit/agmux/issues/17.
 Draft fix PR: https://github.com/mr0bit/agmux/pull/18.
-Source: branch `fix/qa17-vcycle`; GitHub Actions records the exact runtime SHA.
+Tested runtime source: `352ec6b03c8f84f450554fbe1087ddb312d796e5`, branch `fix/qa17-vcycle`.
+[CI run 99](https://github.com/mr0bit/agmux/actions/runs/44230823784) records native verification; later report-only commits do not change the executable source.
 This is a PR acceptance build; v0.1.0 has not been changed.
 
 ## Architecture and scope
@@ -59,7 +60,8 @@ The LLD owners are `crates/agmux-daemon/docs/gemini_chat_lld.md`,
 | Formatting and all-target Clippy | Passed; Cargo reports the existing unused `futures-util` manifest dependency warning |
 | Groma readiness and scan | Passed; new CommandPalette owner and callback evidence recorded. Initial scanner map remains uncurated; documented callback/duplicate compilation-context gaps remain |
 | Strict V-cycle schema and Backlog linkage | 88/88 requirement records structurally valid; final verification matrix generated alongside the results |
-| Native Windows packaged suite | TEST-VER-UX-123 pending native/user qualification. Exact runtime SHA, CI results and archive checksum are maintained in PR #18 and issue #17 after packaging |
+| Native Windows pipe contention | 2 native public-pipe recovery/deadline regressions passed in CI run 99; TEST-VER-IPC-125 verified |
+| Native Windows packaged suite | See CI run 99 / PR #18 for final package results and archive checksum. TEST-VER-UX-123 remains pending user qualification |
 | Signed-in Gemini shared context/edit approval | **Not executed here**; user-machine acceptance remains open |
 | Native Windows DPI 100/125/150% | **Not executed here**; inherited batch-1 acceptance remains open |
 
@@ -112,8 +114,8 @@ both QA suites and upload real screenshots, preventing a mere successful
 launch or terminal screenshot from being treated as conversation acceptance.
 
 Expanded baseline: 70/88 verified, 75/88 implemented before batch 2 and the native IPC finding.
-The 13 batch-2/qualification contracts bring implementation to 88/88. Eleven are verified locally, giving 81/88 (92.0%) before the native retry regression runs.
-Native/account/user acceptance remains explicit; requirements 123 and 125 remain Implemented/Failed (pending), not claimed as passed until their respective acceptance runs.
+The 13 batch-2/qualification contracts bring implementation to 88/88. Twelve are verified (eleven workflow contracts plus native IPC recovery), giving 82/88 (93.2%).
+Native/account/user acceptance remains explicit; requirement 123 remains Implemented/Failed (pending). Five earlier native/account/DPI contracts also remain open.
 See `docs/specs/TRACEABILITY_MATRIX.md` for the generated exact totals.
 
 ## Native Windows qualification finding — TEST-VER-IPC-125
@@ -125,4 +127,4 @@ Requirement REQ-IPC-CONNECT-CONTENTION-125 now specifies bounded connection
 recovery before any request is transmitted. Native public named-pipe tests are
 added to the Windows packaging job. The corrected source and final CI evidence
 are recorded in PR #18 / issue #17; no failed Windows archive was delivered.
-The expanded scope is now 88 requirements. Account/user acceptance remains open.
+Both native Windows public-pipe recovery/deadline regressions passed in run 99, verifying requirement 125. The full release-binary UI suite and archive results are recorded in that run and PR #18. The expanded scope is 88 requirements. Account/user acceptance remains open.

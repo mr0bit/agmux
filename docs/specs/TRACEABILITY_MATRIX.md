@@ -91,4 +91,4 @@
 | `REQ-UX-KEYBOARD-WORKFLOW-122` | Medium | `crates/agmux-cli::companion_gui` | **Verified** | `LLD-UX-KEYBOARD-WORKFLOW-122` | `TEST-VER-UX-122` | `Passed` |
 | `REQ-UX-BATCH2-ACCEPTANCE-123` | Medium | `crates/agmux-cli::companion_gui` | **Implemented** | `LLD-UX-BATCH2-ACCEPTANCE-123` | `TEST-VER-UX-123` | `Failed` |
 | `REQ-UX-RETAINED-HISTORY-124` | High | `crates/agmux-core::storage_engine` | **Verified** | `LLD-UX-RETAINED-HISTORY-124` | `TEST-VER-UX-124` | `Passed` |
-| `REQ-IPC-CONNECT-CONTENTION-125` | High | `crates/agmux-proto::transport` | **Implemented** | `LLD-IPC-CONNECT-CONTENTION-125` | `TEST-VER-IPC-125` | `Failed` |
+| `REQ-IPC-CONNECT-CONTENTION-125` | High | `crates/agmux-proto::transport` | **Verified** | `LLD-IPC-CONNECT-CONTENTION-125` | `TEST-VER-IPC-125` | `Passed` |
