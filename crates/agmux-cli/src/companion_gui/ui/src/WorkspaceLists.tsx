@@ -18,7 +18,7 @@ import { clampReviewWidth, statuses } from "./workspace";
 import AgentIcon from "./AgentAvatar";
 import EmptyState from "./EmptyState";
 
-type Group = { name: string; items: Session[] };
+type Group = { name: string; label?: string; items: Session[] };
 /** One virtualizer across all groups keeps the mounted session rows bounded. */
 export function SessionList({
   groups,
@@ -30,7 +30,9 @@ export function SessionList({
   onSelect,
   onFilter,
   icon,
+  singleLineCompact = false,
 }: {
+  singleLineCompact?: boolean;
   groups: Group[];
   density: "comfortable" | "compact";
   onClear: () => void;
@@ -58,7 +60,9 @@ export function SessionList({
     estimateSize: (index) =>
       rows[index].item
         ? density === "compact"
-          ? 48
+          ? singleLineCompact
+            ? 36
+            : 48
           : 66
         : density === "compact"
           ? 32
@@ -68,11 +72,12 @@ export function SessionList({
   });
   useEffect(() => {
     virtual.measure();
-  }, [density]);
+  }, [density, singleLineCompact]);
+  const selectedIndex = rows.findIndex((row) => row.item?.id === selected);
   useEffect(() => {
-    const index = rows.findIndex((row) => row.item?.id === selected);
-    if (index >= 0) virtual.scrollToIndex(index, { align: "auto" });
-  }, [selected, collapsed]);
+    if (selectedIndex >= 0)
+      virtual.scrollToIndex(selectedIndex, { align: "auto" });
+  }, [selectedIndex, collapsed, density]);
   return (
     <div
       className="session-groups virtual-sessions"
@@ -117,13 +122,14 @@ export function SessionList({
                 <div className="group-heading">
                   <button
                     aria-expanded={!collapsed[entry.group.name]}
+                    title={entry.group.name}
                     onClick={() => onCollapse(entry.group.name)}
                   >
                     <ChevronDown
                       size={12}
                       className={collapsed[entry.group.name] ? "rotated" : ""}
                     />
-                    {entry.group.name}
+                    {entry.group.label || entry.group.name}
                     <span>{entry.group.items.length}</span>
                   </button>
                   <button
@@ -141,7 +147,7 @@ export function SessionList({
                   }
                   onClick={() => onSelect(item.id)}
                   aria-current={item.id === selected ? "true" : undefined}
-                  title={`${item.title} · ${statuses[item.state].label}`}
+                  title={`${item.title} · ${item.project} · ${item.agent} · ${item.time || statuses[item.state].label}`}
                 >
                   {icon(item)}
                   <span className="session-label">
@@ -155,7 +161,17 @@ export function SessionList({
                       <i
                         className={"status-dot " + statuses[item.state].color}
                       />
-                      {statuses[item.state].label}
+                      {singleLineCompact
+                        ? item.time === "failed"
+                          ? "Error"
+                          : item.time === "permission"
+                            ? "Approval"
+                            : item.state === "idle"
+                              ? "Waiting"
+                              : item.state === "stopped"
+                                ? "Inactive"
+                                : statuses[item.state].label
+                        : statuses[item.state].label}
                     </span>
                     <time>{item.time}</time>
                   </span>

@@ -21,7 +21,7 @@ crates/
 ## 3. Component & Module Directory
 
 ### 3.1 `agmux-proto` (Framed Transport & Types)
-* **`transport`**: Framed length-delimited stream abstraction over Unix sockets and Windows Named Pipes using Bincode 2.0.
+* **`transport`**: Framed length-delimited stream abstraction over Unix sockets and Windows Named Pipes using Bincode 2.0. Owns the existing `ipc.rs` connection/listener helpers, including bounded pre-request recovery from transient Windows pipe contention.
 * **`auth`**: 256-bit cookie authentication token generation, loading, and handshake validation.
 * **`messages`**: Strongly-typed `ClientToDaemon` and `DaemonToClient` IPC request/response enums.
 
@@ -176,3 +176,23 @@ Markdown records. This is a visualization of the registered modules, not a new
 runtime module or a replacement ownership registry. See [Groma workflow](groma.md).
 
 Daemon startup diagnostics are owned by the existing CLI `daemon_spawner` module ([LLD](../../crates/agmux-cli/docs/daemon_spawner_lld.md)); named-pipe lock placement remains owned by daemon `instance_lock`.
+
+## Issue #17 conversation ownership
+
+`crates/agmux-daemon::gemini_chat` owns the approved S4/S6 Gemini ACP subprocess,
+authoritative structured messages, model discovery and turn/permission state.
+It communicates through typed companion IPC; the browser never receives provider
+credentials. `companion_gui` renders those messages and retains Terminal as the
+separate native CLI view. This module is introduced for the user-approved slices,
+not a new ownership registry.
+
+`crates/agmux-daemon::server` owns authenticated IPC dispatch and native prompt submission.
+
+## Batch 2 shared-conversation contract
+The existing `crates/agmux-daemon::gemini_chat` owns one persisted Gemini session
+UUID with exclusive writer ownership: ACP for proper Chat and a native PTY for
+the real provider CLI/TUI. It synchronizes native provider records and performs
+idle-boundary resume/load handoffs; it never substitutes terminal-styled Chat. `crates/agmux-core::storage_engine`
+retains conversation snapshots and lifecycle metadata. Existing companion UI
+modules render both views, proposed/applied review and keyboard navigation;
+no browser-side provider process or synthetic assistant response is introduced.

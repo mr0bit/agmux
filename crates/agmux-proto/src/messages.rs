@@ -823,13 +823,43 @@ pub struct CompanionPanel {
 /// Authenticated companion operations.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CompanionRequest {
-    Open { session_id: String, target: String },
-    Select { session_id: String },
-    SelectPanel { session_id: String, panel_id: i64 },
+    Open {
+        session_id: String,
+        target: String,
+    },
+    Select {
+        session_id: String,
+    },
+    SelectPanel {
+        session_id: String,
+        panel_id: i64,
+    },
     List,
-    Reply { session_id: String, message: String },
-    Read { panel_id: i64 },
-    Write { panel_id: i64, content: String },
+    Reply {
+        session_id: String,
+        message: String,
+    },
+    Read {
+        panel_id: i64,
+    },
+    Write {
+        panel_id: i64,
+        content: String,
+    },
+    Chat {
+        session_id: String,
+        operation: String,
+        payload: String,
+    },
+    ChatStates,
+    Models {
+        cwd: String,
+    },
+    StartChat {
+        session_id: String,
+        cwd: String,
+        model: Option<String>,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CompanionResponse {

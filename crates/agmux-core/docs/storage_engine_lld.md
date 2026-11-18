@@ -5,3 +5,9 @@
 `LLD-STORAGE-ATOMIC-MIGRATION-002`: Opening a version-zero database creates the sessions table and updates `user_version` in one transaction before the IPC listener starts. Newer unknown versions are rejected.
 
 Session creation persists the child PID, command, working directory and Unix creation time before reporting success. A separate exit watcher marks it DEAD even when its client disconnects. Listing returns non-DEAD and non-ERRORED records through authenticated IPC.
+
+## LLD-UX-RETAINED-HISTORY-124
+managed_conversations stores session-scoped JSON, state and millisecond activity
+alongside the existing session metadata. The public save/read/index methods
+support reopening the database; no credential material is added. Ending and
+archiving retain history; archived visibility is workspace metadata, not deletion.

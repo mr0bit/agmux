@@ -39,6 +39,7 @@ impl ShutdownCoordinator {
     /// Gracefully propagate `SIGHUP` followed by `SIGTERM` to all active child process groups.
     /// Returns the number of active sessions signaled.
     pub async fn shutdown_all(&self) -> usize {
+        crate::gemini_chat::close_all().await;
         let active = self.pty_manager.active_pids().await;
         let mut pids: Vec<u32> = active.into_iter().map(|(_, pid)| pid).collect();
         if let Ok(set) = self.extra_pids.lock() {
