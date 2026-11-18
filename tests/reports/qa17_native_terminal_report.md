@@ -117,3 +117,15 @@ forwarding every byte unchanged. Actual keys, edits, pastes and prompts still
 invalidate readiness until the provider's next lifecycle boundary. The public
 native-context regression waits for an actual xterm reply before asserting idle
 and proceeding through the same saved provider session.
+
+
+## Windows qualification follow-up: ConPTY exit versus output EOF
+Run 105 passed quality and all 18 Linux packaged browser checks. Windows passed
+13/18 but exposed five native exit/handoff failures: the child was reaped, while
+its exit event waited indefinitely for ConPTY output EOF with the viewport's
+master still alive. Windows now bounds the final output drain at 250 ms before
+publishing the actual reaped-child exit. This preserves the single-writer guard;
+it does not bypass a live process. A native public-PTY regression holds the
+viewport/master open during both natural and forced exit. The final corrected
+Windows run/artifact remains recorded in PR #18 / issue #17; failed run 105 did
+not publish a Windows executable artifact. Signed-in/DPI acceptance stays open.

@@ -126,9 +126,12 @@ jobs:
         with:
           key: ${{ matrix.platform.target }}
 
-      - name: Verify native Windows pipe contention recovery
+      - name: Verify native Windows pipe and PTY lifecycle recovery
         if: runner.os == 'Windows'
-        run: cargo test -p agmux-proto --target ${{ matrix.platform.target }} connection_tests
+        run: |
+          cargo test -p agmux-core --target ${{ matrix.platform.target }} --lib windows_conpty_exit_is_published_while_viewport_retains_master
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p agmux-proto --target ${{ matrix.platform.target }} connection_tests
 
       - name: Build Release Executables
         env:

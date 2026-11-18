@@ -4,7 +4,7 @@ title: 'QA17 B8: Windows batch 2 acceptance and evidence'
 status: In Progress
 assignee: []
 created_date: '2026-11-18T01:54:00Z'
-updated_date: '2026-11-18T20:01:00Z'
+updated_date: '2026-11-18T20:47:00Z'
 labels: []
 dependencies:
   - TASK-45
@@ -12,6 +12,7 @@ dependencies:
 references:
   - https://github.com/mr0bit/agmux/issues/17
   - docs/specs/13_session_workflow_spec.md
+  - crates/agmux-core/src/pty_manager.rs
 documentation:
   - tests/reports/qa17_batch2_acceptance_report.md
   - tests/reports/qa17_native_terminal_report.md
@@ -38,6 +39,9 @@ modified_files:
   - docs/archi/module-list.md
   - crates/agmux-proto/src/ipc.rs
   - .github/workflows/ci.yml
+  - crates/agmux-core/src/pty_manager.rs
+  - crates/agmux-core/docs/pty_manager_lld.md
+  - tests/reports/qa17_native_terminal_report.md
 priority: medium
 type: enhancement
 ordinal: 50000
@@ -70,4 +74,6 @@ Windows CI run 97 exposed ERROR_PIPE_BUSY (231) during concurrent GUI IPC connec
 REQ-IPC-CONNECT-CONTENTION-125 verified: both native Windows public named-pipe recovery/deadline tests passed in CI run 99 (Windows job 134556326194), runtime source 352ec6b03c8f84f450554fbe1087ddb312d796e5. Full package/browser results and exact-source artifact remain in PR #18 / issue #17. Signed-in user acceptance remains open; AC1 not closed.
 
 User native-Terminal correction: old terminal-style build is superseded. TASK-43 now implements real native PTY + ACP load/resume synchronization, with 18 workflow cases and 7 official CLI/application checks locally. New Windows native hook/PTY package qualification remains visible in PR #18 and issue #17; user account/DPI acceptance stays open.
+
+Native correction CI run 105: quality and Linux 18/18 passed; Windows 13/18 passed. Five native handoff/exit checks expose ConPTY exit notification waiting for output EOF while the viewport still owns the master. Fix process-exit publication independently of ConPTY output EOF; retain exact-session and no-second-writer guards. No failed Windows archive delivered.
 <!-- SECTION:NOTES:END -->
