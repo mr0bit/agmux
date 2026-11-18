@@ -2,8 +2,161 @@
 import readline from "node:readline";
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
+const home = process.env.GEMINI_CLI_HOME || process.cwd();
+const journal = (id) => path.join(home, "test-chats", id + ".jsonl");
+const records = (id) => [
+  ...new Map(
+    fs
+      .readFileSync(journal(id), "utf8")
+      .trim()
+      .split("\n")
+      .slice(1)
+      .map((line) => JSON.parse(line))
+      .map((item) => [item.id, item]),
+  ).values(),
+];
+const append = (id, value) =>
+  fs.appendFileSync(journal(id), JSON.stringify(value) + "\n");
+const initialize = (id) => {
+  fs.mkdirSync(path.dirname(journal(id)), { recursive: true });
+  fs.writeFileSync(journal(id), JSON.stringify({ sessionId: id }) + "\n");
+};
+const hook = (id, event) => {
+  const settings = JSON.parse(
+    fs.readFileSync(process.env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH, "utf8"),
+  );
+  if (
+    settings.general?.preferredEditor !== "code" ||
+    !settings.hooks.SessionStart.some((group) =>
+      group.hooks.some((h) => h.name === "user-default-hook"),
+    )
+  )
+    throw Error("Existing provider defaults/hooks were lost");
+  for (const group of settings.hooks[event] || [])
+    for (const config of group.hooks) {
+      const executable =
+        process.platform === "win32" ? "powershell.exe" : "bash";
+      const args =
+        process.platform === "win32"
+          ? ["-NoProfile", "-NonInteractive", "-Command", config.command]
+          : ["-c", config.command];
+      execFileSync(executable, args, {
+        input: JSON.stringify({
+          hook_event_name: event,
+          session_id: id,
+          transcript_path: journal(id),
+        }),
+        env: { ...process.env, ...config.env },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    }
+};
+
 const acp = process.argv.includes("--acp");
-if (!acp) {
+if (
+  !acp &&
+  (process.argv.includes("--resume") || process.argv.includes("--session-id"))
+) {
+  const resumed = process.argv.indexOf("--resume"),
+    at = resumed >= 0 ? resumed : process.argv.indexOf("--session-id");
+  const id = process.argv[at + 1];
+  if (resumed < 0) initialize(id);
+  if (!fs.existsSync(journal(id)))
+    throw Error("Saved session missing; must not create a replacement");
+  process.stdout.write("\x1b[?2004hNative Gemini CLI fixture · " + id + "\r\n");
+  for (const item of records(id))
+    process.stdout.write(
+      (item.type === "user" ? "You: " : "Gemini: ") + item.content + "\r\n",
+    );
+  hook(id, "SessionStart");
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  let input = "",
+    turn = records(id).filter((m) => m.type === "user").length,
+    waiting = false;
+  const complete = (text) => {
+    if (waiting)
+      append(id, {
+        id: "native-tool-" + turn,
+        type: "gemini",
+        content: "",
+        toolCalls: [
+          { id: "edit-" + turn, name: "native_edit_tool", status: "completed" },
+        ],
+      });
+    append(id, {
+      id: "native-assistant-" + turn,
+      type: "gemini",
+      content: text,
+    });
+    process.stdout.write("Gemini: " + text + "\r\n> ");
+    hook(id, "AfterAgent");
+    waiting = false;
+  };
+  process.stdin.on("data", (data) => {
+    input += data.toString().replace(/\x1b\[20[01]~/g, "");
+    if (input.includes("\x03")) {
+      input = "";
+      complete("Cancelled");
+      return;
+    }
+    let enter;
+    while ((enter = input.indexOf("\r")) >= 0) {
+      const text = input.slice(0, enter).replace(/\n/g, "");
+      input = input.slice(enter + 1);
+      if (text === "/quit") process.exit(0);
+      if (waiting) {
+        complete(text === "y" ? "Permission allowed" : "Permission rejected");
+        continue;
+      }
+      turn++;
+      append(id, { id: "native-user-" + turn, type: "user", content: text });
+      hook(id, "BeforeAgent");
+      const history = records(id)
+        .filter((m) => m.type === "user")
+        .map((m) => m.content);
+      fs.appendFileSync(
+        "acp-requests.jsonl",
+        JSON.stringify({
+          pid: process.pid,
+          sessionId: id,
+          history,
+          owner: "native",
+          text,
+        }) + "\n",
+      );
+      process.stdout.write("You: " + text + "\r\n");
+      if (text === "native-approval") {
+        waiting = true;
+        append(id, {
+          id: "native-tool-" + turn,
+          type: "gemini",
+          content: "",
+          toolCalls: [
+            {
+              id: "edit-" + turn,
+              name: "native_edit_tool",
+              status: "awaiting_approval",
+            },
+          ],
+        });
+        process.stdout.write("Approve native tool? y/n\r\n");
+      } else if (text === "wait-for-cancel") {
+        waiting = true;
+      } else
+        setTimeout(
+          () =>
+            complete(
+              text === "recall"
+                ? "Remembered: " +
+                    history.filter((t) => t.startsWith("remember:")).join("; ")
+                : "Native reply: " + text,
+            ),
+          150,
+        );
+    }
+  });
+} else if (!acp) {
   if (process.argv.includes("--version")) {
     console.log("ACP test fixture (not Gemini)");
     process.exit(0);
@@ -29,12 +182,19 @@ if (!acp) {
     permission = null,
     ignoreCancel = false,
     pendingEdit = null;
-  const sessionId = `fixture-${process.pid}`,
-    history = [];
+  let sessionId = `fixture-${process.pid}`;
+  let history = [];
   const output = (value) =>
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...value }) + "\n");
   const respond = (id, result) => output({ id, result });
-  const chunk = (text) =>
+  let assistant = "";
+  const chunk = (text) => {
+    assistant += text;
+    append(sessionId, {
+      id: "acp-assistant-" + turn,
+      type: "gemini",
+      content: assistant,
+    });
     output({
       method: "session/update",
       params: {
@@ -45,7 +205,9 @@ if (!acp) {
         },
       },
     });
+  };
   const finish = (reason = "end_turn") => {
+    assistant = "";
     if (active !== null) {
       respond(active, { stopReason: reason });
       active = null;
@@ -57,10 +219,52 @@ if (!acp) {
       if (!fs.existsSync("hang-initialize"))
         respond(req.id, {
           protocolVersion: 1,
-          agentCapabilities: {},
+          agentCapabilities: { loadSession: !fs.existsSync("no-session-load") },
           authMethods: [],
         });
+    } else if (req.method === "session/load") {
+      sessionId = req.params.sessionId;
+      if (fs.existsSync("fail-session-load")) {
+        output({
+          id: req.id,
+          error: { code: -32000, message: "Saved session unavailable" },
+        });
+        return;
+      }
+      const items = records(sessionId);
+      history = items.filter((m) => m.type === "user").map((m) => m.content);
+      turn = history.length;
+      for (const item of items)
+        output({
+          method: "session/update",
+          params: {
+            sessionId,
+            update: {
+              sessionUpdate:
+                item.type === "user"
+                  ? "user_message_chunk"
+                  : "agent_message_chunk",
+              content: { type: "text", text: item.content },
+            },
+          },
+        });
+      for (const item of items)
+        for (const call of item.toolCalls || [])
+          output({
+            method: "session/update",
+            params: {
+              sessionId,
+              update: {
+                sessionUpdate: "tool_call",
+                toolCallId: call.id,
+                title: call.name,
+                status: call.status,
+              },
+            },
+          });
+      respond(req.id, {});
     } else if (req.method === "session/new") {
+      initialize(sessionId);
       if (req.params.cwd.startsWith("\\\\?\\")) {
         output({
           id: req.id,
@@ -92,6 +296,11 @@ if (!acp) {
       active = req.id;
       const text = req.params.prompt[0].text;
       history.push(text);
+      append(sessionId, {
+        id: "acp-user-" + turn,
+        type: "user",
+        content: text,
+      });
       fs.appendFileSync(
         "acp-requests.jsonl",
         JSON.stringify({
@@ -110,7 +319,8 @@ if (!acp) {
       } else if (text === "recall") {
         chunk(
           "Remembered: " +
-            (history.find((t) => t.startsWith("remember:")) || "no prior fact"),
+            (history.filter((t) => t.startsWith("remember:")).join("; ") ||
+              "no prior fact"),
         );
         finish();
       } else if (text === "propose-change") {

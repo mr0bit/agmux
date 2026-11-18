@@ -1578,14 +1578,31 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                     task.abort();
                 }
                 *subscribed_session.lock().unwrap() = Some(session_id.clone());
-                if let Ok((sync_frame, mut output)) =
+                let native = crate::gemini_chat::native_session(&session_id).await;
+                let mut native_exit = native.as_ref().map(|session| session.subscribe_exit());
+                let subscription = if let Some(native) = native {
+                    Ok(native.subscribe_viewport_sync())
+                } else {
                     subscription_manager.subscribe_viewport(&session_id).await
-                {
+                };
+                if let Ok((sync_frame, mut output)) = subscription {
                     out_tx.send(IpcMessage::ScreenSyncFrame(sync_frame)).await?;
                     let tx = out_tx.clone();
                     viewport_task = Some(tokio::spawn(async move {
                         loop {
-                            match output.recv().await {
+                            let output = tokio::select! {
+                                code=async {
+                                    if let Some(exit)=native_exit.as_mut() {
+                                        if exit.borrow().is_none(){let _=exit.changed().await;}
+                                        *exit.borrow()
+                                    } else { std::future::pending::<Option<i32>>().await }
+                                }=>{
+                                    let _=tx.send(IpcMessage::SessionExitEvent(agmux_proto::SessionExitEvent{session_id:session_id.clone(),exit_code:code})).await;
+                                    break;
+                                },
+                                output=output.recv()=>output,
+                            };
+                            match output {
                                 Ok(data) => {
                                     if tx
                                         .send(IpcMessage::TerminalOutputFrame(
@@ -2027,6 +2044,8 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                             input.session_id
                         );
                     }
+                } else if crate::gemini_chat::native_input(&input.session_id, &input.data).await? {
+                    // Native Gemini input belongs to the same persisted conversation.
                 } else if let Ok(session) = pty_manager.get_session(&input.session_id).await {
                     if let Err(e) = session.send_input(&input.data) {
                         tracing::warn!(
@@ -2304,10 +2323,19 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
             }
             IpcMessage::ResizeSessionRequest(req) => {
                 let resizer = pty_resizer.clone();
-                let resp = match resizer
-                    .resize_session(&req.session_id, req.cols, req.rows)
-                    .await
+                let result = if let Some(native) =
+                    crate::gemini_chat::native_session(&req.session_id).await
                 {
+                    native
+                        .resize(req.cols, req.rows)
+                        .map_err(anyhow::Error::from)
+                } else {
+                    resizer
+                        .resize_session(&req.session_id, req.cols, req.rows)
+                        .await
+                        .map_err(anyhow::Error::from)
+                };
+                let resp = match result {
                     Ok(()) => agmux_proto::ResizeSessionResponse {
                         success: true,
                         cols: req.cols,

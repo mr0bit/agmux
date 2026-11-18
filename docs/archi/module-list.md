@@ -189,8 +189,10 @@ not a new ownership registry.
 `crates/agmux-daemon::server` owns authenticated IPC dispatch and native prompt submission.
 
 ## Batch 2 shared-conversation contract
-The existing `crates/agmux-daemon::gemini_chat` owns one managed provider context
-for both Chat and Terminal presentations. `crates/agmux-core::storage_engine`
+The existing `crates/agmux-daemon::gemini_chat` owns one persisted Gemini session
+UUID with exclusive writer ownership: ACP for proper Chat and a native PTY for
+the real provider CLI/TUI. It synchronizes native provider records and performs
+idle-boundary resume/load handoffs; it never substitutes terminal-styled Chat. `crates/agmux-core::storage_engine`
 retains conversation snapshots and lifecycle metadata. Existing companion UI
 modules render both views, proposed/applied review and keyboard navigation;
 no browser-side provider process or synthetic assistant response is introduced.

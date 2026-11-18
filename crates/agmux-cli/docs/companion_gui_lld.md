@@ -95,3 +95,11 @@ shared-session, actual file-change, proposed edit, end/archive, project/compact
 and keyboard flows. Capture actual app screenshots and preserve explicit
 external-provider fixture labeling. Authenticated/native display acceptance is
 recorded separately and does not follow from a version-only launch probe.
+
+## Native Terminal correction — LLD-UX-SHARED-CONTEXT-113 / LLD-UX-SHARED-STATE-114
+Chat stays a conversational UI; Terminal mounts the real xterm/PTTY bridge.
+The selected view requests daemon ownership transfer by the existing authenticated
+Chat operation. The daemon queues transfers while a turn, approval or native
+draft is in flight. Chat remains mounted for transcript/state synchronization;
+its draft is preserved independently of the native provider input editor.
+No terminal-styled Chat or second independent provider conversation is used.

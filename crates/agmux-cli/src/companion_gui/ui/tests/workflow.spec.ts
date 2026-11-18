@@ -32,9 +32,9 @@ async function start(page: Page, title: string, cwd?: string) {
   ).toBeVisible();
   return (await api(page, "/api/snapshot")).value.selected as string;
 }
-async function send(page: Page, text: string, terminal = false) {
+async function send(page: Page, text: string) {
   await page
-    .getByLabel(terminal ? "Terminal prompt" : "Message Gemini", {
+    .getByLabel("Message Gemini", {
       exact: true,
     })
     .fill(text);
@@ -45,66 +45,201 @@ const messages = (page: Page) =>
   page.getByRole("log", { name: "Conversation messages" });
 const review = (page: Page) => page.getByRole("complementary").last();
 
-test("TEST-VER-UX-113/114: one provider context and draft across Chat → Terminal → Chat", async ({
+test("TEST-VER-UX-113/114: real native terminal and proper Chat synchronize one saved conversation", async ({
   page,
 }) => {
   await page.goto("/");
-  const id = await start(page, "Shared conversation");
+  const id = await start(page, "Shared native conversation");
   await send(page, "remember: amber-42");
-  await page.getByLabel("Message Gemini", { exact: true }).fill("unsent draft");
-  await page.getByRole("button", { name: "Terminal", exact: true }).click();
-  await expect(page.getByLabel("Terminal prompt")).toHaveValue("unsent draft");
-  await expect(messages(page)).toContainText("remember: amber-42");
-  await send(page, "recall", true);
-  await expect(messages(page)).toContainText("Remembered: remember: amber-42");
   const first = (
     await api(page, "/api/chat", { session_id: id, operation: "state" })
   ).value;
+  await page
+    .getByLabel("Message Gemini", { exact: true })
+    .fill("unsent Chat draft");
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await expect(
+    page.getByLabel("Message Gemini", { exact: true }),
+  ).not.toBeVisible();
+  await expect(page.locator(".xterm-screen")).toBeVisible();
+  await expect
+    .poll(
+      async () =>
+        (await api(page, "/api/chat", { session_id: id, operation: "state" }))
+          .value.status,
+    )
+    .toBe("idle");
+  const terminal = page.locator(".xterm-helper-textarea");
+  await terminal.pressSequentially("recall");
+  await terminal.press("Enter");
+  await expect
+    .poll(async () =>
+      (
+        await api(page, "/api/chat", { session_id: id, operation: "state" })
+      ).value.messages
+        .map((m: any) => m.text)
+        .join("\n"),
+    )
+    .toContain("Remembered: remember: amber-42");
+  await terminal.pressSequentially("remember: native-73");
+  await terminal.press("Enter");
+  await expect
+    .poll(
+      async () =>
+        (await api(page, "/api/chat", { session_id: id, operation: "state" }))
+          .value.status,
+    )
+    .toBe("idle");
+  await page.screenshot({
+    path: path.resolve(
+      "../../../../../docs/assets/screenshots/qa17_native_terminal_verification.png",
+    ),
+    fullPage: true,
+  });
   await page.getByRole("button", { name: "Chat", exact: true }).click();
-  await expect(messages(page)).toContainText("Remembered: remember: amber-42");
-  await api(page, "/api/reply", {
-    session_id: id,
-    message: "legacy reply into same context",
-  });
-  await expect(messages(page)).toContainText("legacy reply into same context");
-  await expect(page.getByLabel("Conversation status")).toHaveText("idle");
-  await api(page, "/api/send", {
-    session_id: id,
-    message: "delegated prompt into same context",
-  });
-  await expect(messages(page)).toContainText(
-    "delegated prompt into same context",
+  await expect(page.getByLabel("Message Gemini", { exact: true })).toHaveValue(
+    "unsent Chat draft",
   );
-  await expect(page.getByLabel("Conversation status")).toHaveText("idle");
+  await expect
+    .poll(
+      async () =>
+        (await api(page, "/api/chat", { session_id: id, operation: "state" }))
+          .value.owner,
+    )
+    .toBe("chat");
+  await expect(messages(page)).toContainText("remember: native-73");
+  await send(page, "recall");
+  await expect(messages(page)).toContainText(
+    "remember: amber-42; remember: native-73",
+  );
   const last = (
     await api(page, "/api/chat", { session_id: id, operation: "state" })
   ).value;
   expect(last.provider_session_id).toBe(first.provider_session_id);
-  expect(
-    last.messages.filter((m: { role: string }) => m.role === "user"),
-  ).toHaveLength(4);
+  expect(last.messages.filter((m: any) => m.role === "user")).toHaveLength(4);
   const root = (await api(page, "/api/info")).value.cwd;
-  const records = (
-    await readFile(path.join(root, "acp-requests.jsonl"), "utf8")
-  )
+  const rows = (await readFile(path.join(root, "acp-requests.jsonl"), "utf8"))
     .trim()
     .split("\n")
-    .map((s) => JSON.parse(s));
-  const rows = records.filter((r) => r.history?.includes("remember: amber-42"));
-  expect(new Set(rows.map((r) => r.pid)).size).toBe(1);
+    .map((line) => JSON.parse(line))
+    .filter((r) => r.sessionId === first.provider_session_id);
+  expect(rows.some((r) => r.owner === "native")).toBe(true);
+  expect(new Set(rows.map((r) => r.pid)).size).toBeGreaterThanOrEqual(3);
+  const currentPid = rows.at(-1).pid;
+  for (const pid of new Set<number>(rows.map((r) => r.pid))) {
+    if (pid === currentPid) continue;
+    await expect
+      .poll(() => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .toBe(false);
+  }
   expect(rows.at(-1).history).toEqual([
     "remember: amber-42",
     "recall",
-    "legacy reply into same context",
-    "delegated prompt into same context",
+    "remember: native-73",
+    "recall",
   ]);
-  await page.getByRole("button", { name: "Terminal", exact: true }).click();
   await page.screenshot({
     path: path.resolve(
-      "../../../../../docs/assets/screenshots/qa17_b2_shared_verification.png",
+      "../../../../../docs/assets/screenshots/qa17_native_chat_sync_verification.png",
     ),
     fullPage: true,
   });
+});
+
+test("TEST-VER-UX-114: native turn and approval stay in Terminal until completion", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const id = await start(page, "Native approval ownership");
+  await send(page, "remember: ownership");
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await expect(page.locator(".xterm-screen")).toBeVisible();
+  await expect
+    .poll(
+      async () =>
+        (await api(page, "/api/chat", { session_id: id, operation: "state" }))
+          .value.status,
+    )
+    .toBe("idle");
+  await page
+    .locator(".xterm-helper-textarea")
+    .pressSequentially("native-approval");
+  await page.locator(".xterm-helper-textarea").press("Enter");
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  await expect(messages(page)).toContainText("native-approval");
+  await expect(messages(page)).toContainText("native_edit_tool");
+  expect(
+    (await api(page, "/api/chat", { session_id: id, operation: "state" })).value
+      .owner,
+  ).toBe("terminal");
+  await expect(
+    page.getByRole("button", { name: "Stop response", exact: true }),
+  ).toBeVisible();
+  expect(
+    (
+      await api(page, "/api/chat", {
+        session_id: id,
+        operation: "send",
+        message: "must not compete",
+        request_id: "native-competing",
+      })
+    ).status,
+  ).not.toBe(200);
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await page.locator(".xterm-helper-textarea").pressSequentially("y");
+  await page.locator(".xterm-helper-textarea").press("Enter");
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  await expect(messages(page)).toContainText("Permission allowed");
+  await expect
+    .poll(
+      async () =>
+        (await api(page, "/api/chat", { session_id: id, operation: "state" }))
+          .value.owner,
+    )
+    .toBe("chat");
+});
+
+test("TEST-VER-UX-113: failed resume preserves history and never forks", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const id = await start(page, "Load failure");
+  await send(page, "remember: retained identity");
+  const before = (
+    await api(page, "/api/chat", { session_id: id, operation: "state" })
+  ).value;
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await expect(page.locator(".xterm-screen")).toBeVisible();
+  await expect
+    .poll(
+      async () =>
+        (await api(page, "/api/chat", { session_id: id, operation: "state" }))
+          .value.status,
+    )
+    .toBe("idle");
+  const root = (await api(page, "/api/info")).value.cwd;
+  await writeFile(path.join(root, "fail-session-load"), "1");
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  await expect(page.getByRole("alert").last()).toContainText(
+    "No replacement conversation was created",
+  );
+  const after = (
+    await api(page, "/api/chat", { session_id: id, operation: "state" })
+  ).value;
+  expect(after.provider_session_id).toBe(before.provider_session_id);
+  expect(after.messages.map((m: any) => m.text).join(" ")).toContain(
+    "retained identity",
+  );
+  await writeFile(path.join(root, "fail-session-load"), "");
+  const { unlink } = await import("node:fs/promises");
+  await unlink(path.join(root, "fail-session-load"));
 });
 
 test("TEST-VER-UX-115: real applied changes refresh without clicking Refresh", async ({
@@ -144,6 +279,11 @@ test("TEST-VER-UX-116/117: proposed before/after diffs, reject, then real applie
   await expect(proposed).toContainText(before.trim());
   expect(await readFile(path.join(cwd, "README.md"), "utf8")).toBe(before);
   await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await expect(page.locator(".xterm-screen")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Return to Chat" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Return to Chat" }).click();
   await expect(page.getByLabel("Conversation status")).toHaveText("permission");
   await expect(proposed).toBeVisible();
   const panelBox = await review(page).boundingBox(),
@@ -161,7 +301,9 @@ test("TEST-VER-UX-116/117: proposed before/after diffs, reject, then real applie
   await expect(page.getByLabel("Conversation status")).toHaveText("idle");
   expect(await readFile(path.join(cwd, "README.md"), "utf8")).toBe(before);
   await expect(proposed).toHaveCount(0);
-  await page.getByLabel("Terminal prompt").fill("propose-change");
+  await page
+    .getByLabel("Message Gemini", { exact: true })
+    .fill("propose-change");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(proposed).toBeVisible();
   await proposed
@@ -447,8 +589,107 @@ test("TEST-VER-UX-122: palette, quick switch, shortcuts, focus and composition",
   });
   await page.keyboard.press("Escape");
   await prompt.press("Control+Backquote");
-  await expect(page.getByLabel("Terminal prompt")).toBeVisible();
-  await expect(page.getByLabel("Terminal prompt")).toHaveValue(
-    "keep this draft",
+  await expect(page.locator(".xterm-screen")).toBeVisible();
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  await expect(prompt).toHaveValue("keep this draft");
+});
+
+test("TEST-VER-UX-113: Terminal-first empty session continues in proper Chat without changing UUID", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const id = await start(page, "Terminal first");
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await expect(page.locator(".xterm-screen")).toBeVisible();
+  await expect
+    .poll(
+      async () =>
+        (await api(page, "/api/chat", { session_id: id, operation: "state" }))
+          .value.status,
+    )
+    .toBe("idle");
+  const first = (
+    await api(page, "/api/chat", { session_id: id, operation: "state" })
+  ).value.provider_session_id;
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  await send(page, "remember: native first");
+  await expect
+    .poll(
+      async () =>
+        (await api(page, "/api/chat", { session_id: id, operation: "state" }))
+          .value.owner,
+    )
+    .toBe("chat");
+  await send(page, "recall");
+  await expect(messages(page)).toContainText(
+    "Remembered: remember: native first",
   );
+  expect(
+    (await api(page, "/api/chat", { session_id: id, operation: "state" })).value
+      .provider_session_id,
+  ).toBe(first);
+});
+
+test("TEST-VER-UX-113: native CLI exit is reported and Chat resumes the same session", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const id = await start(page, "Native exit");
+  await send(page, "remember: native exit");
+  const uuid = (
+    await api(page, "/api/chat", { session_id: id, operation: "state" })
+  ).value.provider_session_id;
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await expect(page.locator(".xterm-screen")).toBeVisible();
+  await page.locator(".xterm-helper-textarea").pressSequentially("/quit");
+  await page.locator(".xterm-helper-textarea").press("Enter");
+  await expect(page.locator(".terminal-footer")).toContainText(
+    "Process exited (0)",
+  );
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  await expect
+    .poll(
+      async () =>
+        (await api(page, "/api/chat", { session_id: id, operation: "state" }))
+          .value.owner,
+    )
+    .toBe("chat");
+  expect(
+    (await api(page, "/api/chat", { session_id: id, operation: "state" })).value
+      .provider_session_id,
+  ).toBe(uuid);
+  await expect(messages(page)).toContainText("remember: native exit");
+});
+
+test("TEST-VER-UX-114: rapid tab changes preserve the latest interface owner", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const id = await start(page, "Rapid view switching");
+  await send(page, "remember: latest view");
+  let delayed = false;
+  await page.route("**/api/chat", async (route) => {
+    const body = route.request().postDataJSON();
+    if (body.operation === "view" && body.view === "terminal" && !delayed) {
+      delayed = true;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await expect.poll(() => delayed).toBe(true);
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  await expect
+    .poll(async () => {
+      const state = (
+        await api(page, "/api/chat", { session_id: id, operation: "state" })
+      ).value;
+      return state.owner + ":" + state.view;
+    })
+    .toBe("chat:chat");
+  await expect(
+    page.getByLabel("Message Gemini", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".xterm-screen")).toHaveCount(0);
+  await expect(messages(page)).toContainText("remember: latest view");
 });

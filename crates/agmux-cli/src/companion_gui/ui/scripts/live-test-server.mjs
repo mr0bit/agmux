@@ -63,6 +63,10 @@ for (const name of ["agmux", "agmuxd"]) {
   await copyFile(path.join(process.env.AGMUX_TEST_BIN || path.join(repo, "target/debug"), name + suffix), path.join(bin, name + suffix));
 }
 if (process.env.AGMUX_ACP_FIXTURE === "1") {
+  const defaults=path.join(root,"provider-defaults.json");
+  const existingHook=process.platform === "win32" ? '$null = [Console]::In.ReadToEnd(); Write-Output "{}"' : 'cat >/dev/null; printf "{}"';
+  await writeFile(defaults,'// Existing provider defaults must survive the process-scoped overlay.\n'+JSON.stringify({general:{preferredEditor:"code"},hooks:{SessionStart:[{hooks:[{name:"user-default-hook",type:"command",command:existingHook}]}]}}));
+  env.GEMINI_CLI_SYSTEM_DEFAULTS_PATH=defaults;
   const { chmod } = await import("node:fs/promises");
   const packageRoot=path.join(bin, "node_modules/@google/gemini-cli");
   await mkdir(packageRoot, {recursive:true});

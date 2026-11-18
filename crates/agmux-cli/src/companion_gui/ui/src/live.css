@@ -510,31 +510,6 @@
   }
 }
 
-.agent-terminal {
-  background: var(--surface-1, #151412);
-  font-family: Consolas, "SFMono-Regular", monospace;
-}
-.agent-terminal .conversation-messages {
-  padding: 18px 24px;
-}
-.agent-terminal .conversation-message {
-  padding: 8px 0;
-  margin: 0 0 12px;
-  border-radius: 0;
-  background: transparent;
-}
-.agent-terminal .conversation-message.user {
-  border-left: 2px solid var(--line);
-  padding-left: 12px;
-}
-.agent-terminal .conversation-message > div {
-  font-family: inherit;
-  font-size: 13px;
-}
-.agent-terminal .conversation-composer {
-  border-radius: 6px;
-}
-
 .managed-conversation-host {
   flex: 1;
   min-height: 0;

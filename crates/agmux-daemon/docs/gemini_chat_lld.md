@@ -1,11 +1,12 @@
 # Gemini managed conversation design
 
 ## Ownership — LLD-UX-SHARED-CONTEXT-113 / LLD-UX-CHAT-MESSAGES-105
-A managed GUI Gemini session owns one lazy ACP process and one provider session
-ID. Chat and Agent Terminal are two presentations of that same conversation.
-Terminal is explicitly a provider transcript/prompt interface, not an OS shell
-or a second native Gemini TUI. Switching views never starts a provider or forks
-context. Legacy native/custom/CLI sessions retain their raw PTY interface.
+A managed GUI Gemini session owns one persisted provider session ID. Chat uses
+structured ACP messages; Terminal uses the actual native Gemini CLI/TUI through
+a PTY. Only one writer is active at a time. Switching queues an idle-boundary
+handoff using ACP session/load or native --resume with that exact UUID, preserving
+provider context and never falling back to a fresh conversation. Legacy
+native/custom/CLI sessions retain their existing raw PTY interface.
 The API's explicit --version diagnostic path remains native for launch checks.
 
 Managed creation records an IDLE logical session (PID zero until its provider
@@ -70,3 +71,33 @@ concurrency, request dedupe, approval/rejection and retention without claiming
 fixture text is a real model response. Native Windows packaging runs the same
 regressions. Authenticated Windows context and actual display scaling remain
 separate user acceptance evidence.
+
+## Corrected native terminal synchronization (user clarification, 2026-11-18)
+
+This implements the user correction to the rejected terminal-style presentation.
+Chat remains an ACP conversation renderer. Terminal uses LiveTerminal/xterm and
+an actual Gemini process in a native PTY. Gemini 0.68.0 supports ACP session/load
+and CLI --resume UUID; it does not attach its native TUI to an ACP wire.
+
+One daemon actor owns the persisted provider UUID and exactly one active writer.
+At an idle boundary, it stops/reaps ACP before starting native --resume, or reaps
+the native PTY before ACP session/load. A missing/unsupported/failed load retains
+history and identity and never silently calls session/new. A fresh Terminal-first
+session uses --session-id; an empty native conversation retains its writer until
+its first prompt creates resumable history. Chat can submit that first prompt
+through the same native owner, without a second conversation.
+
+Process-scoped Gemini lifecycle hooks (SessionStart/BeforeAgent/AfterAgent) write
+a small private readiness event via agmuxd --gemini-session-hook. They do not
+approve tools, alter model responses, change user/project settings or add context.
+The system-defaults overlay retains configured defaults; Gemini's concatenated
+hook arrays retain user hooks and enforced system policy is unchanged. Disabled
+or unavailable hooks never imply idle. Raw terminal input invalidates readiness
+until a later completion event. Current turns, native input drafts and pending
+approvals retain their writer; queued view changes wait rather than kill them.
+
+Native message display reads bounded real Gemini JSON/JSONL records, validates
+sessionId and replaces repeated record IDs; terminal screens/banners are never
+parsed into assistant messages. Ended transcripts remain retained in SQLite.
+Native PTY output/input/resize uses existing authenticated daemon/WebSocket
+seams, preserving actual ANSI rendering and keyboard semantics.

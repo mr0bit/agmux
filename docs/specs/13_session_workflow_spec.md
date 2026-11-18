@@ -1,25 +1,25 @@
 # Session workflow acceptance — issue #17 batch 2
 
-Approved 2026-11-18. One live provider conversation has Chat and Terminal presentations. This supersedes the independent-context decision from batch 1. Failed initially means not yet verified.
+Approved 2026-11-18. Chat stays conversational and Terminal uses the provider’s real CLI/TUI. One persisted provider conversation is synchronized through exclusive-writer handoff; this supersedes the rejected terminal-styled Chat implementation. Failed initially means not yet verified.
 
 ### REQ-UX-SHARED-CONTEXT-113
 * **Unique ID:** `REQ-UX-SHARED-CONTEXT-113`
-* **Text:** As a user of Agmux, One provider conversation shall power Chat and Terminal, so prompts from either view use the same context.
+* **Text:** As a user of Agmux, A proper conversational Chat and the actual native provider CLI/TUI shall synchronize one persisted provider session, so switching interfaces preserves the same complete model context. A terminal-styled Chat is not a native terminal.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-daemon::gemini_chat`
 * **Implementation Status:** Verified
-* **Verification Criteria:** Enter a unique fact in Chat, continue in Terminal and back; assert one provider session/process and complete ordered request history.
+* **Verification Criteria:** Enter a unique fact in Chat, resume the same UUID through the actual native PTY, recall/add context there, then load that UUID into ACP Chat. Verify native terminal I/O, complete ordered history, exclusive writer ownership and no new-session fallback on failed resume.
 * **Downstream Req:** `LLD-UX-SHARED-CONTEXT-113`
 * **Downstream Test:** `TEST-VER-UX-113`
 * **Test Status:** Passed
 
 ### REQ-UX-SHARED-STATE-114
 * **Unique ID:** `REQ-UX-SHARED-STATE-114`
-* **Text:** As a user of Agmux, Both views shall share messages, drafts, approvals and in-flight state, so switching cannot fork or duplicate a turn.
+* **Text:** As a user of Agmux, Both interfaces shall synchronize provider messages and turn ownership while retaining their own input presentation, so switching cannot fork, replay, discard or compete with an in-flight turn or approval. Chat drafts remain intact; native terminal drafts remain owned by the CLI.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-cli::companion_gui`
 * **Implementation Status:** Verified
-* **Verification Criteria:** Switch while streaming/waiting; submit in either view, preserve draft and reject duplicate/concurrent requests.
+* **Verification Criteria:** Queue a switch during Chat streaming/approval and a native terminal turn/approval. Keep the current writer alive, synchronize actual native transcript records, hand off only at a confirmed idle boundary, preserve the Chat draft and reject duplicate/concurrent sends.
 * **Downstream Req:** `LLD-UX-SHARED-STATE-114`
 * **Downstream Test:** `TEST-VER-UX-114`
 * **Test Status:** Passed

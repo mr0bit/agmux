@@ -1,7 +1,7 @@
 //! Shared protocol definitions and framed transport for agmux IPC.
 
 /// Capability advertised in the existing Companion List response for safe UI upgrades.
-pub const COMPANION_ACP_CAPABILITY: &str = "companion-workflow-v2";
+pub const COMPANION_ACP_CAPABILITY: &str = "companion-native-sync-v3";
 
 pub mod auth;
 pub mod ipc;

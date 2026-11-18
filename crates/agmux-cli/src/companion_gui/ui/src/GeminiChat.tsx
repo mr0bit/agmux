@@ -14,6 +14,9 @@ export type Permission = {
   tool_call?: { content?: EditProposal[] };
 };
 export type ChatState = {
+  owner?: string;
+  view?: string;
+  notice?: string | null;
   permissions?: Permission[];
   messages: { id: string; role: string; text: string; status?: string }[];
   status: string;
@@ -30,8 +33,8 @@ export default function GeminiChat({
   backend,
   sessionId,
   connected,
+  transitioning = false,
   onStatus,
-  presentation = "chat",
   draft,
   onDraft,
   onSnapshot,
@@ -39,8 +42,8 @@ export default function GeminiChat({
   backend: Backend;
   sessionId: string;
   connected: boolean;
+  transitioning?: boolean;
   onStatus: (status: string) => void;
-  presentation?: "chat" | "terminal";
   draft: string;
   onDraft: (text: string) => void;
   onSnapshot: (state: ChatState) => void;
@@ -65,6 +68,7 @@ export default function GeminiChat({
           operation: "state",
         });
         if (!disposed) {
+          setError("");
           setChat(state);
           statusRef.current(state.status);
           snapshotRef.current(state);
@@ -107,7 +111,7 @@ export default function GeminiChat({
     }
   };
   const send = async () => {
-    if (sending || active || !draft.trim()) return;
+    if (transitioning || sending || active || !draft.trim()) return;
     setSending(true);
     // Retrying an ambiguous HTTP failure reuses the same daemon request ID.
     if (pending.current?.text !== draft)
@@ -124,25 +128,23 @@ export default function GeminiChat({
     setSending(false);
   };
   return (
-    <section
-      className={`gemini-chat ${presentation === "terminal" ? "agent-terminal" : ""}`}
-      aria-label={
-        presentation === "terminal"
-          ? "Gemini terminal conversation"
-          : "Gemini conversation"
-      }
-    >
+    <section className="gemini-chat" aria-label="Gemini conversation">
       <div className="live-chat-header">
         <Sparkles size={16} />
         <strong>Gemini</strong>
         <span role="status" aria-label="Conversation status">
-          {sending ? "Submitting…" : chat.status}
+          {transitioning
+            ? "Synchronizing…"
+            : sending
+              ? "Submitting…"
+              : chat.status}
         </span>
       </div>
-      <p className="live-hint">
-        {presentation === "terminal" ? "Agent terminal" : "Chat"} · Same Gemini
-        conversation, history and approvals in both views.
-      </p>
+      {chat.notice && (
+        <p className="live-hint" role="status">
+          {chat.notice}
+        </p>
+      )}
       <div
         className="conversation-messages"
         ref={list}
@@ -231,14 +233,8 @@ export default function GeminiChat({
         }}
       >
         <textarea
-          aria-label={
-            presentation === "terminal" ? "Terminal prompt" : "Message Gemini"
-          }
-          placeholder={
-            presentation === "terminal"
-              ? "❯ Send a prompt to this Gemini session…"
-              : "Ask Gemini about this project…"
-          }
+          aria-label="Message Gemini"
+          placeholder="Ask Gemini about this project…"
           value={draft}
           onChange={(event) => onDraft(event.target.value)}
           disabled={!connected || sending}
@@ -269,6 +265,7 @@ export default function GeminiChat({
             aria-label="Send message"
             disabled={
               !connected ||
+              transitioning ||
               sending ||
               !draft.trim() ||
               !["idle", "cancelled"].includes(chat.status)

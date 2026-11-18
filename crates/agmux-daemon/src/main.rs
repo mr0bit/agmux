@@ -25,6 +25,9 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--gemini-session-hook") {
+        return agmux_daemon::gemini_chat::record_native_hook();
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

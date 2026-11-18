@@ -1,5 +1,9 @@
 # Issue #17 batch 2 — shared session workflow
 
+> Historical initial batch-2 record. The user rejected Terminal-styled Chat.
+> [The native Terminal correction report](qa17_native_terminal_report.md) supersedes
+> that presentation design and its earlier shared-context verification.
+
 Date: 2026-11-18 UTC. Tracker: https://github.com/mr0bit/agmux/issues/17.
 Draft fix PR: https://github.com/mr0bit/agmux/pull/18.
 Tested runtime source: `352ec6b03c8f84f450554fbe1087ddb312d796e5`, branch `fix/qa17-vcycle`.

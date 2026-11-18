@@ -4,7 +4,7 @@ title: 'QA17 B8: Windows batch 2 acceptance and evidence'
 status: In Progress
 assignee: []
 created_date: '2026-11-18T01:54:00Z'
-updated_date: '2026-11-18T03:36:00Z'
+updated_date: '2026-11-18T20:01:00Z'
 labels: []
 dependencies:
   - TASK-45
@@ -14,6 +14,7 @@ references:
   - docs/specs/13_session_workflow_spec.md
 documentation:
   - tests/reports/qa17_batch2_acceptance_report.md
+  - tests/reports/qa17_native_terminal_report.md
 modified_files:
   - docs/specs/13_session_workflow_spec.md
   - docs/specs/README.md
@@ -67,4 +68,6 @@ All local gates pass and source-backed screenshots/traceability are committed wi
 Windows CI run 97 exposed ERROR_PIPE_BUSY (231) during concurrent GUI IPC connections. Add REQ-IPC-CONNECT-CONTENTION-125 under the existing transport owner, bounded pre-request retry and native pipe recovery/deadline regression. Qualification remains open until the corrected Windows build passes.
 
 REQ-IPC-CONNECT-CONTENTION-125 verified: both native Windows public named-pipe recovery/deadline tests passed in CI run 99 (Windows job 134556326194), runtime source 352ec6b03c8f84f450554fbe1087ddb312d796e5. Full package/browser results and exact-source artifact remain in PR #18 / issue #17. Signed-in user acceptance remains open; AC1 not closed.
+
+User native-Terminal correction: old terminal-style build is superseded. TASK-43 now implements real native PTY + ACP load/resume synchronization, with 18 workflow cases and 7 official CLI/application checks locally. New Windows native hook/PTY package qualification remains visible in PR #18 and issue #17; user account/DPI acceptance stays open.
 <!-- SECTION:NOTES:END -->

@@ -306,6 +306,49 @@ export default function LiveApp({ token }: { token: string }) {
   );
   const managed =
     !!session && !!snapshot?.managed_sessions?.includes(session.id);
+  const terminalReady =
+    !!session && reviewChats[session.id]?.owner === "terminal";
+  const [viewPending, setViewPending] = useState(false);
+  const viewRequests = useRef(new Map<string, Promise<void>>());
+  useEffect(() => {
+    if (!managed || !session || !alive || !["Chat", "Terminal"].includes(tab)) {
+      setViewPending(false);
+      return;
+    }
+    setViewPending(true);
+    let disposed = false;
+    // Serialize ownership changes: an older, slower request cannot overwrite
+    // the user's latest tab selection. Skip requests superseded before send.
+    const queued = (viewRequests.current.get(session.id) || Promise.resolve())
+      .catch(() => {})
+      .then(async () => {
+        if (disposed) return;
+        try {
+          const state = await backend.request<ChatState>("/api/chat", {
+            session_id: session.id,
+            operation: "view",
+            view: tab.toLowerCase(),
+          });
+          if (!disposed)
+            setReviewChats((previous) => ({
+              ...previous,
+              [session.id]: state,
+            }));
+        } catch (failure) {
+          if (!disposed) showError(failure);
+        } finally {
+          if (!disposed) setViewPending(false);
+        }
+      });
+    viewRequests.current.set(session.id, queued);
+    void queued.finally(() => {
+      if (viewRequests.current.get(session.id) === queued)
+        viewRequests.current.delete(session.id);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [backend, managed, session?.id, tab, alive]);
   const dirty = !!editor && editor.content !== editor.original;
   const showError = (failure: unknown) =>
     setError(failure instanceof Error ? failure.message : String(failure));
@@ -1331,10 +1374,7 @@ export default function LiveApp({ token }: { token: string }) {
                     <div
                       className="managed-conversation-host"
                       style={{
-                        display:
-                          tab === "Chat" || tab === "Terminal"
-                            ? "flex"
-                            : "none",
+                        display: tab === "Chat" ? "flex" : "none",
                       }}
                     >
                       <GeminiChat
@@ -1342,13 +1382,13 @@ export default function LiveApp({ token }: { token: string }) {
                         backend={backend}
                         sessionId={session.id}
                         connected={connected && alive}
+                        transitioning={viewPending}
                         onSnapshot={(state) =>
                           setReviewChats((previous) => ({
                             ...previous,
                             [session.id]: state,
                           }))
                         }
-                        presentation={tab === "Terminal" ? "terminal" : "chat"}
                         draft={drafts[session.id] || ""}
                         onDraft={(text) =>
                           setDrafts((previous) => ({
@@ -1471,7 +1511,19 @@ export default function LiveApp({ token }: { token: string }) {
                       />
                     </>
                   )}
-                  {tab === "Terminal" && !managed && (
+                  {tab === "Terminal" && managed && !terminalReady && (
+                    <div className="live-hint" role="status">
+                      {reviewChats[session.id]?.notice ||
+                        "Opening the native Gemini terminal for this conversation…"}
+                      <button
+                        className="live-action"
+                        onClick={() => setTab("Chat")}
+                      >
+                        Return to Chat
+                      </button>
+                    </div>
+                  )}
+                  {tab === "Terminal" && (!managed || terminalReady) && (
                     <Suspense
                       fallback={<p className="live-hint">Opening terminal…</p>}
                     >
