@@ -103,3 +103,14 @@ Chat operation. The daemon queues transfers while a turn, approval or native
 draft is in flight. Chat remains mounted for transcript/state synchronization;
 its draft is preserved independently of the native provider input editor.
 No terminal-styled Chat or second independent provider conversation is used.
+
+
+## LLD-PKG-WINDOWS-CRT-126 — portable Windows packaging
+The x86_64 MSVC target enables `+crt-static` in `.cargo/config.toml`, applying
+consistently to both shipped binaries and native build dependencies. The package
+gate inspects both actual PE dependency tables using the installed Visual Studio
+`dumpbin /DEPENDENTS` tool and rejects external VCRUNTIME/MSVCP/CONCRT/VCCORLIB/
+MSVCR DLLs. Windows OS DLLs remain legitimate system dependencies. This check
+addresses a hosted-runner blind spot: startup can pass on a development image
+that already includes the redistributable. Existing standalone startup and all
+packaged browser/PTY tests still run against the statically linked binaries.

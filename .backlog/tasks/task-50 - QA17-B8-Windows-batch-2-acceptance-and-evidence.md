@@ -4,7 +4,7 @@ title: 'QA17 B8: Windows batch 2 acceptance and evidence'
 status: In Progress
 assignee: []
 created_date: '2026-11-18T01:54:00Z'
-updated_date: '2026-11-18T20:47:00Z'
+updated_date: '2026-11-22T21:51:00Z'
 labels: []
 dependencies:
   - TASK-45
@@ -13,6 +13,7 @@ references:
   - https://github.com/mr0bit/agmux/issues/17
   - docs/specs/13_session_workflow_spec.md
   - crates/agmux-core/src/pty_manager.rs
+  - .cargo/config.toml
 documentation:
   - tests/reports/qa17_batch2_acceptance_report.md
   - tests/reports/qa17_native_terminal_report.md
@@ -42,6 +43,8 @@ modified_files:
   - crates/agmux-core/src/pty_manager.rs
   - crates/agmux-core/docs/pty_manager_lld.md
   - tests/reports/qa17_native_terminal_report.md
+  - .cargo/config.toml
+  - crates/agmux-cli/docs/companion_gui_lld.md
 priority: medium
 type: enhancement
 ordinal: 50000
@@ -76,4 +79,8 @@ REQ-IPC-CONNECT-CONTENTION-125 verified: both native Windows public named-pipe r
 User native-Terminal correction: old terminal-style build is superseded. TASK-43 now implements real native PTY + ACP load/resume synchronization, with 18 workflow cases and 7 official CLI/application checks locally. New Windows native hook/PTY package qualification remains visible in PR #18 and issue #17; user account/DPI acceptance stays open.
 
 Native correction CI run 105: quality and Linux 18/18 passed; Windows 13/18 passed. Five native handoff/exit checks expose ConPTY exit notification waiting for output EOF while the viewport still owns the master. Fix process-exit publication independently of ConPTY output EOF; retain exact-session and no-second-writer guards. No failed Windows archive delivered.
+
+QA-18: user Windows screenshot reports VCRUNTIME140.dll missing before agmux can start. Previous hosted CI had the redistributable installed, masking the loader dependency. Fix MSVC CRT linkage for both shipped executables and gate packaging on their PE import tables; retain standalone application and native browser checks. User clean-machine acceptance remains open.
+
+REQ-PKG-WINDOWS-CRT-126: .cargo/config.toml sets +crt-static for x86_64-pc-windows-msvc; CI TEST-VER-PKG-126 inspects both real release PE dependency tables, rejecting external Visual C++ runtime DLLs before package upload. Windows native verification pending.
 <!-- SECTION:NOTES:END -->

@@ -129,3 +129,18 @@ it does not bypass a live process. A native public-PTY regression holds the
 viewport/master open during both natural and forced exit. The final corrected
 Windows run/artifact remains recorded in PR #18 / issue #17; failed run 105 did
 not publish a Windows executable artifact. Signed-in/DPI acceptance stays open.
+
+
+## QA-18 — missing Windows Visual C++ runtime (22 November 2026)
+The user's system-loader dialog reports `VCRUNTIME140.dll` missing. Inspection
+of the exact previous Windows test ZIP confirms both `agmux.exe` and `agmuxd.exe`
+import it. Hosted Windows CI had the runtime installed, so successful startup
+there did not establish portable loading on a clean user machine.
+
+REQ-PKG-WINDOWS-CRT-126 / TASK-50 now enable static CRT linkage and gate packaging
+on inspection of both actual PE dependency tables, followed by the existing
+standalone and packaged browser checks. Native Windows verification is pending
+until the corrected CI run completes; exact source/artifact/checksum will be
+recorded in issue #17 and PR #18. A user clean-machine retest remains separate.
+The official Microsoft x64 redistributable can unblock the old build; users
+should not download individual runtime DLLs from third-party sites.

@@ -148,6 +148,27 @@ jobs:
           cd ../../..
           sha256sum ${{ matrix.platform.archive_name }} > ${{ matrix.platform.archive_name }}.sha256
 
+      - name: Verify Windows runtime portability (TEST-VER-PKG-126)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or !$vs) { throw 'Visual C++ inspection tools were not found' }
+          $dumpbin = Get-ChildItem (Join-Path $vs 'VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe') | Sort-Object FullName -Descending | Select-Object -First 1
+          if (!$dumpbin) { throw 'dumpbin is required to audit shipped executable dependencies' }
+          foreach ($name in @('agmux.exe', 'agmuxd.exe')) {
+            $exe = "target/${{ matrix.platform.target }}/release/$name"
+            $imports = & $dumpbin.FullName /DEPENDENTS $exe 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) { throw "Cannot inspect dependencies of $name" }
+            Write-Output $imports
+            if ($imports -match '(?im)^\s*(?:vcruntime|msvcp|concrt|vccorlib|msvcr)[a-z0-9_]*[.]dll\s*$') {
+              throw "$name requires a separate Visual C++ runtime: $($Matches[0].Trim())"
+            }
+            Write-Output "TEST-VER-PKG-126: $name has no external Visual C++ runtime DLL dependency."
+          }
+
       - name: Install official Gemini CLI for Windows provider verification
         if: runner.os == 'Windows'
         run: npm install --global @google/gemini-cli@0.68.0
