@@ -139,8 +139,17 @@ there did not establish portable loading on a clean user machine.
 
 REQ-PKG-WINDOWS-CRT-126 / TASK-50 now enable static CRT linkage and gate packaging
 on inspection of both actual PE dependency tables, followed by the existing
-standalone and packaged browser checks. Native Windows verification is pending
-until the corrected CI run completes; exact source/artifact/checksum will be
-recorded in issue #17 and PR #18. A user clean-machine retest remains separate.
+standalone and packaged browser checks. Native Windows verification passed in [CI run 109](https://github.com/mr0bit/agmux/actions/runs/45074571071), runtime source
+`599e04750d6209971bebbe10463602351a3b1ac2`: PE audit for both executables,
+standalone startup, native pipe/PTY checks and all 18 Windows browser cases.
+Quality/126 Rust tests and all 18 Linux browser cases also passed. Independent
+inspection of the downloaded archive confirmed only Windows system DLL imports.
+A user clean-machine retest remains separate.
+
+[Corrected Windows archive](https://github.com/mr0bit/agmux/actions/runs/45074571071/artifacts/14775103936)
+and [native user-view screenshots/results](https://github.com/mr0bit/agmux/actions/runs/45074571071/artifacts/14775088784).
+Outer SHA256: `4eddd15fb5078bb1d2e0cbfd88ae0fcc562c615ae5dd5f7f28e2c073b8aa1fe1`.
+Inner executable ZIP SHA256: `ef2089521c1f49f350554616539ff5e53e8d3ed18351d09a793b8afd9935b767`.
+Both checksums and both PE files were verified after download.
 The official Microsoft x64 redistributable can unblock the old build; users
 should not download individual runtime DLLs from third-party sites.

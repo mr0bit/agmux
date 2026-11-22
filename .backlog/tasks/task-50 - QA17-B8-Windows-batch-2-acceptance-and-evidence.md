@@ -4,7 +4,7 @@ title: 'QA17 B8: Windows batch 2 acceptance and evidence'
 status: In Progress
 assignee: []
 created_date: '2026-11-18T01:54:00Z'
-updated_date: '2026-11-22T21:51:00Z'
+updated_date: '2026-11-22T22:11:00Z'
 labels: []
 dependencies:
   - TASK-45
@@ -83,4 +83,6 @@ Native correction CI run 105: quality and Linux 18/18 passed; Windows 13/18 pass
 QA-18: user Windows screenshot reports VCRUNTIME140.dll missing before agmux can start. Previous hosted CI had the redistributable installed, masking the loader dependency. Fix MSVC CRT linkage for both shipped executables and gate packaging on their PE import tables; retain standalone application and native browser checks. User clean-machine acceptance remains open.
 
 REQ-PKG-WINDOWS-CRT-126: .cargo/config.toml sets +crt-static for x86_64-pc-windows-msvc; CI TEST-VER-PKG-126 inspects both real release PE dependency tables, rejecting external Visual C++ runtime DLLs before package upload. Windows native verification pending.
+
+QA-18 / REQ-PKG-WINDOWS-CRT-126 verified in CI109, runtime 599e04750d6209971bebbe10463602351a3b1ac2. Both PE import audits, standalone Windows startup, native pipe/PTY regressions, all 18 Windows and 18 Linux browser cases plus 126 Rust tests passed. Downloaded archive checksums and only Windows system DLL imports independently verified. User clean-machine and signed-in/DPI acceptance remain open; AC1 unchanged.
 <!-- SECTION:NOTES:END -->

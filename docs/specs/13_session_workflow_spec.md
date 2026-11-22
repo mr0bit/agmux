@@ -152,8 +152,8 @@ Approved 2026-11-18. Chat stays conversational and Terminal uses the provider’
 * **Text:** As a Windows user, I shall be able to launch both downloaded Agmux executables without separately installing the Microsoft Visual C++ Redistributable.
 * **Criticality:** High
 * **SW Component:** `crates/agmux-cli::companion_gui`
-* **Implementation Status:** Implemented
+* **Implementation Status:** Verified
 * **Verification Criteria:** Inspect the PE dependency tables of both release executables and reject external Visual C++ runtime imports before packaging; also run standalone GUI/daemon startup and packaged Windows regressions. Retain clean-user acceptance separately.
 * **Downstream Req:** `LLD-PKG-WINDOWS-CRT-126`
 * **Downstream Test:** `TEST-VER-PKG-126`
-* **Test Status:** Failed
+* **Test Status:** Passed
