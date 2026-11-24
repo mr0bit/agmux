@@ -22,13 +22,18 @@ async function request<T>(
   ) as Promise<T>;
 }
 async function createShell(page: Page, title: string) {
-  await page.getByRole("button", { name: "New session", exact: true }).click();
-  await page.getByLabel("Session name").fill(title);
-  await page.getByLabel("Agent", { exact: true }).selectOption("shell");
-  await page
-    .getByRole("button", { name: "Start session", exact: true })
-    .click();
+  // Shell remains a native backend capability, not a GUI provider choice.
+  const info = await request<{ value: { cwd: string } }>(page, "/api/info");
+  const result = await request<{ status: number }>(page, "/api/spawn", {
+    agent: "shell",
+    cwd: info.value.cwd,
+    title,
+    args: [],
+  });
+  expect(result.status).toBe(200);
+  await page.reload();
   await expect(page.locator("h1")).toHaveText(title);
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
   await expect(page.locator(".xterm-screen")).toBeVisible();
 }
 async function send(page: Page, text: string) {
@@ -107,9 +112,11 @@ test.describe.serial("actual Rust daemon integration", () => {
       "# Saved by the live UI\n",
     );
     await page.getByRole("button", { name: "Git", exact: true }).click();
-    await expect(page.locator(".git-view .diff-code")).toContainText(
-      "Saved by the live UI",
-    );
+    await expect(
+      page
+        .locator(".git-view")
+        .getByText("# Saved by the live UI", { exact: true }),
+    ).toBeVisible();
     await page.getByRole("button", { name: "Files", exact: true }).click();
     await editor.fill("# Unsaved browser edit\n");
     await writeFile(
@@ -164,7 +171,7 @@ test.describe.serial("actual Rust daemon integration", () => {
       status: number;
       value: { cwd: string; capabilities: { structured_chat: boolean } };
     }>(page, "/api/info");
-    expect(info.value.capabilities.structured_chat).toBe(false);
+    expect(info.value.capabilities.structured_chat).toBe(true);
     const outside = path.join(info.value.cwd, "..", "outside");
     await mkdir(outside, { recursive: true });
     await writeFile(path.join(outside, "private.txt"), "must stay outside");
@@ -269,30 +276,180 @@ test.describe.serial("actual Rust daemon integration", () => {
   });
 });
 
-test("Gemini CLI provider setup and real installed CLI launch", async ({ page }) => {
+test("Gemini CLI provider setup and real installed CLI launch", async ({
+  page,
+}) => {
+  test.setTimeout(110000);
   await page.goto("/");
   await page.getByRole("button", { name: "New session", exact: true }).click();
   await page.getByLabel("Agent", { exact: true }).selectOption("gemini");
   await expect(page.getByLabel("Gemini model")).toBeVisible();
-  await expect(page.getByText("Gemini CLI runs locally.", { exact: false })).toBeVisible();
-  const info = await request<{ value: { agents: { id: string; available: boolean }[] } }>(page, "/api/info");
+  await expect(
+    page.getByText("Gemini runs locally.", { exact: false }),
+  ).toBeVisible();
+  const info = await request<{
+    value: { agents: { id: string; available: boolean }[] };
+  }>(page, "/api/info");
   if (!info.value.agents.find((agent) => agent.id === "gemini")?.available) {
-    await expect(page.getByRole("button", { name: "Start session", exact: true })).toBeDisabled();
-    await expect(page.getByText("npm install -g @google/gemini-cli", { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Start session", exact: true }),
+    ).toBeDisabled();
+    await expect(
+      page.getByText("npm install -g @google/gemini-cli", { exact: true }),
+    ).toBeVisible();
     return;
   }
   // Real provider verification is opt-in; never consume account credentials or API quota.
-  test.skip(process.env.AGMUX_GEMINI_TEST !== "1", "Set AGMUX_GEMINI_TEST=1 with the official CLI on PATH");
+  test.skip(
+    process.env.AGMUX_GEMINI_TEST !== "1",
+    "Set AGMUX_GEMINI_TEST=1 with the official CLI on PATH",
+  );
+  await expect(
+    page.getByText("Using CLI configured default", { exact: true }),
+  ).toBeVisible({ timeout: 95000 });
   await page.getByLabel("Session name").fill("Gemini CLI verification");
-  await page.getByLabel("Gemini model").fill("gemini-2.5-pro");
-  await page.getByLabel("Arguments (JSON array)").fill('["--version", "--model=other"]');
-  await page.getByRole("button", { name: "Start session", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "New session" }).getByText("Set the Gemini model in either Model or Arguments, not both.", { exact: true })).toBeVisible();
+  await page.getByText("Advanced settings", { exact: true }).click();
   await page.getByLabel("Arguments (JSON array)").fill('["--version"]');
-  await page.getByRole("button", { name: "Start session", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Start session", exact: true })
+    .click();
   await expect(page.locator("h1")).toHaveText("Gemini CLI verification");
   await page.getByRole("button", { name: "Chat", exact: true }).click();
-  await expect(page.getByLabel("Live session output")).toContainText("0.68.0");
+  await expect
+    .poll(
+      async () =>
+        (await request<{ value: { screen: string } }>(page, "/api/snapshot"))
+          .value.screen,
+    )
+    .toContain("0.68.0");
+  await expect(
+    page.getByRole("log", { name: "Conversation messages" }),
+  ).toHaveCount(0);
   await expect(page.locator(".live-chat-header")).toContainText("Gemini");
-  await page.screenshot({ path: path.resolve("../../../../../docs/assets/screenshots/gemini_provider_verification.png"), fullPage: true });
+  await page.screenshot({
+    path: path.resolve(
+      "../../../../../docs/assets/screenshots/gemini_provider_verification.png",
+    ),
+    fullPage: true,
+  });
+});
+
+test("official Gemini ACP reports missing authentication without a stuck turn", async ({
+  page,
+}) => {
+  test.skip(
+    process.env.AGMUX_GEMINI_TEST !== "1",
+    "Requires isolated official Gemini CLI",
+  );
+  test.setTimeout(110000);
+  await page.goto("/");
+  const info = await request<{ value: { cwd: string } }>(page, "/api/info");
+  const spawned = await request<{
+    status: number;
+    value: { session_id: string };
+  }>(page, "/api/spawn", {
+    agent: "gemini",
+    cwd: info.value.cwd,
+    title: "Gemini sign-in required",
+    args: [],
+  });
+  expect(spawned.status).toBe(200);
+  const id = spawned.value.session_id;
+  await request(page, "/api/chat", {
+    session_id: id,
+    operation: "send",
+    request_id: "missing-auth",
+    message: "hello",
+  });
+  await expect
+    .poll(
+      async () =>
+        (
+          await request<{ value: { status: string } }>(page, "/api/chat", {
+            session_id: id,
+            operation: "state",
+          })
+        ).value.status,
+      { timeout: 95000 },
+    )
+    .toBe("failed");
+  const state = await request<{
+    value: { error: string; messages: unknown[] };
+  }>(page, "/api/chat", { session_id: id, operation: "state" });
+  expect(state.value.error).toMatch(/auth|API key|sign-in/i);
+  expect(state.value.messages).toHaveLength(1);
+  await page.reload();
+  await page.getByRole("button", { name: "Chat", exact: true }).click();
+  await expect(page.getByLabel("Conversation status")).toHaveText("failed");
+  await page.screenshot({
+    path: path.resolve(
+      "../../../../../docs/assets/screenshots/qa17_auth_verification.png",
+    ),
+    fullPage: true,
+  });
+});
+
+test("official Gemini native TUI runs in Terminal while Chat stays conversational", async ({
+  page,
+}) => {
+  test.skip(
+    process.env.AGMUX_GEMINI_TEST !== "1",
+    "Requires the installed official Gemini CLI",
+  );
+  test.setTimeout(90000);
+  await page.goto("/");
+  const info = await request<{ value: { cwd: string } }>(page, "/api/info");
+  const started = await request<{
+    status: number;
+    value: { session_id: string };
+  }>(page, "/api/spawn", {
+    agent: "gemini",
+    cwd: info.value.cwd,
+    title: "Official Gemini native Terminal",
+    args: [],
+  });
+  expect(started.status).toBe(200);
+  await page.reload();
+  await expect(
+    page.getByLabel("Message Gemini", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await expect(page.locator(".xterm-screen")).toBeVisible();
+  await expect(
+    page.getByLabel("Message Gemini", { exact: true }),
+  ).not.toBeVisible();
+  const output = await page.evaluate(
+    (id) =>
+      new Promise<string>((resolve, reject) => {
+        const socket = new WebSocket(
+          `ws://${location.host}/api/terminal?token=${window.__AGMUX__!.token}&session_id=${encodeURIComponent(id)}`,
+        );
+        socket.binaryType = "arraybuffer";
+        let text = "";
+        const timer = setTimeout(() => {
+          socket.close();
+          reject(
+            Error("Official Gemini did not render a native terminal screen"),
+          );
+        }, 45000);
+        socket.onmessage = (event) => {
+          if (typeof event.data !== "string") {
+            text += new TextDecoder().decode(event.data);
+            if (/Gemini|trust|auth|Sign in|login/i.test(text)) {
+              clearTimeout(timer);
+              socket.close();
+              resolve(text);
+            }
+          }
+        };
+      }),
+    started.value.session_id,
+  );
+  expect(output.length).toBeGreaterThan(20);
+  await page.screenshot({
+    path: path.resolve(
+      "../../../../../docs/assets/screenshots/qa17_official_native_terminal_verification.png",
+    ),
+    fullPage: true,
+  });
 });

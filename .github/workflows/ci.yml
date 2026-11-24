@@ -56,7 +56,7 @@ jobs:
           test -z "$(git ls-files --others --exclude-standard -- groma)"
 
       - name: Run .soul V-Cycle Traceability Check
-        run: node .soul/tools/v-cycle-checker.mjs
+        run: node .soul/tools/v-cycle-checker.mjs --strict
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -126,6 +126,13 @@ jobs:
         with:
           key: ${{ matrix.platform.target }}
 
+      - name: Verify native Windows pipe and PTY lifecycle recovery
+        if: runner.os == 'Windows'
+        run: |
+          cargo test -p agmux-core --target ${{ matrix.platform.target }} --lib windows_conpty_exit_is_published_while_viewport_retains_master
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p agmux-proto --target ${{ matrix.platform.target }} connection_tests
+
       - name: Build Release Executables
         env:
           CC_x86_64_unknown_linux_musl: musl-gcc
@@ -140,6 +147,27 @@ jobs:
           tar -czvf ../../../${{ matrix.platform.archive_name }} agmux agmuxd
           cd ../../..
           sha256sum ${{ matrix.platform.archive_name }} > ${{ matrix.platform.archive_name }}.sha256
+
+      - name: Verify Windows runtime portability (TEST-VER-PKG-126)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or !$vs) { throw 'Visual C++ inspection tools were not found' }
+          $dumpbin = Get-ChildItem (Join-Path $vs 'VC/Tools/MSVC/*/bin/Hostx64/x64/dumpbin.exe') | Sort-Object FullName -Descending | Select-Object -First 1
+          if (!$dumpbin) { throw 'dumpbin is required to audit shipped executable dependencies' }
+          foreach ($name in @('agmux.exe', 'agmuxd.exe')) {
+            $exe = "target/${{ matrix.platform.target }}/release/$name"
+            $imports = & $dumpbin.FullName /DEPENDENTS $exe 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) { throw "Cannot inspect dependencies of $name" }
+            Write-Output $imports
+            if ($imports -match '(?im)^\s*(?:vcruntime|msvcp|concrt|vccorlib|msvcr)[a-z0-9_]*[.]dll\s*$') {
+              throw "$name requires a separate Visual C++ runtime: $($Matches[0].Trim())"
+            }
+            Write-Output "TEST-VER-PKG-126: $name has no external Visual C++ runtime DLL dependency."
+          }
 
       - name: Install official Gemini CLI for Windows provider verification
         if: runner.os == 'Windows'
@@ -232,6 +260,26 @@ jobs:
           Compress-Archive -Path "target/${{ matrix.platform.target }}/release/agmux.exe", "target/${{ matrix.platform.target }}/release/agmuxd.exe" -DestinationPath $archive
           $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
           "$hash  $archive" | Out-File -Encoding ascii "$archive.sha256"
+
+      - name: Install Chromium for packaged companion regression
+        working-directory: crates/agmux-cli/src/companion_gui/ui
+        run: npx playwright install --with-deps --only-shell chromium
+
+      - name: Exercise packaged UI and daemon with external ACP fixture
+        working-directory: crates/agmux-cli/src/companion_gui/ui
+        env:
+          AGMUX_TEST_BIN: ${{ github.workspace }}/target/${{ matrix.platform.target }}/release
+        run: npx playwright test -c playwright.qa17.config.ts
+
+      - name: Upload companion verification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: companion-qa-${{ matrix.platform.artifact_slug }}
+          path: |
+            docs/assets/screenshots/qa17_*_verification.png
+            crates/agmux-cli/src/companion_gui/ui/test-results
+          retention-days: 30
 
       - name: Upload Executable Artifacts
         uses: actions/upload-artifact@v7

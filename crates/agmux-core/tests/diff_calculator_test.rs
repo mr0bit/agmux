@@ -64,3 +64,57 @@ fn five_scopes_and_line_positions() {
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn non_git_directory_is_an_explicit_state_without_initializing_it() {
+    use agmux_core::diff_calculator::DiffError;
+    let dir = std::env::temp_dir().join(format!("agmux-nongit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let result = calculate_diff(&dir, DiffScope::FullUncommitted, None, None);
+    assert!(matches!(result, Err(DiffError::NotRepository)));
+    assert!(!dir.join(".git").exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn untracked_and_unborn_head_changes_are_visible() {
+    let dir = std::env::temp_dir().join(format!("agmux-new-diff-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&dir, &["init", "-b", "main"]);
+    std::fs::write(dir.join("new.txt"), "new content\n").unwrap();
+    std::fs::write(dir.join(".gitignore"), "*.bin\n").unwrap();
+    std::fs::write(dir.join("ignored.bin"), "not reviewed").unwrap();
+    std::fs::write(dir.join("staged.txt"), "indexed text\n").unwrap();
+    git(&dir, &["add", "staged.txt"]);
+    std::fs::write(dir.join("staged.txt"), "working text\n").unwrap();
+    std::fs::write(dir.join("large.txt"), vec![b'x'; 1_000_001]).unwrap();
+    std::fs::write(dir.join("binary.dat"), [0, 1, 2]).unwrap();
+    let files = calculate_diff(&dir, DiffScope::FullUncommitted, None, None).unwrap();
+    let staged = files
+        .iter()
+        .find(|f| f.new_path.as_deref() == Some("staged.txt"))
+        .unwrap();
+    assert_eq!(staged.hunks[0].lines[0].content, "working text");
+    for name in ["large.txt", "binary.dat"] {
+        assert!(
+            files
+                .iter()
+                .find(|f| f.new_path.as_deref() == Some(name))
+                .unwrap()
+                .hunks
+                .is_empty()
+        );
+    }
+    assert!(
+        !files
+            .iter()
+            .any(|f| f.new_path.as_deref() == Some("ignored.bin"))
+    );
+    let file = files
+        .iter()
+        .find(|f| f.new_path.as_deref() == Some("new.txt"))
+        .unwrap();
+    assert_eq!(file.hunks[0].lines[0].content, "new content");
+    assert_eq!(file.old_path, None);
+    std::fs::remove_dir_all(dir).unwrap();
+}

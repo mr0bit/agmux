@@ -33,18 +33,23 @@ impl ScreenBuffer {
         self.parser.process(bytes);
     }
 
+    /// Whether the child requested bracketed paste input.
+    pub fn bracketed_paste(&self) -> bool {
+        self.parser.screen().bracketed_paste()
+    }
+
     /// Resize the virtual terminal grid and reflow existing contents.
     pub fn resize(&mut self, rows: u16, cols: u16) {
         let r = NonZeroU16::new(rows.max(1)).expect("non-zero rows");
         let c = NonZeroU16::new(cols.max(1)).expect("non-zero cols");
-        let formatted = self.parser.screen().contents_formatted();
-        self.parser = vt100::Parser::new(r, c, 10_000);
-        self.parser.process(formatted.as_bytes());
+        // Resize the existing parser: reconstructing from visible contents loses
+        // cursor/mode/alternate-screen state used by native TUI applications.
+        self.parser.set_size(r, c);
     }
 
     /// Capture full formatted ANSI contents.
     pub fn capture_formatted(&self) -> Vec<u8> {
-        self.parser.screen().contents_formatted().into_bytes()
+        self.parser.screen().state_formatted().into_bytes()
     }
 
     /// Capture plain text contents.
@@ -58,7 +63,7 @@ impl ScreenBuffer {
         let (rows, cols) = screen.size();
         let (cursor_row, cursor_col) = screen.cursor_position();
         let scrollback_offset = screen.scrollback();
-        let formatted_screen = screen.contents_formatted().into_bytes();
+        let formatted_screen = screen.state_formatted().into_bytes();
         let lines = screen.contents().lines().map(str::to_owned).collect();
         agmux_proto::ScreenSyncFrame {
             session_id: session_id.to_string(),
@@ -100,5 +105,25 @@ mod tests {
         let formatted = screen.capture_formatted();
         let formatted_str = String::from_utf8_lossy(&formatted);
         assert!(formatted_str.contains("SUCCESS"));
+    }
+}
+
+#[cfg(test)]
+mod resize_regressions {
+    #[test]
+    fn resize_preserves_native_input_modes_and_cursor() {
+        let mut screen = super::ScreenBuffer::new(24, 80);
+        screen.process(b"\x1b[?2004h\x1b[5;8Htext");
+        screen.resize(30, 100);
+        assert!(screen.bracketed_paste());
+        let frame = screen.capture_sync_frame("native");
+        assert_eq!((frame.cursor_row, frame.cursor_col), (4, 11));
+        assert_eq!((frame.rows, frame.cols), (30, 100));
+        let mut attached = super::ScreenBuffer::new(30, 100);
+        attached.process(&frame.formatted_screen);
+        assert!(
+            attached.bracketed_paste(),
+            "reattaching must preserve native input modes"
+        );
     }
 }

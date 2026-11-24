@@ -19,6 +19,9 @@ export type Panel = {
   kind: string;
 };
 export type Snapshot = {
+  managed_sessions?: string[];
+  chat_activity?: Record<string, number>;
+  chat_states?: Record<string, string>;
   sessions: NativeSession[];
   metadata: Record<string, Metadata>;
   selected: string | null;
@@ -63,7 +66,9 @@ export class Backend {
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(
+        ["/api/models", "/api/chat"].includes(path) ? 105000 : 15000,
+      ),
       cache: "no-store",
     });
     const value = await response.json();

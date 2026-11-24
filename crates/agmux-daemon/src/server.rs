@@ -469,18 +469,164 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
             message
         };
         match message {
+            IpcMessage::CompanionRequest(agmux_proto::CompanionRequest::Chat {
+                session_id,
+                operation,
+                payload,
+            }) => {
+                let session = {
+                    let db = storage.lock().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                    db.get_session(&session_id)?
+                };
+                let result = if let Some(session) = session {
+                    if session.command.split_whitespace().next().is_some_and(|c| {
+                        c.replace('\\', "/")
+                            .rsplit('/')
+                            .next()
+                            .is_some_and(|n| matches!(n, "gemini" | "gemini.exe" | "gemini.cmd"))
+                    }) {
+                        crate::gemini_chat::request(
+                            &session_id,
+                            std::path::Path::new(&session.cwd),
+                            &operation,
+                            &payload,
+                            storage.clone(),
+                            matches!(
+                                session.state.as_str(),
+                                "DEAD" | "ARCHIVED" | "COMPLETED" | "EXITED"
+                            ),
+                        )
+                        .await
+                    } else {
+                        Err(anyhow::anyhow!(
+                            "Structured chat is available for Gemini sessions"
+                        ))
+                    }
+                } else {
+                    Err(anyhow::anyhow!("Session not found"))
+                };
+                let (content, error) = match result {
+                    Ok(v) => (Some(v), None),
+                    Err(e) => (None, Some(e.to_string())),
+                };
+                out_tx
+                    .send(IpcMessage::CompanionResponse(
+                        agmux_proto::CompanionResponse {
+                            notifications: vec![],
+                            selected_panel: None,
+                            panels: vec![],
+                            selected: None,
+                            content,
+                            error,
+                        },
+                    ))
+                    .await?;
+            }
+            IpcMessage::CompanionRequest(agmux_proto::CompanionRequest::StartChat {
+                session_id,
+                cwd,
+                model,
+            }) => {
+                let result = async {
+                    let root = tokio::fs::canonicalize(cwd).await?;
+                    anyhow::ensure!(root.is_dir(), "Project must be a directory");
+                    let info = SessionInfo {
+                        session_id: session_id.clone(),
+                        pid: 0,
+                        cwd: root.to_string_lossy().into_owned(),
+                        command: "gemini --acp".into(),
+                        created_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)?
+                            .as_secs(),
+                        state: "IDLE".into(),
+                    };
+                    {
+                        let db = storage.lock().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                        db.insert_session(&info)?;
+                        db.select_companion_session(&session_id)?;
+                    }
+                    crate::gemini_chat::create(&storage, &session_id, model)?;
+                    let git_root = root.clone();
+                    let sha = tokio::task::spawn_blocking(move || {
+                        std::process::Command::new("git")
+                            .current_dir(git_root)
+                            .args(["rev-parse", "--verify", "HEAD"])
+                            .output()
+                            .ok()
+                            .filter(|o| o.status.success())
+                            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+                    })
+                    .await?;
+                    storage
+                        .lock()
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?
+                        .set_start_git_sha(&session_id, sha.as_deref())?;
+                    Ok::<_, anyhow::Error>(serde_json::json!({"session_id":session_id}).to_string())
+                }
+                .await;
+                let (content, error) = match result {
+                    Ok(c) => (Some(c), None),
+                    Err(e) => (None, Some(e.to_string())),
+                };
+                out_tx
+                    .send(IpcMessage::CompanionResponse(
+                        agmux_proto::CompanionResponse {
+                            notifications: vec![],
+                            selected_panel: None,
+                            panels: vec![],
+                            selected: None,
+                            content,
+                            error,
+                        },
+                    ))
+                    .await?;
+            }
+            IpcMessage::CompanionRequest(agmux_proto::CompanionRequest::ChatStates) => {
+                let content = Some(crate::gemini_chat::statuses(storage.clone()).await?);
+                out_tx
+                    .send(IpcMessage::CompanionResponse(
+                        agmux_proto::CompanionResponse {
+                            notifications: vec![],
+                            selected_panel: None,
+                            panels: vec![],
+                            selected: None,
+                            content,
+                            error: None,
+                        },
+                    ))
+                    .await?;
+            }
+            IpcMessage::CompanionRequest(agmux_proto::CompanionRequest::Models { cwd }) => {
+                let result = crate::gemini_chat::models(std::path::Path::new(&cwd)).await;
+                let (content, error) = match result {
+                    Ok(v) => (Some(v), None),
+                    Err(e) => (None, Some(e.to_string())),
+                };
+                out_tx
+                    .send(IpcMessage::CompanionResponse(
+                        agmux_proto::CompanionResponse {
+                            notifications: vec![],
+                            selected_panel: None,
+                            panels: vec![],
+                            selected: None,
+                            content,
+                            error,
+                        },
+                    ))
+                    .await?;
+            }
             IpcMessage::CompanionRequest(agmux_proto::CompanionRequest::Reply {
                 session_id,
                 message,
             }) => {
-                let error = if message.len() > 65536 {
+                let managed = managed_prompt(&storage, &session_id, &message).await;
+                let error = if let Some(result) = managed {
+                    result.err()
+                } else if message.len() > 65536 {
                     Some("Reply too large".to_owned())
                 } else {
                     match pty_manager.get_session(&session_id).await {
-                        Ok(session) => session
-                            .send_input(format!("{message}\n").as_bytes())
-                            .err()
-                            .map(|e| e.to_string()),
+                        Ok(session) => session.submit_prompt(&message).err().map(|e| e.to_string()),
                         Err(e) => Some(e.to_string()),
                     }
                 };
@@ -606,8 +752,17 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                                     }
                                 }
                             }
-                            R::List => {}
-                            R::Reply { .. } => unreachable!(),
+                            R::List => {
+                                response.content =
+                                    Some(agmux_proto::COMPANION_ACP_CAPABILITY.into());
+                            }
+                            R::Reply { .. }
+                            | R::Chat { .. }
+                            | R::Models { .. }
+                            | R::ChatStates
+                            | R::StartChat { .. } => {
+                                unreachable!()
+                            }
                         }
                         response.notifications = db.companion_notifications()?;
                         response.panels = db.companion_panels()?;
@@ -1189,9 +1344,7 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                     let round = db.next_review_round(&sid).map_err(|e| e.to_string())?;
                     let prompt =
                         agmux_core::prompt_flattener::flatten_review_comments(round, &comments);
-                    session
-                        .send_input(format!("{prompt}\n").as_bytes())
-                        .map_err(|e| e.to_string())?;
+                    session.submit_prompt(&prompt).map_err(|e| e.to_string())?;
                     let ids: Vec<_> = comments.iter().map(|c| c.id.clone()).collect();
                     let old = db
                         .complete_review_round(&sid, round, &ids)
@@ -1425,14 +1578,31 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                     task.abort();
                 }
                 *subscribed_session.lock().unwrap() = Some(session_id.clone());
-                if let Ok((sync_frame, mut output)) =
+                let native = crate::gemini_chat::native_session(&session_id).await;
+                let mut native_exit = native.as_ref().map(|session| session.subscribe_exit());
+                let subscription = if let Some(native) = native {
+                    Ok(native.subscribe_viewport_sync())
+                } else {
                     subscription_manager.subscribe_viewport(&session_id).await
-                {
+                };
+                if let Ok((sync_frame, mut output)) = subscription {
                     out_tx.send(IpcMessage::ScreenSyncFrame(sync_frame)).await?;
                     let tx = out_tx.clone();
                     viewport_task = Some(tokio::spawn(async move {
                         loop {
-                            match output.recv().await {
+                            let output = tokio::select! {
+                                code=async {
+                                    if let Some(exit)=native_exit.as_mut() {
+                                        if exit.borrow().is_none(){let _=exit.changed().await;}
+                                        *exit.borrow()
+                                    } else { std::future::pending::<Option<i32>>().await }
+                                }=>{
+                                    let _=tx.send(IpcMessage::SessionExitEvent(agmux_proto::SessionExitEvent{session_id:session_id.clone(),exit_code:code})).await;
+                                    break;
+                                },
+                                output=output.recv()=>output,
+                            };
+                            match output {
                                 Ok(data) => {
                                     if tx
                                         .send(IpcMessage::TerminalOutputFrame(
@@ -1802,6 +1972,20 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                 }
             }
             IpcMessage::SendMessageRequest(req) => {
+                if let Some(result) =
+                    managed_prompt(&storage, &req.target_session_id, &req.message).await
+                {
+                    out_tx
+                        .send(IpcMessage::SendMessageResponse(
+                            agmux_proto::SendMessageResponse {
+                                success: result.is_ok(),
+                                queued: false,
+                                error: result.err(),
+                            },
+                        ))
+                        .await?;
+                    continue;
+                }
                 let session = pty_manager.get_session(&req.target_session_id).await;
                 let db = storage.clone();
                 let result = tokio::task::spawn_blocking(move || -> Result<bool, String> {
@@ -1820,7 +2004,7 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                             return Err("Session is not active".into());
                         }
                         session
-                            .send_input(format!("{}\n", req.message).as_bytes())
+                            .submit_prompt(&req.message)
                             .map_err(|e| e.to_string())?;
                         Ok(false)
                     }
@@ -1860,6 +2044,8 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                             input.session_id
                         );
                     }
+                } else if crate::gemini_chat::native_input(&input.session_id, &input.data).await? {
+                    // Native Gemini input belongs to the same persisted conversation.
                 } else if let Ok(session) = pty_manager.get_session(&input.session_id).await {
                     if let Err(e) = session.send_input(&input.data) {
                         tracing::warn!(
@@ -1870,6 +2056,29 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                 }
             }
             IpcMessage::FreezeSessionRequest(req) => {
+                let managed = {
+                    storage
+                        .lock()
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?
+                        .conversation(&req.session_id)?
+                        .is_some()
+                };
+                if managed {
+                    let result = crate::gemini_chat::end(storage.clone(), &req.session_id).await;
+                    if let Err(e) = &result {
+                        tracing::error!(%e,"Ending managed session failed");
+                    }
+                    out_tx
+                        .send(IpcMessage::FreezeSessionResponse(
+                            agmux_proto::FreezeSessionResponse {
+                                success: result.is_ok(),
+                                compressed_size: 0,
+                            },
+                        ))
+                        .await?;
+                    continue;
+                }
+                crate::gemini_chat::close(&req.session_id).await;
                 let session_opt = pty_manager.remove_session(&req.session_id).await;
                 let (success, compressed_size) = if let Some(session) = session_opt {
                     session.kill();
@@ -1955,9 +2164,7 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
                     if let Some(session) = active.filter(|s| s.subscribe_exit().borrow().is_none())
                     {
                         for (id, message) in db.pending_messages(&sid).map_err(|e| e.to_string())? {
-                            session
-                                .send_input(format!("{message}\n").as_bytes())
-                                .map_err(|e| e.to_string())?;
+                            session.submit_prompt(&message).map_err(|e| e.to_string())?;
                             db.mark_message_delivered(id).map_err(|e| e.to_string())?;
                         }
                     }
@@ -2116,10 +2323,19 @@ async fn handle_client(stream: IpcServerStream, ctx: DaemonContext) -> Result<()
             }
             IpcMessage::ResizeSessionRequest(req) => {
                 let resizer = pty_resizer.clone();
-                let resp = match resizer
-                    .resize_session(&req.session_id, req.cols, req.rows)
-                    .await
+                let result = if let Some(native) =
+                    crate::gemini_chat::native_session(&req.session_id).await
                 {
+                    native
+                        .resize(req.cols, req.rows)
+                        .map_err(anyhow::Error::from)
+                } else {
+                    resizer
+                        .resize_session(&req.session_id, req.cols, req.rows)
+                        .await
+                        .map_err(anyhow::Error::from)
+                };
+                let resp = match result {
                     Ok(()) => agmux_proto::ResizeSessionResponse {
                         success: true,
                         cols: req.cols,
@@ -2439,7 +2655,7 @@ async fn publish_transition(
                     .await
                     {
                         for (_id, msg) in msgs {
-                            let _ = active_session.send_input(format!("{msg}\n").as_bytes());
+                            let _ = active_session.submit_prompt(&msg);
                         }
                     }
                 }
@@ -2448,4 +2664,45 @@ async fn publish_transition(
             tracing::error!("Failed to persist state transition: {result:?}");
         }
     }
+}
+
+/// Route legacy prompt entry points into the same managed provider context.
+async fn managed_prompt(
+    storage: &Arc<std::sync::Mutex<agmux_core::storage_engine::StorageEngine>>,
+    id: &str,
+    message: &str,
+) -> Option<Result<(), String>> {
+    let session = {
+        let db = match storage.lock() {
+            Ok(db) => db,
+            Err(e) => return Some(Err(e.to_string())),
+        };
+        match db.conversation(id) {
+            Ok(None) => return None,
+            Err(e) => return Some(Err(e.to_string())),
+            Ok(Some(_)) => {}
+        }
+        match db.get_session(id) {
+            Ok(Some(s)) => s,
+            Ok(None) => return Some(Err("Session not found".into())),
+            Err(e) => return Some(Err(e.to_string())),
+        }
+    };
+    let payload=serde_json::json!({"message":message,"request_id":agmux_core::session_tracker::SessionTracker::mint_uuid_v4()}).to_string();
+    Some(
+        crate::gemini_chat::request(
+            id,
+            std::path::Path::new(&session.cwd),
+            "send",
+            &payload,
+            storage.clone(),
+            matches!(
+                session.state.as_str(),
+                "DEAD" | "ARCHIVED" | "COMPLETED" | "EXITED"
+            ),
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string()),
+    )
 }

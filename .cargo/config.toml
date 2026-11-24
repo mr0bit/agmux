@@ -1,2 +1,6 @@
 [target.x86_64-unknown-linux-musl]
 linker = "musl-gcc"
+
+# Ship portable Windows executables: users should not need the VC++ redist.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

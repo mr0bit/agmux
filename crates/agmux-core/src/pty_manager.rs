@@ -100,6 +100,26 @@ impl ActivePtySession {
         Ok(())
     }
 
+    /// Submit a prompt as keyboard Enter (CR), consistently on Unix and ConPTY.
+    /// Raw terminal bytes continue to use `send_input` unchanged.
+    pub fn submit_prompt(&self, message: &str) -> Result<(), PtyError> {
+        let bracketed = self
+            .screen_buffer
+            .lock()
+            .map_err(|e| PtyError::InputWrite(std::io::Error::other(e.to_string())))?
+            .bracketed_paste();
+        let mut input = Vec::with_capacity(message.len() + 13);
+        if bracketed {
+            input.extend_from_slice(b"\x1b[200~");
+        }
+        input.extend_from_slice(message.as_bytes());
+        if bracketed {
+            input.extend_from_slice(b"\x1b[201~");
+        }
+        input.push(b'\r');
+        self.send_input(&input)
+    }
+
     /// Subscribe to real-time output stream of this session.
     pub fn subscribe_output(&self) -> broadcast::Receiver<Vec<u8>> {
         self.initial_output
@@ -352,6 +372,13 @@ impl PtyManager {
                 }
             };
 
+            // ConPTY may keep its output pipe open while a viewport retains the
+            // master, even after the child has been reaped. EOF must not gate
+            // process ownership or the exit notification. Allow a short final
+            // output drain; the reader continues until the master is released.
+            #[cfg(windows)]
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(250), reader_task).await;
+            #[cfg(not(windows))]
             let _ = reader_task.await;
             let _ = exit_tx.send(Some(exit_code.unwrap_or(-1)));
 
@@ -469,6 +496,46 @@ mod tests {
         assert!(!reply);
         output.extend(bootstrap.finish());
         assert_eq!(output, b"normal\x1b[?25h\x1b[");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_conpty_exit_is_published_while_viewport_retains_master() {
+        // Use the public PTY seam, retaining the session exactly as a connected
+        // viewport does. Both natural exit and forced handoff must notify.
+        for forced in [false, true] {
+            let manager = PtyManager::new();
+            let args = if forced {
+                vec!["/D".into(), "/Q".into(), "/K".into()]
+            } else {
+                vec!["/D".into(), "/Q".into(), "/C".into(), "exit 7".into()]
+            };
+            let session = manager
+                .spawn(
+                    format!("conpty-exit-{forced}"),
+                    "cmd.exe".into(),
+                    args,
+                    None,
+                    None,
+                )
+                .await
+                .expect("spawn native ConPTY child");
+            let mut exit = session.subscribe_exit();
+            let _viewport = session.subscribe_viewport_sync();
+            if forced {
+                session.kill();
+            }
+            if exit.borrow().is_none() {
+                tokio::time::timeout(std::time::Duration::from_secs(3), exit.changed())
+                    .await
+                    .expect("reaped child exit must not wait for ConPTY EOF")
+                    .expect("exit channel");
+            }
+            assert!(exit.borrow().is_some());
+            if !forced {
+                assert_eq!(*exit.borrow(), Some(7));
+            }
+        }
     }
 
     #[tokio::test]

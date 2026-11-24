@@ -3,6 +3,7 @@
 pub mod config_watcher;
 pub mod event_broadcaster;
 pub mod file_reservation_table;
+pub mod gemini_chat;
 pub mod hook_listener;
 pub mod instance_lock;
 pub mod journal_watcher;

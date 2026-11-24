@@ -405,3 +405,72 @@ fn test_desktop_protocol_registration() {
     assert!(entry.contains(exe.to_str().unwrap()));
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// TEST-VER-UX-112: an old running daemon must yield an upgrade instruction,
+/// without receiving a new request variant or losing active sessions.
+#[tokio::test(flavor = "multi_thread")]
+async fn old_daemon_gets_safe_capability_probe_and_readable_restart_instruction() {
+    use futures_util::{SinkExt, StreamExt};
+    let root = std::env::temp_dir().join(format!("agmux-compat-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("token"), "a".repeat(64)).unwrap();
+    let listener = tokio::net::UnixListener::bind(root.join("socket")).unwrap();
+    let server = tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            tokio::spawn(async move {
+                let mut stream = agmux_proto::new_framed(stream);
+                while let Some(Ok(request)) = stream.next().await {
+                    let reply = match request {
+                        IpcMessage::HandshakeRequest(_) => {
+                            IpcMessage::HandshakeResponse(agmux_proto::HandshakeResponse {
+                                success: true,
+                                daemon_version: "0.1.0".into(),
+                                error: None,
+                            })
+                        }
+                        IpcMessage::CompanionRequest(CompanionRequest::List) => {
+                            IpcMessage::CompanionResponse(agmux_proto::CompanionResponse {
+                                notifications: vec![],
+                                selected_panel: None,
+                                panels: vec![],
+                                selected: None,
+                                content: None,
+                                error: None,
+                            })
+                        }
+                        other => panic!("New request sent to an old backend: {other:?}"),
+                    };
+                    if stream.send(reply).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    let project = root.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new("target/debug/agmux")
+            .arg("gui")
+            .env("AGMUX_SOCK", project.join("socket"))
+            .env("AGMUX_AUTH_TOKEN_PATH", project.join("token"))
+            .env("AGMUX_GUI_PORT", "0")
+            .env("AGMUX_GUI_NO_OPEN", "1")
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    server.abort();
+    assert!(!output.status.success());
+    let message = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        message.contains("older background service still running"),
+        "{message}"
+    );
+    assert!(
+        message.contains("agmuxd") && message.contains("agmux gui"),
+        "{message}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
