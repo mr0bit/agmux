@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "upstream": "https://github.com/storytold/craft-anything.git",
+  "commit": "785539196a1863ee1a49c8cb69639d02f385bbbe",
+  "optional": true,
+  "executionEnabled": false,
+  "compatibility": "blocked-pending-isolated-runner",
+  "compatibilityCheck": {
+    "script": "compatibility-probe.mjs",
+    "timeoutMs": 30000
+  },
+  "entrypoint": "SKILL.md"
+}

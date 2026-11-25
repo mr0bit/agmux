@@ -3,6 +3,8 @@
 ## 1. Overview
 Whenever an AI agent (Codex, Antigravity, or orchestrator) is tasked with implementing a feature, bugfix, or refactor, it must follow this 3-step rhythm.
 
+For work originating in pull/merge requests or equivalent review feedback on any provider, first follow the [change review discussion protocol](pr-discussion.md). Its agreement gate precedes implementation; existing explicit agreement to the current plan remains valid.
+
 ---
 
 ## 2. The 3 Steps
