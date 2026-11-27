@@ -610,9 +610,15 @@
 }
 .palette-search {
   display: flex;
+  align-items: center;
   gap: 8px;
   padding: 12px;
   border-bottom: 1px solid var(--line);
+}
+.palette-prompt {
+  padding-inline-start: 8px;
+  color: var(--muted);
+  font-family: monospace;
 }
 .palette-search input {
   flex: 1;

@@ -127,6 +127,9 @@ const fallbackMetadata: Metadata = {
   archived: false,
 };
 export default function LiveApp({ token }: { token: string }) {
+  const isMac = navigator.platform.startsWith("Mac");
+  const modifier = isMac ? "⌘" : "Ctrl";
+  const paletteShortcut = isMac ? "⌘⇧P" : "Ctrl+Shift+P";
   const backend = useMemo(() => new Backend(token), [token]);
   const reduced = !!useReducedMotion();
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null),
@@ -469,11 +472,22 @@ export default function LiveApp({ token }: { token: string }) {
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (modal || event.isComposing) return;
-      const mod = event.ctrlKey || event.metaKey,
-        key = event.key.toLowerCase();
+      const key = event.key.toLowerCase();
+      const mod = isMac
+        ? event.metaKey && !event.ctrlKey
+        : event.ctrlKey && !event.metaKey;
+      const primary = mod && !event.altKey && !event.shiftKey;
       // Re-pressing Ctrl/Cmd between chord keys must not cancel the chord.
       if (["control", "meta", "shift", "alt"].includes(key)) return;
-      if (mod && event.shiftKey && key === "p") {
+      if (
+        (mod && event.shiftKey && !event.altKey && key === "p") ||
+        (event.key === "F1" &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.shiftKey &&
+          !event.altKey)
+      ) {
+        chord.current = 0;
         event.preventDefault();
         openPalette("commands");
         return;
@@ -488,41 +502,48 @@ export default function LiveApp({ token }: { token: string }) {
       }
       const target = event.target instanceof HTMLElement ? event.target : null;
       const nativeTerminal = !!target?.closest(".xterm");
-      if (nativeTerminal) return;
-      if (mod && key === "p") {
-        event.preventDefault();
-        openPalette("sessions");
-        return;
-      }
-      if (mod && key === "b") {
-        event.preventDefault();
-        setSidebar((v) => !v);
-        return;
-      }
-      if (mod && event.code === "Backquote") {
+      if (
+        event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.code === "Backquote"
+      ) {
+        chord.current = 0;
         event.preventDefault();
         setTab((t) => (t === "Terminal" ? "Chat" : "Terminal"));
         return;
       }
-      if (mod && key === "s" && Date.now() - chord.current < 1500) {
+      if (nativeTerminal) return;
+      const shortcutChord = Date.now() - chord.current < 1500;
+      chord.current = 0;
+      if (primary && key === "p") {
         event.preventDefault();
-        chord.current = 0;
+        openPalette("sessions");
+        return;
+      }
+      if (primary && key === "b") {
+        event.preventDefault();
+        setSidebar((v) => !v);
+        return;
+      }
+      if (primary && key === ",") {
+        event.preventDefault();
+        setModal("settings");
+        return;
+      }
+      if (primary && key === "s" && shortcutChord) {
+        event.preventDefault();
         openPalette("shortcuts");
         return;
       }
-      if (mod && key === "k") {
+      if (primary && key === "k") {
         event.preventDefault();
         chord.current = Date.now();
         return;
       }
-      chord.current = 0;
       if (target?.closest('input,textarea,[contenteditable="true"]')) return;
-      if (event.key === "F1") {
-        event.preventDefault();
-        openPalette("commands");
-        return;
-      }
-      if (mod && key === "n") {
+      if (primary && key === "n") {
         event.preventDefault();
         setModal("new");
       }
@@ -543,7 +564,7 @@ export default function LiveApp({ token }: { token: string }) {
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
-  }, [session?.id, sessions, modal, paletteMode, dirty]);
+  }, [session?.id, sessions, modal, paletteMode, dirty, isMac]);
   const refresh = async () => {
     const value = await backend.request<Snapshot>(
       "/api/snapshot" +
@@ -849,21 +870,21 @@ export default function LiveApp({ token }: { token: string }) {
     {
       id: "new",
       label: "New agent session",
-      shortcut: "Ctrl/⌘ N",
+      shortcut: `${modifier}+N`,
       run: () => setModal("new"),
     },
     { id: "chat", label: "Show Chat", run: () => setTab("Chat") },
     {
       id: "terminal",
       label: "Show Terminal",
-      shortcut: "Ctrl/⌘ `",
+      shortcut: "Ctrl+`",
       run: () => setTab("Terminal"),
     },
     { id: "git", label: "Show Git changes", run: () => setTab("Git") },
     {
       id: "sidebar",
       label: "Toggle sidebar",
-      shortcut: "Ctrl/⌘ B",
+      shortcut: `${modifier}+B`,
       run: () => setSidebar((v) => !v),
     },
     {
@@ -890,18 +911,19 @@ export default function LiveApp({ token }: { token: string }) {
     {
       id: "quick",
       label: "Quick session switcher",
-      shortcut: "Ctrl/⌘ P",
+      shortcut: `${modifier}+P`,
       run: () => openPalette("sessions"),
     },
     {
       id: "shortcuts",
       label: "Keyboard shortcuts",
-      shortcut: "Ctrl/⌘ K, Ctrl/⌘ S",
+      shortcut: `${modifier}+K, ${modifier}+S`,
       run: () => openPalette("shortcuts"),
     },
     {
       id: "settings",
       label: "Workspace settings",
+      shortcut: `${modifier}+,`,
       run: () => setModal("settings"),
     },
   ];
@@ -916,7 +938,17 @@ export default function LiveApp({ token }: { token: string }) {
             detail: `${projectPath(s.id)} · ${s.state === "stopped" ? "Inactive" : s.time}`,
             run: () => void choose(s.id),
           }))
-      : workspaceCommands;
+      : paletteMode === "shortcuts"
+        ? [
+            {
+              id: "commands",
+              label: "Command palette",
+              shortcut: `${paletteShortcut} / F1`,
+              run: () => openPalette("commands"),
+            },
+            ...workspaceCommands.filter((command) => command.shortcut),
+          ]
+        : workspaceCommands;
   const pendingPermissions = managed
     ? reviewChats[session.id]?.permissions || []
     : [];
@@ -1163,7 +1195,7 @@ export default function LiveApp({ token }: { token: string }) {
             <div className="sidebar-footer">
               <button className="new-session" onClick={() => setModal("new")}>
                 <Plus size={15} />
-                Start new session<kbd>Ctrl N</kbd>
+                Start new session<kbd>{modifier}+N</kbd>
               </button>
               <div className="footer-links">
                 <button onClick={() => setTab("Machines")}>
@@ -1269,7 +1301,7 @@ export default function LiveApp({ token }: { token: string }) {
               <button
                 className="live-action"
                 aria-label="Open command palette"
-                title="Command palette (Ctrl/⌘ Shift P)"
+                title={`Command palette (${paletteShortcut})`}
                 onClick={() => openPalette("commands")}
               >
                 <Search size={14} /> Commands

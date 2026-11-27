@@ -6,6 +6,19 @@ export type WorkspaceCommand = {
   shortcut?: string;
   run: () => void;
 };
+
+function matchRank(label: string, detail: string, query: string) {
+  if (label.startsWith(query)) return 0;
+  if (label.includes(query)) return 1;
+  if (detail.includes(query)) return 2;
+  let matched = 0;
+  for (const character of label) {
+    if (character === query[matched]) matched++;
+    if (matched === query.length) return 3;
+  }
+  return Infinity;
+}
+
 export default function CommandPalette({
   mode,
   commands,
@@ -19,22 +32,36 @@ export default function CommandPalette({
     [index, setIndex] = useState(0);
   const input = useRef<HTMLInputElement>(null),
     host = useRef<HTMLDivElement>(null);
+  const search = (mode === "commands" ? query.replace(/^\s*>/, "") : query)
+    .trim()
+    .toLowerCase();
   const rows = commands
-    .filter((c) =>
-      (c.label + " " + (c.detail || ""))
-        .toLowerCase()
-        .includes(query.toLowerCase()),
-    )
-    .slice(0, 60);
-  useEffect(() => {
-    input.current?.focus();
-  }, []);
+    .map((command) => {
+      const label = command.label.toLowerCase();
+      const detail = command.detail?.toLowerCase() ?? "";
+      const rank =
+        mode === "commands"
+          ? matchRank(label, detail, search)
+          : (`${label} ${detail}`).includes(search)
+            ? 0
+            : Infinity;
+      return { command, rank };
+    })
+    .filter(({ rank }) => Number.isFinite(rank))
+    .sort((a, b) => a.rank - b.rank)
+    .slice(0, 60)
+    .map(({ command }) => command);
+  const activeIndex = Math.min(index, Math.max(rows.length - 1, 0));
   useEffect(() => {
     setQuery("");
     setIndex(0);
     input.current?.focus();
   }, [mode]);
-  useEffect(() => setIndex(0), [query]);
+  useEffect(() => {
+    host.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({
+      block: "nearest",
+    });
+  }, [activeIndex, search]);
   const run = (command: WorkspaceCommand) => {
     onClose();
     command.run();
@@ -66,16 +93,21 @@ export default function CommandPalette({
           }
           if (e.key === "ArrowDown" || e.key === "ArrowUp") {
             e.preventDefault();
-            setIndex((i) =>
+            setIndex(
               rows.length
-                ? (i + (e.key === "ArrowDown" ? 1 : -1) + rows.length) %
+                ? (activeIndex + (e.key === "ArrowDown" ? 1 : -1) + rows.length) %
                   rows.length
                 : 0,
             );
           }
-          if (e.key === "Enter" && e.target === input.current && rows[index]) {
+          if (
+            e.key === "Enter" &&
+            !e.nativeEvent.isComposing &&
+            e.target === input.current &&
+            rows[activeIndex]
+          ) {
             e.preventDefault();
-            run(rows[index]);
+            run(rows[activeIndex]);
           }
           if (e.key === "Tab") {
             const controls = [
@@ -95,6 +127,11 @@ export default function CommandPalette({
         }}
       >
         <div className="palette-search">
+          {mode === "commands" && (
+            <span className="palette-prompt" aria-hidden="true">
+              &gt;
+            </span>
+          )}
           <input
             ref={input}
             aria-label={
@@ -105,13 +142,18 @@ export default function CommandPalette({
             role="combobox"
             aria-expanded="true"
             aria-controls="workspace-palette-options"
-            aria-activedescendant={rows[index] ? `palette-${index}` : undefined}
+            aria-activedescendant={
+              rows[activeIndex] ? `palette-${activeIndex}` : undefined
+            }
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setIndex(0);
+            }}
             placeholder={
               mode === "sessions"
                 ? "Search sessions and project paths…"
-                : "> Type a command…"
+                : "Type a command…"
             }
           />
           <button
@@ -131,7 +173,7 @@ export default function CommandPalette({
             <button
               id={`palette-${i}`}
               role="option"
-              aria-selected={index === i}
+              aria-selected={activeIndex === i}
               tabIndex={-1}
               key={command.id}
               onMouseEnter={() => setIndex(i)}
@@ -145,7 +187,11 @@ export default function CommandPalette({
             </button>
           ))}
           {!rows.length && (
-            <p className="live-hint">No matching commands or sessions.</p>
+            <p className="live-hint" role="status">
+              {mode === "sessions"
+                ? "No matching sessions."
+                : "No matching commands."}
+            </p>
           )}
         </div>
         <footer>↑ ↓ navigate · Enter select · Esc close</footer>

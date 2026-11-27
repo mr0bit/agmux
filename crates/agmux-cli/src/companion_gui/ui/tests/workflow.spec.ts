@@ -555,6 +555,12 @@ test("TEST-VER-UX-122: palette, quick switch, shortcuts, focus and composition",
   await page.keyboard.press("Escape");
   await expect(prompt).toBeFocused();
   await expect(prompt).toHaveValue("keep this draft");
+  await prompt.press("F1");
+  await expect(
+    page.getByRole("dialog", { name: "Command palette", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(prompt).toBeFocused();
   await prompt.dispatchEvent("keydown", {
     key: "p",
     ctrlKey: true,
@@ -565,8 +571,17 @@ test("TEST-VER-UX-122: palette, quick switch, shortcuts, focus and composition",
     page.getByRole("dialog", { name: "Command palette", exact: true }),
   ).toHaveCount(0);
   await prompt.press("Control+Shift+P");
-  await page.getByLabel("Find a command").fill("Project session view");
-  await page.keyboard.press("Enter");
+  const commandSearch = page.getByLabel("Find a command");
+  await commandSearch.fill("> psv");
+  await expect(
+    page.getByRole("option", { name: "Project session view", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await commandSearch.dispatchEvent("keydown", {
+    key: "Enter",
+    isComposing: true,
+  });
+  await expect(commandSearch).toBeFocused();
+  await commandSearch.press("Enter");
   await expect(
     page.getByRole("button", { name: "Projects", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
