@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agmux-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agmux-core",
  "agmux-proto",
@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "agmux-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agmux-proto",
  "dunce",
@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "agmux-daemon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agmux-core",
  "agmux-proto",
@@ -80,7 +80,7 @@ dependencies = [
 
 [[package]]
 name = "agmux-proto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "futures-util",
@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "agmux-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agmux-core",
  "agmux-proto",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "agmux-verification"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agmux-cli",
  "agmux-core",
