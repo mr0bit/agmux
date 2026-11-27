@@ -9,3 +9,9 @@ groma:
     - scanner: typescript
       file: crates/agmux-cli/src/companion_gui/ui/src/backend.ts
 ---
+
+## Relationships
+
+| Source | Target | Description | Technology |
+| --- | --- | --- | --- |
+| [crates/agmux-cli/src/companion_gui/ui/src/backend.ts](../../../../../../crates/agmux-cli/src/companion_gui/ui/src/backend.ts) | [crates/agmux-cli/src/companion_gui/live.rs](../../../../../../crates/agmux-cli/src/companion_gui/live.rs) | Calls companion endpoints | Loopback HTTP |

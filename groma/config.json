@@ -1,8 +1,9 @@
 {
+  "automaticUpdates": false,
   "scanners": [
     {
       "id": "react",
-      "source": "@groma/scanner-react@0.2.3",
+      "source": "@groma/scanner-react@0.2.7",
       "include": [
         "crates/agmux-cli/src/companion_gui/ui/src/**/*.ts",
         "crates/agmux-cli/src/companion_gui/ui/src/**/*.tsx",
@@ -24,7 +25,7 @@
     },
     {
       "id": "rust",
-      "source": "@groma/scanner-rust@0.2.3",
+      "source": "@groma/scanner-rust@0.2.5",
       "include": [
         "Cargo.toml",
         "crates/**/Cargo.toml",
@@ -37,7 +38,7 @@
     },
     {
       "id": "typescript",
-      "source": "@groma/scanner-typescript@0.2.4",
+      "source": "@groma/scanner-typescript@0.2.6",
       "include": [
         "crates/agmux-cli/src/companion_gui/ui/src/**/*.ts",
         "crates/agmux-cli/src/companion_gui/ui/src/**/*.tsx",

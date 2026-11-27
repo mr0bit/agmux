@@ -4,7 +4,7 @@
   "private": true,
   "description": "Repository architecture tooling; not part of the shipped application",
   "scripts": {
-    "arch:setup": "groma plugin install",
+    "arch:setup": "node tools/arch-setup.mjs",
     "arch:check": "groma scanner check",
     "arch:scan": "groma scan",
     "arch:view": "groma web",

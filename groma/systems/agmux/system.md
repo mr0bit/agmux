@@ -1,7 +1,8 @@
 ---
 type: C4 System
-title: agmux
+title: Agmux
 status: stable
 groma:
   id: agmux
+description: Local terminal multiplexer and session orchestrator for coding agents.
 ---

@@ -19,7 +19,7 @@ npm run arch:view
 ```
 
 `arch:view` opens the local interactive map. No account or AI provider is required.
-Scanner setup downloads pinned official packages; subsequent scans run locally.
+Setup installs the exact official scanner versions in groma/config.json. Automatic scanner updates are disabled so scans use the reviewed versions. Update a scanner explicitly with the Groma CLI and review the config and map diff together.
 This tooling is not included in agmux.exe and does not change its release assets.
 The frontend retains its separate package manifest and lockfile.
 
@@ -41,9 +41,9 @@ rescans and rejects uncommitted changes to the tracked map.
 ## Pinned setup and coverage
 
 - CLI: `groma.md@0.7.8`, pinned in the root package manifest and lockfile.
-- Rust: `@groma/scanner-rust@0.2.3`.
-- TypeScript: `@groma/scanner-typescript@0.2.4`.
-- React: `@groma/scanner-react@0.2.3`.
+- Rust: `@groma/scanner-rust@0.2.5`.
+- TypeScript: `@groma/scanner-typescript@0.2.6`.
+- React: `@groma/scanner-react@0.2.7`.
 - Bundled Backlog work source: enabled in `groma/config.json`; existing tasks and
   their workflow stay in `.backlog/`. Installation creates no new backlog tasks.
 
@@ -58,14 +58,12 @@ Build scripts, generated Rust, trait dispatch and some React callback bindings
 are not fully resolved by these scanners. Read scan diagnostics before assuming
 coverage. The lint findings are advisory; installation does not change app code.
 
-## Initial map status
+## Map status
 
-The checked-in map is an initial deterministic scan, not a completed C4 curation.
-Names, boundaries and relationships inferred by scanners need review against the
-SAD and module registry before architectural decisions rely on them. In particular,
-a crate or package is not automatically an independently deployed C4 container.
-For a separate curation request, use `groma agent-instructions` and its inspect,
-structure, describe and relationships guides. Edit map records through the CLI.
+The map identifies the Agmux client, daemon, and companion browser application.
+Shared Rust modules with multiple consumers remain at the system level in the
+scanner map. The SAD and module registry document their runtime roles.
+Use "groma agent-instructions" and its guides to extend curation through the CLI.
 
 The portable process lives in `.soul`; these package versions, coverage choices
 and commands belong here to preserve `.soul` portability. Do not publish map
